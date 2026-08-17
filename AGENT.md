@@ -1,0 +1,165 @@
+# Agent Guide
+
+## Purpose
+
+This repository contains a company developer toolbox. It starts with project scaffolding and is designed to expand into build, compile, test, deploy, environment, and maintenance operations.
+
+## Commands
+
+```sh
+python -m company_tui        # interactive Textual UI
+python -m company_tui list   # plain stdout, scriptable
+python -m company_tui doctor # plain stdout, scriptable
+python -m unittest discover
+```
+
+`textual` is the project's one third-party dependency (declared in `pyproject.toml`), used only by `TuiConsole`. `list`/`doctor` deliberately stay on `PlainConsole` — plain, synchronous, no terminal takeover — so they remain fast and pipeable.
+
+## Architecture
+
+```text
+presentation → application → domain
+infrastructure → domain
+capabilities → domain ports
+templates → domain ports
+bootstrap → all concrete implementations
+```
+
+- `domain/` owns contracts and value objects.
+- `application/` owns orchestration and registration (`CapabilityRegistry`, `TemplatePackRegistry`).
+- `capabilities/` owns user-facing workflows.
+- `infrastructure/` owns subprocesses, filesystems, networking, and external tools.
+- `presentation/` owns terminal rendering and input: a `Ui` protocol, `PlainConsole` (plain stdout, used by `list`/`doctor`), and `TuiConsole` (the interactive Textual app + its screens).
+- `templates/` owns one versioned template pack per stack (Flutter, React, Python, ...).
+- `bootstrap.py` is the composition root.
+
+## Flags and the run panel
+
+- A workflow that needs input **declares** it as `Option`s (`domain/options.py`) instead of driving a sequence of prompts. `TemplatePack.options(target)` returns them; the default is name + destination, and a pack overrides it to add its own. Kinds are `TEXT`, `BOOLEAN`, `CHOICE`, and `INFO` (a read-only row, optionally a `template` over the other values so it can restate what the current input will do).
+- `Ui.open_run_panel` collects every flag up front and returns the values. In the TUI that is `RunScreen`: scrollable form on the left, live terminal on the right. The screen is deliberately **not** dismissed when Run is pressed — it stays mounted and becomes the surface the workflow writes to, until `close_run_panel`. It renders a `RunSession` rather than owning one; see **Sessions** below.
+- While the panel is open, `write`/`ask`/`confirm` land in it: `write` in the terminal pane, `ask`/`confirm` as a question answered in the stdin box. A workflow never knows which console it is talking to; `PlainConsole` implements the same protocol by asking the same flags one at a time.
+- Two conventions carry line meaning without widening the protocol: a line prefixed with `RAW_OUTPUT_PREFIX` is verbatim subprocess output, and a line ending in `...` is a step about to happen. Both read correctly as plain text too.
+- Long-running commands go through `ProcessRunner.stream`, which hands over each line as it arrives so the pane fills in as it works. `run` stays for short commands whose output only matters once complete.
+- Never parse workflow text as markup in the terminal pane — process output legitimately contains brackets. `RunScreen.write` assembles styled `Content` instead, with theme tokens for the marker.
+- **No emoji anywhere in the interface**, enforced by `tests/test_glyphs.py`. A codepoint with Unicode `Emoji=Yes` comes out of an emoji font: double width (so every column after it is wrong), its own colour, and nothing like the line art beside it. They read fine in an editor, which is how a stop mark and a stopwatch got in. Use the geometric shapes, dingbat and box-drawing blocks (`◆ ✓ ▲ ✗ ● ○ ✕ ❯ ▸ ■`), or no glyph at all — `MARKERS["time"]` carries none and says what it is by being dimmed.
+- The form says what it wants before it is asked: a required field is marked on its label (`REQUIRED_MARK`), and `#validation` names whatever is still missing as guidance the whole time rather than only as a refusal after a press that went nowhere. Pressing Run with something missing adds `-refused` and puts the cursor on the first field it names. Filling a field ends the refusal.
+- An empty terminal pane says so (`-empty`, `#terminal-empty`), on a layer *over* the log rather than instead of it — the log has to keep its real width whatever is on top, because that width is what every line it is handed gets wrapped to. It clears the first row, where the `$` breadcrumb is the only place the panel says which context this tab belongs to.
+
+## Stopping a run
+
+- The panel's one button carries the whole lifecycle — **Run**, then **Stop** while it works, then **Run again** — with a separate Close button once there is a finished run to walk away from. There must never be a state where the form is frozen, the work is going, and no key does anything: that is the panel as a trap.
+- Esc is the way *out*, not the way to stop: before a run it backs out of the form, during one it detaches and leaves the work going, and after one it closes the panel. Stop lives on the button (and on `Ctrl+R`, which always presses whatever the button currently says). Walking away from a run and ending it are different intentions, and only one of them can be undone.
+- A finished run offers the form back rather than only the door. `close_run_panel` returns `True` when the user wants another go: the panel resets to its form with the finished run left above it as history, and the capability's loop collects the next set of values from the same panel. Doing the same thing twice must not mean walking back out through the menu and picking the same things again — write new capabilities as a loop around `open_run_panel`/`close_run_panel`, not a single pass.
+- Stop works by cancellation, not by polling a flag. `Ui.run_in_panel` wraps the workflow coroutine in a task and hands it to the panel, so Stop cancels exactly that task and returns `None` to the caller; anything the work was awaiting unwinds normally. Give it the work rather than awaiting the work directly, or there is nothing to cancel.
+- `run_in_panel` re-raises a cancellation the panel did not ask for, because that one is the app shutting down and has to keep unwinding.
+- A cancelled `ProcessRunner.stream` kills its child and reaps it before re-raising — a stopped run stops the command, not just the waiting. A pack that leaves something half-written (a partial clone) removes it on the way out; it created it this run, so it owns it.
+- A workflow that raises is reported, never propagated. `run_in_panel` catches it, shows it in the pane where the run was being narrated, and returns `None`; `panel_failure()` then says what it was. Letting it out would kill the worker that every workflow runs on, take the interface down with it, and lose the output leading up to the failure. "No result" therefore means *either* stopped or broken — ask `panel_failure()` which, because only a break should report a failing exit code.
+- `close_run_panel(message, ok)` is what tells the panel the run is over. Skip it and the panel never learns it finished, so Esc does nothing and the user is stuck. It also marks the result as acknowledged, so `pause()` does not follow the panel with a second dialog saying nothing new.
+
+## Sessions
+
+- Several runs happen at once. A `RunSession` (`presentation/session.py`) owns everything one run has — form, values, log, task, pending question — and `RunScreen` renders whichever one is selected, replaying that session's log when it attaches. A tab strip above the terminal switches between them: `⌃T` add, `⌃W` close, `F2` rename, `⌃PgUp`/`⌃PgDn` and the mouse to move, plus a close mark on each tab. The strip scrolls — to the wheel as well as the keyboard, since Textual sends a plain wheel to the vertical axis and a one-row strip has none — and keeps the active tab in view, so ten runs are ten reachable tabs. Its keys live at the foot of the pane, below the stdin row: on the strip they were width the tabs did not get, and the tabs are the only part with no fixed size. The stdin row goes accent while a run is actually waiting on an answer (`-asking`), because otherwise it looks the same whether anything is asking or not.
+- `_detach` (take the panel off the screen) and `_background` (this run no longer wants the screen) are **not** the same thing, and conflating them is a bug with teeth. A run whose panel closes because the user backed out of the form is still mid-workflow and about to put a menu of its own up; freeing the menu loop at that moment pushes a second menu over the top of it, and the user has to Esc twice to get anywhere. Only an explicit "leave it running" — Esc during a run, switching tabs, or the workflow ending — backgrounds a session.
+- **`CURRENT_SESSION`, a `ContextVar`, decides where a line goes.** It is set when a session's task starts, and async tasks inherit the context they were created in, so every `write`/`ask`/`confirm` inside a workflow — and every subprocess callback under it — resolves to that workflow's own session. Never route output by "the panel that is open": that is the model this replaced, and it is wrong the moment there are two runs. No capability or pack knows sessions exist.
+- `Application.run()` hands each capability to `Ui.start_run` as a **callable**, not an awaited coroutine. The console runs it as a Textual worker — a worker rather than a bare task, because a run started from a keypress has none above it to inherit and a workflow that cannot push a screen cannot ask a question. `start_run` returns when the run lets go of the screen, which is not when it finishes. Keeping the workflow as a callable is also what makes the strip's `+` one more call: a sibling repeats the parent's menu answers from `session.preset` instead of asking again.
+- One strip per context. `session.scope` is the breadcrumb the session was made under, **fixed at creation** — not a reading of `session.steps`, which keeps changing as the workflow walks (`session.place` is that). They differ exactly when the workflow has moved on, and `TuiConsole._relocate` acts on it at `open_run_panel`: the workflow carries on in a session belonging to the new context, taking the worker with it, and the tab behind is dropped since nothing ran in it. `open_run_panel` is the right moment because a menu deeper than the last one answered has not been asked yet, so that is where the context is first fully known.
+- Sessions still live in one `SessionRegistry`, but `visible(scope)` is a real filter — a run from another context is not in this strip at all. `running_under(place)` counts live runs by *prefix*, which is what puts a `N running` on the menu card leading back to them; the chrome's total and `Ctrl+B` cover the rest. Names are numbered per context (`_unique(base, scope)`), so each stack opens on its own first tab. Work you cannot see is work you forget about — and a tail of foreign tabs is the thing separating the strips exists to remove.
+- **A session is not a tab until `session.opened`**, which `load` sets. Every workflow owns a session from `start_run`, long before it knows which context it is for; it is what carries the breadcrumb and the answers while the user walks menus. `visible` and `summary` therefore count tabs, not sessions — counting sessions put an entry in a strip that nothing had ever been in, and reported a run waiting in the chrome that was really a menu. (`_unique` deliberately still numbers against every session in the scope, so two workflows arriving at once cannot both be named `Scaffold`.)
+- A tab outlives its workflow. `_retire` frees a session (`task = None`) instead of removing it once `session.ran`, so `_free_at` can hand it back to a workflow that walks into the same context — same log, same timestamps, same answers (`load` keeps `values` for keys the options still have). Only a tab nothing ran in is dropped. If every tab in the destination is busy, `_relocate` returns `None`: the run is attached, the workflow waits for the screen, and `on_run_screen_detached` skips `_resume_behind` because something is already holding the foreground. "Busy" means a tab with a form actually on it (`panel_open`) — one whose own workflow has walked off to a menu has nothing to show, and attaching it put up an empty configuration pane.
+- `Ctrl+B` opens `RunsScreen`, a list of every run there is with the context it belongs to — the one view that can show them all, since each strip only holds its own. `_resumable()` filters on `panel_open`: a workflow part-way through its menus owns a session too, and going to one puts up a run panel with an empty configuration pane.
+- `RunSession.start` stamps the log with the local time (`RUN_STAMP`) and sets `ran`. `LOG_LIMIT` is 500 — tabs now outlive their runs, so the number of logs being held is the number of tabs left open rather than the number in flight.
+- Log buffers are capped (`LOG_LIMIT`): `npm install` alone emits tens of thousands of lines, and N sessions holding all of them is a leak with a progress bar on it.
+- `_stop_run` (closing a tab, quitting) deliberately does **not** go through `request_stop`. Stop is the user saying "stop this run" and the workflow is meant to survive it and report the stop; here the workflow itself is going away, so the cancellation has to travel all the way out. Conflate the two and a closed tab's workflow carries on and hangs waiting for its own acknowledgement.
+- Sessions are not persisted across restarts, on purpose. A killed subprocess cannot be resumed, so restoring the log of a dead run would show a scaffold that never finished as if it had.
+
+## Talking to the terminal
+
+- **Never resize the terminal.** The app used to ask Windows Terminal to size itself to 700×700 pixels on mount, and that was the cause of a long-running pointer bug: a resize request leaves the terminal's cell grid and the app's out of step, so every mouse report names a cell the app never drew there. It looks fine until the window is deactivated and reactivated, which is when the terminal reconciles its size — hence a bug that only ever appeared "after losing focus". A window's size belongs to the terminal's own profile.
+
+- Textual's driver owns the output stream, and on Windows it writes from a background thread. Never write an escape sequence to `sys.stdout` while the app is running: it can land in the middle of a frame and splice itself into another sequence, and the result is a screen whose contents no longer sit where the app thinks they do. Everything goes through `TuiConsole._write_to_terminal`, which hands it to the driver. `infrastructure/terminal_window.py` takes the writer as an argument so it stays free of Textual.
+- Mouse input has two halves and they fail separately. The **escape sequences** say how the terminal should *report* a mouse event; the **console input mode** decides whether the console hands the event over at all. Textual sets the input mode once, inside `enable_application_mode`, and never again — so anything that resets it afterwards is not repairable by re-sending escape sequences. `restore_console_input_mode` re-applies it, including `ENABLE_EXTENDED_FLAGS`, without which clearing the quick-edit bit is ignored and the console keeps press-and-drag for its own selection.
+- Re-arming mouse reporting after a focus change uses the same modes, in the same order, that Textual's own driver arms. These modes decide how the terminal *encodes* a mouse report, so a set that disagrees with the parser produces positions that are wrong rather than absent — worse than not re-arming at all. There is a test tying the sequence to the driver's.
+- `tools/mouse_trace.py` runs the real app and logs every mouse event with the coordinates it arrived on, the widget drawn there, the app's idea of the terminal size, and the console input mode. Reach for it *first* when the pointer misbehaves. A `run_test` pilot synthesises clean events and never touches a console, so a headless test that passes proves nothing about this layer — which is exactly how the resize above survived two rounds of confident reasoning and two fixes that changed nothing.
+- A press with no matching release — the window was deactivated between them — leaves the screen convinced a drag is still open. Every later movement then extends that selection: the highlight follows the pointer, scrollable content auto-scrolls under it, and the press that should have chosen something is spent ending the drag. `TuiConsole._end_text_selection` abandons it on both blur and focus; `clear_selection()` alone is not enough, because it forgets the selection but leaves the drag armed.
+- `CardMenuScreen.ALLOW_SELECT = False` — a menu is buttons, not a document, so a drag across a card can never become a selection in the first place. The run panel's terminal pane stays selectable on purpose: copying a failing build line out of it is the point.
+
+## Textual attributes to leave alone
+
+Textual sets instance attributes on every widget, and shadowing one fails without a useful traceback. Known taken: **`_task`** (the widget's message-pump task — taking it over hangs the screen and poisons pruning), **`_closed`**, **`_context`**. Before naming a new private attribute, check it against the base class rather than waiting for the symptom: instantiate the base (`Screen`, `Widget`) and look for the name in `dir()` plus `vars()`.
+
+## Textual behaviour that reads the wrong way round
+
+- **A `Screen` reports `is_mounted == False` inside its own `on_mount`**, even though its children are already composed and queryable. Guarding a first render on it therefore skips that render entirely, silently — which is how the tab strip once came up empty and, because the render was also change-guarded, stayed that way. Guard on the widgets you are about to write to, not on the screen's flag.
+- **Never rebuild a subtree from a cancellable worker.** `@work(exclusive=True)` cancels the previous run, and a cancellation landing between `remove_children()` and `mount_all()` leaves a half-mounted subtree that the app then waits on forever — `pilot.pause()` times out and the real app stops settling. Rebuild synchronously on the message pump; Textual sequences the removal and the mount correctly on its own.
+
+## Going back
+
+- A `choose_*` returning `None`, or `ask()` returning `""`, means "go back one step" — not "abandon the workflow". A capability with more than one prompt is written as a loop where each step is asked only while its answer is unset, so cancelling a step clears the step before it and that one is re-asked (`capabilities/scaffold.py` is the pattern to copy).
+- When the user backs out past the first step, `execute()` returns `CANCELLED` (`domain/capability.py`) rather than `0`. `Application.run()` uses that to skip the result pause and go straight back to the menu — returning `0` there would strand the user on the activity log with nothing to read.
+- One session serves *every* step of the workflow that created it, so lifecycle flags belong to an attempt rather than to the session, and `RunSession.load` re-arms them. Backing out of a form leaves the session holding a refusal; carrying that into the next `open_run_panel` answers the new form before it is ever on screen, so the menu the user just came back to bounces them straight to itself and the only way in is to walk out to the top and start the workflow over.
+- The session's log gets a `$` prompt line per *run*, not per attempt (`_open_prompt`). Walking in and out of a form is nothing happening, and it reuses the prompt already sitting there — unless the trail changed, which is a different form and gets its own. Ten trips through the same menu should leave one prompt, not a transcript of ten runs that never were.
+- The activity log is cleared and hidden again each time the top menu comes back round. It is where a workflow with no panel of its own reports, and the user reads it at the pause that follows — after that it is a line from a run that is over, and left standing it shows through the gap between every later screen as if the current workflow had said it.
+- Esc on a running panel is one step back, not out: `_resume_behind` backgrounds the run and opens a sibling session presetting every menu answer but the last, so the menu that started the run comes back while the run carries on in its tab. Spawn the sibling *before* backgrounding — freeing the foreground first releases the menu loop, and the top menu it pushes would land underneath.
+- Esc is a navigation key, so walking out of the last menu asks before it ends the session (`_confirm_quit(deliberate=False)`); the quit chords `Ctrl+Q` and `Ctrl+C` go straight out unless a run is live, which always asks. Someone leaning on Esc to get back to the top should not find that one press past the top closed the app.
+- `TuiConsole` keeps a breadcrumb of the choices it has served, keyed by step (`TRAIL_STEPS`). Entering a step forgets that step and everything after it, so the trail corrects itself when the user goes back without capabilities having to report their navigation. Menus show it above the title; dialogs show it as their border title.
+
+## Async interaction model
+
+`Application.run()`/`.run_capability()`, `Capability.execute()`, and `TemplatePack.scaffold()`/`.build()` are all `async def` — they `await` the console. This is required so `TuiConsole` can push a screen and `await push_screen_wait()` for the result (Textual only allows that from a worker); `PlainConsole`'s equivalent methods are `async def` too, for interface compatibility, but do no real awaiting. When adding a capability or pack behavior, keep this chain of `await`s intact rather than reaching for a synchronous shortcut.
+
+## Template packs
+
+- Scaffold asks *what* to scaffold (`ScaffoldTarget`: new project, controller), then *which stack* (`TemplatePack`); Build asks *which stack* directly. Both come from `TemplatePackRegistry`.
+- Each pack lives at `templates/<stack>/`: `behavior.py` holds the editable per-stack hooks, `pack.py` is a thin adapter dispatching to it. Only `behavior.py` is meant to be hand-edited.
+- Unimplemented stack/action combinations return `PackActionResult(available=False, message=...)` rather than raising — the TUI just prints the message.
+- To add a stack: copy `templates/_skeleton/`, rename it, implement `behavior.py`, register the pack in `bootstrap.py`, and add entries to `presentation/icons.py` (card line art) and `presentation/hints.py` (the menu's focus hint) so its card isn't the default placeholder.
+- `templates/python/` is the reference pack with real behavior (confirmed project-file writes via `FileSystemPort`, a real build check via `ProcessRunner`) — model new packs on it.
+- `templates/react_native/` is the reference pack for the *clone* style of scaffolding: shallow-clone `TEMPLATE_REPOSITORY` through `ProcessRunner`, then `remove_tree` the clone's `.git` so the new project starts with no history and no link back to the template. Copy it for any stack whose starting point is a repository rather than generated files. Both steps go through ports — never call `subprocess` or `shutil` from a pack.
+- A destination can only be written by one run at a time (`domain/destinations.py`), claimed by `ScaffoldCapability` *before* the work is handed to the panel rather than inside a pack — so every stack is covered by the same rule and none has to remember it. Two runs aimed at one directory is not a race either can win: one removes the tree the other is halfway through cloning into. Refused rather than queued, because a second run silently waiting looks exactly like one that has hung.
+- `FileSystemPort.remove_tree` is the only destructive filesystem operation. Confirm with the user first, and only ever pass it a path the same run created. It is `async` and runs the delete off the event loop: a project directory with dependencies installed is tens of thousands of files, and deleting them inline freezes the interface for the whole of it, Stop included. Two Windows failures are handled and they are different — read-only files (git leaves its pack files that way) need the bit cleared first, while a sharing violation needs a retry, because something is holding the file open for a moment and each attempt deletes what it can.
+
+## Branding and theme
+
+- Artwork is **text**, never an image handed to the terminal. `tools/blockify.py` converts a one-colour PNG to half-block art at authoring time and the *output* is pasted into the source, so Pillow is never a runtime dependency. Half blocks rather than quadrants because a cell is about twice as tall as it is wide: splitting top/bottom gives square pixels, and `▀▄█` plus a space covers every state a two-pixel cell can be in — full fidelity for a one-colour image. Being text is the whole point: it takes the theme colour, costs nothing to repaint, and survives a resize. An image drawn through a terminal graphics protocol does none of those — the terminal composites it outside Textual's diffing renderer, so it flickers on every repaint and re-scales wrongly on resize.
+- Block art only survives at size. The full company logo needs about 13 rows to read; below that its strokes are thinner than a pixel and it turns to mud, which is why the header mark and the card icons stay hand-drawn line art. Check a new piece of art at the size it will actually be drawn before committing it.
+- Art lines are ragged, so whatever shows them must size to the art and centre it as one block (`width: auto`), never `text-align: center`, which centres each line separately and slides them out of register.
+- `presentation/branding.py` holds `APP_NAME`/`APP_TAGLINE`/`APP_VERSION`/`APP_SIGNATURE`, the logo marks, and `IKAIKA_THEME` (a Textual `Theme`, colors drawn from the company logo). `TuiConsole.on_mount` registers and activates it — CSS elsewhere should keep using theme tokens (`$primary`, `$accent`, `$surface`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand automatically.
+- Theme tokens come in two kinds and only one is safe outside CSS: `$primary`, `$accent`, `$success` and the `-darken-`/`-lighten-` variants resolve to a literal color, while every `$text-*` token is an `auto` color that picks itself from the background it is painted on. Assembled `Content` has no such background, so an `auto` token there comes out pure black and the line is invisible. Use `$foreground-darken-3` where CSS would have used `$text-muted`.
+- `presentation/chrome.py` holds the shared frame: `AppFrame` (outer border), `AppHeader` (logo mark, name, tagline, version, workspace status) and `AppFooter` (`KeyHint`s left, signature right). Compose new screens inside `AppFrame` so every screen reads as the same surface; the footer drops its signature below 78 columns.
+- A `KeyHint` is a button. It reads its own label back into the key press it stands for (`key_for`), so `Esc`, `Ctrl+R` and `Ctrl+PgUp` are clickable without anything being declared twice, and a hint naming a range (`↑↓/←→`, `1–6`) resolves to nothing and stays inert rather than offering a press it cannot make. Whether a click does anything is the `-pressable` class alone, so a key that is dead right now — `Enter Send` while nothing is asking for input — can stop offering itself. Show a new hint by adding it to a footer's tuples, not by wiring up a handler.
+- The highlight under the pointer is driven from `Enter`/`Leave` rather than from CSS `:hover`. Textual puts `:hover` on the innermost widget under the mouse, so a rule naming a descendant (`KeyHint:hover .hint--key`) asks about a state its ancestor never has, and lights up whichever half was pointed at. `KeyHint._sync_hover` reads `app.mouse_over` instead and sets `-hovered` on the whole hint. The same trap applies to any two-part widget: `SessionTab:hover .tab--label` is written that way and is dead for exactly this reason.
+- `AppFrame` fills the terminal by default (`FRAME_WIDTH`/`FRAME_HEIGHT` are `100%`). Setting them to viewport units floats the app as a smaller centred panel instead — the screens already centre it — but remember a terminal cell is about twice as tall as it is wide, so a panel that reads as square needs roughly twice as many columns as rows.
+- Anything sizing itself against the available room measures the **menu body**, not the screen, so it keeps working if the frame is ever made smaller than the terminal. `CardMenuScreen._sync_density` is the example; it runs from `call_after_refresh` so the layout pass has already resolved sizes.
+- Every `CardMenuScreen` (capability, scaffold-target, and stack pickers) is built from the same `Card` widget (`presentation/card.py`) — numbered badge, line art, name, description, hotkey — with an animated staggered fade-in on mount. Reuse it for any new selection screen rather than introducing another menu style.
+- Cards lay out in a grid at most `CARDS_PER_ROW` (3) wide; extra entries wrap to another row, and the columns stay aligned because it is a real grid rather than one row per chunk. Registering a new capability needs no layout change. `_apply_density` sizes the requirement from the resulting row count, so a two-row grid asks for the height two rows actually need.
+- Menus are responsive, and width and height are different problems. Too **narrow** for a row of tiles and `_apply_density` puts `-compact` on the screen, the grid, and each card, so the same compose tree renders as single-row entries. Merely too **short** keeps the tiles at full size and scrolls them (`-scroll` on `#cards-scroll`, plus `grid-rows` pinned to `CARD_MIN_HEIGHT` — a grid row left to itself divides whatever room there is, which is the squashing being avoided). A squashed card stops being a card; a scrollbar costs nothing.
+- `#cards-scroll` is a plain `Container` with `overflow-y: auto`, never a `ScrollableContainer`: those bind the arrow keys to scrolling and would answer them before the grid could move the focus. The focused card scrolls itself into view regardless.
+- Cards are selectable by arrows, mouse, `Enter`, or their number key, and the line under the grid shows a longer hint for whatever has focus.
+- Arrow keys follow the grid: left/right step one card and wrap along the row, up/down step a whole row and clamp at the ends. In compact mode the stride collapses to one, because the cards are a single column.
+- Cards have exactly two looks: idle (round border) and focused (double accent border). They carry no fill at all — `background: transparent` in every state — so only the border says where you are. Hovering calls `focus()` rather than adding a third style, so the mouse and the arrow keys move the same highlight and the hint line follows either. Never reintroduce a card background or a hover style.
+- `Card` and the card row are both height-capped (`max-height`) so a maximised terminal does not stretch the tiles; the leftover space falls below the hint line rather than between it and the cards.
+- The accent color means "this has focus" and nothing else — do not spend it on decoration.
+
+## Rules
+
+- Keep capabilities independent and register them in `bootstrap.py`.
+- Put operating-system access behind a domain port.
+- Never invoke shell commands through a string or with `shell=True`.
+- Validate paths and user input before writing or executing.
+- Default destructive operations to dry-run and require explicit confirmation.
+- Keep secrets out of output, exceptions, logs, and generated files.
+- Add no dependency unless the standard library cannot reasonably provide the behavior.
+- Keep source files focused and use lowercase `snake_case` names.
+- Do not add comments that narrate the code.
+- Test every decision and error boundary introduced by a change.
+
+## Definition of done
+
+- `python -m unittest discover` passes.
+- `python -m company_tui list` succeeds.
+- `python -m company_tui doctor` succeeds.
+- New external interactions are hidden behind ports.
+- New capabilities are wired only through the composition root.
+- Existing capabilities remain independently runnable.
+- Graphify is updated after code changes.
+
