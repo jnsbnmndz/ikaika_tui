@@ -8,6 +8,12 @@ from company_tui.domain.config import TemplateSource
 from company_tui.domain.identity import ProjectIdentity
 from company_tui.domain.options import Option, OptionKind, OptionValue, OptionValues
 from company_tui.domain.project_name import ProjectName
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptUpdate,
+    action_options,
+)
 
 
 class ScaffoldTarget(Enum):
@@ -31,7 +37,7 @@ SCAFFOLD_TARGET_OPTIONS: tuple[ScaffoldTargetOption, ...] = (
     ScaffoldTargetOption(
         target=ScaffoldTarget.CONTROLLER,
         name="Components",
-        description="Add a controller to an existing project",
+        description="Add a file to a project that already exists",
     ),
 )
 
@@ -244,6 +250,55 @@ class TemplatePack(ABC):
         """
         return None
 
+    def script_source(self) -> TemplateSource | None:
+        """Where this stack's build scripts are cloned from, if it has any.
+
+        A separate repository from the template, cloned once into the toolbox's
+        own store rather than into each project: the scripts are what maintains
+        a project after it exists, so they outlive any one of them.
+        """
+        return None
+
+    async def script_actions(self) -> ScriptCatalogue:
+        """What this stack's script repository offers, fetching it if it is not there.
+
+        A stack with no scripts answers with an empty catalogue and no problem,
+        which is how `build` stays the thing that runs for a stack whose build
+        is built in rather than declared.
+        """
+        return ScriptCatalogue()
+
+    def script_options(self, action: ScriptAction) -> tuple[Option, ...]:
+        """The form for one declared action — where it runs, then its own flags."""
+        return action_options(action)
+
+    async def run_script(
+        self, action: ScriptAction, values: OptionValues
+    ) -> PackActionResult:
+        """Do one of the actions `script_actions` offered."""
+        return PackActionResult(
+            available=False, message=f"{action.name} is not available for this stack."
+        )
+
+    async def script_status(self, *, compare: bool = False) -> ScriptCatalogue:
+        """What the store holds for this stack, cloning nothing to find out.
+
+        Settings shows this, so it has to answer before the user has asked for
+        anything: a form that fetched a repository to draw its own rows would
+        make opening Settings a network call.
+        """
+        return ScriptCatalogue()
+
+    async def install_scripts(self, *, replace: bool = False) -> PackActionResult:
+        """Put this stack's scripts in the store, replacing them if asked."""
+        return PackActionResult(
+            available=False, message=f"{self.info.name} has no scripts to install."
+        )
+
+    async def apply_script_update(self, choice: ScriptUpdate) -> PackActionResult:
+        """Act on what the user said about a store that has fallen behind."""
+        return PackActionResult(available=False, message="Nothing to update.")
+
     def preflight(self) -> tuple[ToolRequirement, ...]:
         """Executables this pack needs on the machine to do its work."""
         return ()
@@ -254,4 +309,5 @@ class TemplatePack(ABC):
 
     @abstractmethod
     async def build(self) -> PackActionResult:
+        """The build this stack ships with, for a stack that declares no scripts."""
         raise NotImplementedError

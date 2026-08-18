@@ -13,16 +13,20 @@ the session that workflow belongs to rather than to whatever happens to be on
 screen. Routing by "the open panel" is exactly the wrong model once there is
 more than one.
 
-Nothing here survives a restart. A killed subprocess cannot be resumed, so
-restoring the log of a dead run would show a scaffold that never finished as if
-it had.
+A tab outlives the app, but a run does not. What is kept between one launch and
+the next is everything the user put in — the name they gave the tab, the stack
+it belongs to, the form they filled in and what the last run printed — and none
+of what was doing the work. A restored tab is idle, with its output above the
+prompt under a line saying it is from a previous session, because a killed
+subprocess cannot be resumed and a log restored as if it were live would show a
+scaffold that never finished as one that had. See `domain/session_memory.py`.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from enum import Enum
@@ -37,8 +41,17 @@ from company_tui.domain.options import (
     OptionValue,
     defaults_for,
 )
+from company_tui.domain.session_memory import RememberedSession
 
 TRAIL_SEPARATOR = " › "
+
+HISTORY_OPENED = "── from a previous session{when} ──"
+HISTORY_CLOSED = "── end of previous session ──"
+"""What a restored log is wrapped in.
+
+Marked rather than merely replayed. Output with nothing above it reads as this
+run's output, which for a scaffold that died half way through a clone is a claim
+that a directory exists in a state it does not."""
 
 LOG_LIMIT = 500
 """Lines a session keeps before the oldest fall off the top.
@@ -96,6 +109,22 @@ def render_line(message: str, marker: str = "plain") -> Content:
         parts.append((glyph, glyph_style) if glyph_style else glyph)
     parts.append((message, body_style) if body_style else message)
     return Content.assemble(*parts)
+
+
+def _without_history(lines: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The log with any previous session's markers taken back out.
+
+    Restored lines are written down again — history is meant to survive more
+    than one restart — but the pair of lines wrapping them is not, or every
+    launch would wrap the last launch's wrapping and the log would end up more
+    divider than output.
+    """
+    opening = HISTORY_OPENED.split("{", 1)[0]
+    return [
+        (message, marker)
+        for message, marker in lines
+        if not (message == HISTORY_CLOSED or message.startswith(opening))
+    ]
 
 
 class SessionStatus(Enum):
@@ -178,6 +207,16 @@ class RunSession:
         self.result_acknowledged = False
 
         self.log: deque[Content] = deque(maxlen=LOG_LIMIT)
+        self.lines: deque[tuple[str, str]] = deque(maxlen=LOG_LIMIT)
+        """The same log, unrendered, for the one reader that outlives the theme.
+
+        A `Content` carries the colours of the theme it was assembled under, so
+        it is what to draw and not what was said. Kept alongside rather than
+        parsed back out of, and capped by the same limit, so the pair cannot
+        drift."""
+
+        self.stamp = ""
+        """When this tab last ran, in the words the log says it in."""
 
         self.title = ""
         self.options: tuple[Option, ...] = ()
@@ -324,7 +363,8 @@ class RunSession:
     def start(self) -> None:
         self.started = True
         self.ran = True
-        self.write(datetime.now().strftime(RUN_STAMP), marker="time")
+        self.stamp = datetime.now().strftime(RUN_STAMP)
+        self.write(self.stamp, marker="time")
         self.submitted.set()
         self.changed()
 
@@ -397,8 +437,81 @@ class RunSession:
     def write(self, message: str, marker: str = "plain") -> None:
         content = render_line(message, marker)
         self.log.append(content)
+        self.lines.append((message, marker))
         if self._echo is not None:
             self._echo(content)
+
+    def transcript(self) -> str:
+        """Everything this tab has printed, as one block of text.
+
+        Read off the log rather than off the widget showing it: the panel wraps
+        each line to whatever width the terminal pane happens to be, and a
+        transcript broken at the column the window was that afternoon is not
+        what anyone pasting it wants. The rendered text, though — glyphs and
+        all — because those are what the user is looking at, and a copy that
+        quietly drops the `$` off the prompts is a copy of something else.
+        """
+        return "\n".join(content.plain for content in self.log)
+
+    def clear_log(self) -> None:
+        """Empty the terminal, leaving the prompt this run started under.
+
+        The prompt goes back because a cleared terminal is still this tab's
+        terminal, and that line is the only place the panel says which stack
+        and which workflow it belongs to. Clearing to nothing at all would take
+        the tab's name off its own output.
+        """
+        self.log.clear()
+        self.lines.clear()
+        self._open_prompt()
+        self.changed()
+
+    # ------------------------------------------------------------- remembering
+
+    def to_memory(self) -> RememberedSession:
+        """This tab as it deserves to come back: answers, not work.
+
+        `scope` is written down in its own right rather than left to be read
+        back out of `steps`. The two part company the moment a workflow walks
+        back to re-ask a step — `_enter_step` trims `steps` so the breadcrumb
+        corrects itself, while the scope the tab was created under stays where
+        it is. Read back from a trimmed `steps`, a React Native tab comes back
+        belonging to `("Scaffold",)` and appears in no strip at all.
+        """
+        return RememberedSession(
+            name=self.name,
+            base=self.base,
+            scope=self.scope,
+            steps=dict(self.steps),
+            title=self.title,
+            trail=tuple(self.trail),
+            values=dict(self.values),
+            log=tuple(_without_history(self.lines)),
+            stamp=self.stamp,
+        )
+
+    def replay(self, remembered: RememberedSession) -> None:
+        """Take up what a previous run of the app left here.
+
+        The form comes back filled and the output comes back marked as over.
+        Nothing about the run itself does: a restored tab is idle, and the next
+        thing written under this is the prompt of a run that has not happened
+        yet.
+        """
+        self.scope = tuple(remembered.scope) or self.scope
+        self.title = remembered.title
+        self.trail = tuple(remembered.trail)
+        self.values = dict(remembered.values)
+        self.stamp = remembered.stamp
+        self.opened = True
+        self.ran = True
+        if not remembered.log:
+            return
+        when = f" · {remembered.stamp}" if remembered.stamp else ""
+        self.write(HISTORY_OPENED.format(when=when), marker="time")
+        for message, marker in remembered.log:
+            self.write(message, marker)
+        self.write(HISTORY_CLOSED, marker="time")
 
     # ----------------------------------------------------------- the question
 
@@ -460,6 +573,46 @@ class SessionRegistry:
         self._on_change(session)
         return session
 
+    def restore(
+        self, remembered: RememberedSession, workflow: Workflow
+    ) -> RunSession:
+        """Put a tab back as the app found it written down.
+
+        With no workflow of its own: nothing is driving a restored tab, which is
+        exactly what lets the next workflow to walk into that context pick it up
+        (`TuiConsole._relocate`) instead of opening a second one beside it. That
+        is the whole of "restore in place" — no menu is skipped and no run is
+        resumed; the tab is simply already there when the user arrives.
+        """
+        session = self.create(
+            remembered.base or remembered.name,
+            workflow,
+            steps=dict(remembered.steps),
+        )
+        # Replayed before it is named, because the name has to be free in the
+        # strip this tab actually belongs to, and until the scope is back that
+        # is not known.
+        session.replay(remembered)
+        session.name = self._unique(remembered.name, session.scope, except_for=session)
+        # And not holding the screen either. A session is born wanting the
+        # foreground because a session is normally born to run something, and
+        # what clears it is being left running in the background — which never
+        # happens to a tab that was never started. Left set, every restored tab
+        # counts as one more thing the menu loop is waiting on, and the loop
+        # stops coming back: the app draws its own empty frame and the only key
+        # that still does anything is the one that quits.
+        session.foreground = False
+        self._on_change(session)
+        return session
+
+    def remembered(self) -> tuple[RememberedSession, ...]:
+        """Every tab worth writing down, in the order they are shown.
+
+        Tabs, not sessions: a workflow between two menus owns a session too, and
+        restoring one would put an entry in a strip that nothing was ever in.
+        """
+        return tuple(s.to_memory() for s in self._sessions if s.opened)
+
     def remove(self, session: RunSession) -> None:
         if session in self._sessions:
             self._sessions.remove(session)
@@ -469,7 +622,7 @@ class SessionRegistry:
         cleaned = name.strip()
         if not cleaned or cleaned == session.name:
             return
-        session.name = self._unique(cleaned, session.scope)
+        session.name = self._unique(cleaned, session.scope, except_for=session)
         self._on_change(session)
 
     def all(self) -> tuple[RunSession, ...]:
@@ -526,14 +679,26 @@ class SessionRegistry:
             parts.append(f"{waiting} waiting")
         return " · ".join(parts)
 
-    def _unique(self, base: str, scope: tuple[str, ...]) -> str:
+    def _unique(
+        self,
+        base: str,
+        scope: tuple[str, ...],
+        except_for: RunSession | None = None,
+    ) -> str:
         """A name free in the one strip it will be seen in.
 
         Numbered against that strip rather than against every session there is,
         so each context starts at one: the second stack you scaffold opens on
         its own first tab instead of inheriting a number from the first.
+
+        `except_for` is the session being named. Without it a tab restored under
+        the name it already has collides with itself and comes back as "… 2".
         """
-        taken = {s.name for s in self._sessions if s.scope == scope}
+        taken = {
+            s.name
+            for s in self._sessions
+            if s.scope == scope and s is not except_for
+        }
         if base not in taken:
             return base
         return next(f"{base} {n}" for n in count(2) if f"{base} {n}" not in taken)

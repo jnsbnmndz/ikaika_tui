@@ -5,8 +5,8 @@ menu can say more about the focused entry without crowding the grid.
 """
 
 _HINTS = {
-    "scaffold": "Start a new project, or add a controller to one you already have.",
-    "build": "Run the build for the stack you pick, in the current directory.",
+    "scaffold": "Start a new project, or add a file to one you already have.",
+    "build": "Run a workflow from the stack's script repository against a project.",
     "deploy": "Ship the current project through a configured deployment workflow.",
     "scripts": "Discover and run the automation commands defined by this project.",
     "settings": "Edit ikaika.toml — workspace, bundle prefix, and template sources.",

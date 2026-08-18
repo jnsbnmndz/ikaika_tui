@@ -29,6 +29,13 @@ class MenuEntry:
     """Runs still going at or below this option. A menu that says nothing about
     them makes the user open every door to find the one they left work behind."""
 
+    detail: str = ""
+    """The line shown under the grid while this card has focus, where the entry
+    knows it. `hints.py` is a table keyed by the keys this toolbox ships, and a
+    menu read off a script repository's manifest has keys it cannot know — so
+    such a menu carries its own words rather than falling through to a card
+    description written to fit three lines."""
+
 
 class Card(Widget, can_focus=True):
     """One menu option.

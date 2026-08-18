@@ -6,10 +6,15 @@ pin a template for one repository without changing what everyone else gets.
     [scaffold]
     workspace_root = "~/work"
     bundle_prefix  = "com.ikaika"
+    scripts_root   = "~/.ikaika/scripts"
 
     [templates.react_native]
     url = "https://github.com/JDM-Github/react_native_structure.git"
     ref = "v1.2.0"
+
+    [scripts.react_native]
+    url = "https://github.com/JDM-Github/react_native_scripts.git"
+    ref = "v1.0.0"
 
 Nothing here is required. A malformed or unreadable file falls back to the
 defaults rather than stopping the toolbox: settings that cannot be parsed are a
@@ -25,6 +30,7 @@ from typing import Any
 
 from company_tui.domain.config import (
     DEFAULT_BUNDLE_PREFIX,
+    DEFAULT_SCRIPTS_ROOT,
     DEFAULT_WORKSPACE_ROOT,
     ConfigPort,
     ConfigScope,
@@ -34,6 +40,9 @@ from company_tui.domain.config import (
 
 CONFIG_NAME = "ikaika.toml"
 HOME_CONFIG = Path.home() / ".ikaika" / CONFIG_NAME
+
+TEMPLATES_SECTION = "templates"
+SCRIPTS_SECTION = "scripts"
 
 HEADER = "# IKAIKA developer toolbox settings."
 
@@ -52,14 +61,31 @@ def render(settings: Settings) -> str:
         "[scaffold]",
         f"workspace_root = {quote(settings.workspace_root)}",
         f"bundle_prefix = {quote(settings.bundle_prefix)}",
+        f"scripts_root = {quote(settings.scripts_root)}",
     ]
     for key in sorted(settings.templates):
         source = settings.templates[key]
         if not source.url:
             continue
-        lines += ["", f"[templates.{key}]", f"url = {quote(source.url)}"]
+        lines += ["", f"[{TEMPLATES_SECTION}.{key}]", f"url = {quote(source.url)}"]
         if source.ref:
             lines.append(f"ref = {quote(source.ref)}")
+
+    # A script table is worth writing for a URL or for a `check = false`, and
+    # the second can outlive the first: somebody who stopped being asked about a
+    # stack has said something about it even after the URL goes back to default.
+    for key in sorted(set(settings.scripts) | set(settings.script_checks)):
+        source = settings.scripts.get(key, TemplateSource(url=""))
+        checked = settings.script_checks.get(key, True)
+        if not source.url and checked:
+            continue
+        lines += ["", f"[{SCRIPTS_SECTION}.{key}]"]
+        if source.url:
+            lines.append(f"url = {quote(source.url)}")
+            if source.ref:
+                lines.append(f"ref = {quote(source.ref)}")
+        if not checked:
+            lines.append("check = false")
     return "\n".join(lines) + "\n"
 
 
@@ -77,13 +103,10 @@ class FileConfig(ConfigPort):
         return self._source
 
     def template_source(self, pack_key: str, default: TemplateSource) -> TemplateSource:
-        entry = self._section("templates").get(pack_key)
-        if not isinstance(entry, dict):
-            return default
-        return TemplateSource(
-            url=str(entry.get("url", default.url)) or default.url,
-            ref=str(entry.get("ref", default.ref)),
-        )
+        return self._pinned(TEMPLATES_SECTION, pack_key, default)
+
+    def script_source(self, pack_key: str, default: TemplateSource) -> TemplateSource:
+        return self._pinned(SCRIPTS_SECTION, pack_key, default)
 
     def bundle_prefix(self) -> str:
         prefix = str(self._section("scaffold").get("bundle_prefix", "")).strip()
@@ -93,22 +116,53 @@ class FileConfig(ConfigPort):
         root = str(self._section("scaffold").get("workspace_root", "")).strip()
         return Path(root).expanduser() if root else Path(DEFAULT_WORKSPACE_ROOT)
 
+    def scripts_root(self) -> Path:
+        root = str(self._section("scaffold").get("scripts_root", "")).strip()
+        return Path(root or DEFAULT_SCRIPTS_ROOT).expanduser()
+
+    def script_check(self, pack_key: str) -> bool:
+        entry = self._section(SCRIPTS_SECTION).get(pack_key)
+        if not isinstance(entry, dict):
+            return True
+        return entry.get("check", True) is not False
+
     def settings(self) -> Settings:
-        templates = {
-            key: TemplateSource(
-                url=str(entry.get("url", "")), ref=str(entry.get("ref", ""))
-            )
-            for key, entry in self._section("templates").items()
-            if isinstance(entry, dict)
-        }
         scaffold = self._section("scaffold")
         return Settings(
             workspace_root=str(scaffold.get("workspace_root", "")).strip()
             or DEFAULT_WORKSPACE_ROOT,
             bundle_prefix=str(scaffold.get("bundle_prefix", "")).strip()
             or DEFAULT_BUNDLE_PREFIX,
-            templates=templates,
+            templates=self._pinned_sources(TEMPLATES_SECTION),
+            scripts_root=str(scaffold.get("scripts_root", "")).strip()
+            or DEFAULT_SCRIPTS_ROOT,
+            scripts=self._pinned_sources(SCRIPTS_SECTION),
+            script_checks={
+                key: entry.get("check", True) is not False
+                for key, entry in self._section(SCRIPTS_SECTION).items()
+                if isinstance(entry, dict)
+            },
         )
+
+    def _pinned(
+        self, section: str, pack_key: str, default: TemplateSource
+    ) -> TemplateSource:
+        entry = self._section(section).get(pack_key)
+        if not isinstance(entry, dict):
+            return default
+        return TemplateSource(
+            url=str(entry.get("url", default.url)) or default.url,
+            ref=str(entry.get("ref", default.ref)),
+        )
+
+    def _pinned_sources(self, section: str) -> dict[str, TemplateSource]:
+        return {
+            key: TemplateSource(
+                url=str(entry.get("url", "")), ref=str(entry.get("ref", ""))
+            )
+            for key, entry in self._section(section).items()
+            if isinstance(entry, dict)
+        }
 
     def location(self, scope: ConfigScope) -> Path:
         return self._user if scope is ConfigScope.USER else self._project

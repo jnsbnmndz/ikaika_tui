@@ -3,6 +3,7 @@ from typing import Protocol, TypeVar
 
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
+from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
 from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
 
 T = TypeVar("T")
@@ -34,6 +35,20 @@ class Ui(Protocol):
         Returns the filled-in values, or `None` if the user backed out. Until
         `close_run_panel`, `write`/`ask`/`confirm` report into the same panel, so
         a workflow narrates itself without knowing where the output lands.
+        """
+        ...
+
+    async def working(self, label: str, work: Awaitable[T]) -> T:
+        """Do `work` while saying what is being waited for.
+
+        `run_in_panel`'s counterpart for a step with no panel: a workflow
+        between two menus has been popped off one screen and cannot build the
+        next until this answers, so nothing on screen is about it. Fine for a
+        step that takes no time, and indistinguishable from a hang for one that
+        goes to the network.
+
+        The result is the work's own, and a presentation with nowhere to put a
+        label is free to ignore it and simply await.
         """
         ...
 
@@ -83,6 +98,30 @@ class Ui(Protocol):
         A workflow that sends the user back has something to tell them, and the
         place to tell them is the menu they land on. Writing it to the console
         instead would put it behind whatever screen comes next.
+        """
+        ...
+
+    async def choose_script_action(
+        self, actions: Sequence[ScriptAction], notice: str = ""
+    ) -> ScriptAction | None:
+        """Pick one of the workflows a script repository declares.
+
+        A menu rather than a field on the form, because this is the choice of
+        which workflow to run and the form is what that workflow asks for. It
+        is also the only menu here whose entries are read off a disk, so its
+        cards carry their own one-line detail instead of looking one up.
+        """
+        ...
+
+    async def choose_script_update(
+        self, catalogue: ScriptCatalogue
+    ) -> ScriptUpdate | None:
+        """Ask what to do about a store that has fallen behind its repository.
+
+        Three answers, so a menu rather than a dialog: `ConfirmScreen` asks
+        about one irreversible thing and offers exactly two, and "stop asking"
+        is neither of them. Backing out is a fourth answer that costs nothing —
+        Esc puts the stack menu back with nothing decided.
         """
         ...
 

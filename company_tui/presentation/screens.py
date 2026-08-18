@@ -1,5 +1,6 @@
 from collections.abc import Callable, Sequence
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import (
@@ -223,8 +224,12 @@ class CardMenuScreen(Screen[int | None]):
 
     def _footer_hints(self) -> list[tuple[str, str]]:
         hints = [("↑↓/←→", "Navigate"), ("Enter", "Select")]
-        if len(self._entries) > 1:
-            hints.append((f"1–{len(self._entries)}", "Jump"))
+        # Only as far as a single keypress reaches. A menu long enough to run
+        # out of digits is one a script repository grew, and a hint offering a
+        # jump the keyboard cannot make is worse than one that stops short.
+        jumpable = min(len(self._entries), 9)
+        if jumpable > 1:
+            hints.append((f"1–{jumpable}", "Jump"))
         # A run left going has to be reachable from here, or leaving it was the
         # same thing as losing it.
         if self._runs:
@@ -325,7 +330,7 @@ class CardMenuScreen(Screen[int | None]):
         entry = card.entry
         self.query_one("#hint-key", Static).update(entry.name.upper())
         self.query_one("#hint-text", Static).update(
-            hint_for(entry.key, entry.description)
+            entry.detail or hint_for(entry.key, entry.description)
         )
 
     def on_card_selected(self, message: Card.Selected) -> None:
@@ -387,6 +392,11 @@ class DialogScreen(ModalScreen[ScreenResultType]):
         padding: 1 2;
     }
 
+    DialogScreen .dialog--heading {
+        width: 100%;
+        height: auto;
+    }
+
     DialogScreen .dialog--prompt {
         width: 100%;
         height: auto;
@@ -397,6 +407,8 @@ class DialogScreen(ModalScreen[ScreenResultType]):
     DialogScreen .dialog--actions {
         width: 100%;
         height: auto;
+        padding-top: 1;
+        border-top: solid $primary-lighten-1;
         align-horizontal: right;
     }
 
@@ -406,9 +418,49 @@ class DialogScreen(ModalScreen[ScreenResultType]):
         align: left middle;
     }
 
+    /* A row of buttons deep enough for a label with its key under it. Both
+       buttons take the height whether or not they carry a key, because two
+       actions at two different heights read as two different kinds of thing. */
+    DialogScreen .dialog--actions.-keyed Button {
+        height: 4;
+    }
+
+    /* Outlined, never filled, and the border is what says which one is
+       focused — the same grammar as the run panel's SEND. A filled answer
+       reads as an answer already chosen, which is the last thing a dialog
+       asking before something destructive should say. `!important` and the
+       tint reset are what it takes to get out from under Textual's own Button
+       rules, which paint a background on focus and hover. */
     DialogScreen Button {
-        min-width: 12;
+        min-width: 14;
+        height: 3;
         margin-left: 2;
+        border: round $primary-lighten-1 !important;
+        background: transparent !important;
+        color: $foreground;
+        text-style: bold;
+        content-align: center middle;
+    }
+
+    /* Focus doubles the line, and does nothing else at all. Textual's own
+       `$button-focus-text-style` is `bold reverse`, and the reverse is what
+       paints a block behind the label — the button's colours swapped, which
+       reads as a filled button however transparent the background is. Hover and
+       press are held to the same rule: the label never changes colour, nothing
+       behind it is ever painted, and the border carries the whole state. */
+    DialogScreen Button:hover,
+    DialogScreen Button.-active,
+    DialogScreen Button:focus {
+        background: transparent;
+        background-tint: 0%;
+        tint: $background 0%;
+        text-style: bold !important;
+    }
+
+    /* A border that changed colour would be the answer's own colour arguing
+       with the focus colour; doubling says the same thing without collision. */
+    DialogScreen Button:focus {
+        border: double $accent !important;
     }
 
     DialogScreen Input {
@@ -423,21 +475,114 @@ class DialogScreen(ModalScreen[ScreenResultType]):
     """
 
 
+CONFIRM_MARK = "▲"
+"""What a confirmation is about, before the sentence is read.
+
+Not the warning sign it looks like in a design: `U+26A0` has an emoji form, so it
+comes out double width in a colour of its own — see `tests/test_glyphs.py`. This
+is the plain geometric triangle, and the colour does the rest.
+"""
+
+
 class ConfirmScreen(DialogScreen[bool]):
+    """A question with two answers, one of which usually cannot be undone.
+
+    Colour says which is which and the border says which one is focused, rather
+    than the focused answer being filled in. Everything this asks about — quit
+    with runs going, overwrite an existing tree, close a live tab — is a step
+    the user does not get back, so neither answer may look pre-selected.
+    """
+
+    DEFAULT_CSS = """
+    ConfirmScreen .dialog--mark {
+        width: 3;
+        height: 1;
+        color: $warning;
+        text-style: bold;
+    }
+
+    /* The question, in the colour of the mark beside it, so the two read as one
+       thing rather than as a bullet that happens to precede a sentence. */
+    ConfirmScreen #confirm-prompt {
+        width: 1fr;
+        color: $warning;
+        text-style: bold;
+    }
+
+    /* What the question means, for anyone who wants it. The title alone answers
+       "what is this", and this answers "what happens if I say yes" — which is
+       the part worth having before a step that cannot be undone. */
+    ConfirmScreen #confirm-detail {
+        width: 100%;
+        height: auto;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+
+    /* The way back, and the thing there is no way back from. */
+    ConfirmScreen #no {
+        color: $warning;
+        border: round $warning !important;
+    }
+
+    ConfirmScreen #no:focus {
+        border: double $warning !important;
+    }
+
+    ConfirmScreen #yes {
+        color: $error;
+        border: round $error !important;
+    }
+
+    ConfirmScreen #yes:focus {
+        border: double $error !important;
+    }
+    """
+
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, prompt: str, trail: str = "") -> None:
+    def __init__(
+        self,
+        prompt: str,
+        trail: str = "",
+        detail: str = "",
+        confirm: str = "CONFIRM",
+        key: str = "",
+    ) -> None:
         super().__init__()
         self._prompt = prompt
         self._trail = trail
+        self._detail = detail
+        self._confirm = confirm
+        self._key = key
 
     def compose(self) -> ComposeResult:
         with Container() as dialog:
             dialog.border_title = self._trail or "Confirm"
-            yield Static(self._prompt, id="confirm-prompt", classes="dialog--prompt")
-            with Horizontal(classes="dialog--actions"):
-                yield Button("No", id="no", variant="error", flat=True)
-                yield Button("Yes", id="yes", variant="success", flat=True)
+            with Horizontal(classes="dialog--heading"):
+                yield Static(CONFIRM_MARK, classes="dialog--mark")
+                yield Static(self._prompt, id="confirm-prompt", classes="dialog--prompt")
+            if self._detail:
+                yield Static(self._detail, id="confirm-detail")
+            actions = "dialog--actions -keyed" if self._key else "dialog--actions"
+            with Horizontal(classes=actions):
+                with Horizontal(classes="dialog--escape"):
+                    yield KeyHint("Esc", "Cancel", dim=True)
+                yield Button("CANCEL", id="no", flat=True)
+                yield Button(self._answer(), id="yes", flat=True)
+
+    def _answer(self) -> Text:
+        """The affirmative, with the key that also does it under the label.
+
+        The key is on the button rather than only in a hint, because this is the
+        one dialog reached by a chord: someone who pressed `Ctrl+Q` to get here
+        should be able to see that pressing it again is the same answer.
+        """
+        label = Text(self._confirm, style="bold")
+        if self._key:
+            label.append("\n")
+            label.append(self._key, style="not bold")
+        return label
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")

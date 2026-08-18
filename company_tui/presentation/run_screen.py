@@ -13,9 +13,12 @@ panel is left behind, and what lets the tab strip swap one run for another
 without either of them noticing.
 
 The one button carries the whole lifecycle — Run, then Stop while it works, then
-Close — so there is always something to press and never a state the user is
-stuck in. Esc is the way out rather than the way to stop: while work is running
-it detaches, leaving the run going.
+Run again — so there is always something to press and never a state the user is
+stuck in. It is the *only* button here: leaving is Esc, and the footer hint that
+says so is itself the button for it, so the mouse reaches the exit without a
+second control beside Run that has to be kept in step with it. Esc is the way
+out rather than the way to stop: while work is running it detaches, leaving the
+run going.
 
 Both halves say what they want before being asked: a required field is marked on
 its label, a line under the form names whatever is still missing, and an empty
@@ -25,12 +28,16 @@ without pressing anything, so none of them waits for a press that goes nowhere.
 
 from collections.abc import Sequence
 
+from rich.segment import Segment
 from textual import events, work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.message import Message
 from textual.screen import Screen
+from textual.selection import Selection
+from textual.strip import Strip
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, Checkbox, Input, RichLog, Select, Static
 
@@ -40,6 +47,7 @@ from company_tui.domain.options import (
     OptionValue,
     missing_required,
 )
+from company_tui.presentation.branding import TOGGLE_ON
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, KeyHint
 from company_tui.presentation.icons import TERMINAL_ART
 from company_tui.presentation.path_screen import PathScreen
@@ -56,19 +64,30 @@ from company_tui.presentation.session_tabs import (
     SessionTabs,
 )
 
-STDIN_IDLE = "Waiting — nothing is asking for input yet"
+STDIN_IDLE = "Waiting for process input…"
 STDIN_ACTIVE = "Type a response, then Enter"
 
 REQUIRED_MARK = " *"
 
-EMPTY_TITLE = "Nothing has run here yet"
-EMPTY_HINT = "Fill in the form, then press Ctrl+R."
+EMPTY_TITLE = "Ready to scaffold"
+EMPTY_HINT = "Configure the project, then press Ctrl+R."
 
-NEEDED_MARK = "▲ "
-"""A triangle rather than a warning sign, a stopwatch or a media-control glyph:
-those all live in the block terminals render from an emoji font instead of a
-text one, which comes out double width and in a colour of its own. Everything
-drawn here is from the geometric and dingbat blocks, the same as the line art."""
+NEEDED_MARK = "ⓘ  "
+"""A terminal-safe circled information mark, kept to one cell so validation
+copy stays aligned in terminals that substitute emoji fonts for warning signs."""
+
+COPY_LABEL = "COPY"
+COPIED_LABEL = "COPIED"
+COPY_TOOLTIP = "Copy every line in this terminal. Ctrl+C copies a selection."
+CLEAR_TOOLTIP = "Empty this terminal, back to the prompt the run started under."
+COPIED_FOR = 1.4
+"""How long COPY says it worked before going back to offering to.
+
+Said on the button rather than in the terminal, because the terminal is the
+thing that was just copied and a line announcing the copy would be one more line
+the next copy carries. A clipboard write is an escape sequence the terminal
+either honours or drops without answering, so this reports that the app sent it,
+which is the whole of what the app knows."""
 
 
 def needed_text(missing: Sequence[str]) -> str:
@@ -82,6 +101,162 @@ def needed_text(missing: Sequence[str]) -> str:
     if len(missing) == 1:
         return f"{NEEDED_MARK}Enter {missing[0].lower()} to continue."
     return f"{NEEDED_MARK}Still to fill in: {', '.join(missing)}."
+
+
+class RunActionButton(Button):
+    """Keep concise state labels while rendering stronger action copy."""
+
+    def __init__(self, *args, action_name: str, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._action_name = action_name.upper()
+
+    def render(self):
+        state = str(self.label)
+        if state == "Run":
+            return f"❯  RUN {self._action_name}"
+        if state == "Stop":
+            return "■  STOP"
+        if state == "Stopping":
+            return "■  STOPPING…"
+        if state == "Run again":
+            return f"↻  RUN {self._action_name} AGAIN"
+        return state.upper()
+
+
+class FieldToggle(Checkbox):
+    """A checkbox that is only the box.
+
+    Textual's is a mark and its label in one widget, which makes the text of a
+    question part of the control that answers it. Here the label is a `Static`
+    beside this, and this is the box on its own: one cell of mark inside a
+    border, so a click has to land on the box to count and hover lights what
+    the pointer is actually over.
+
+    The side characters go because they are what makes the stock checkbox three
+    cells wide. With a border of its own it does not need them, and one cell is
+    what a mark inside a box wants to be.
+    """
+
+    BUTTON_LEFT = ""
+    BUTTON_INNER = "✕"
+    BUTTON_RIGHT = ""
+
+    def render(self):
+        """The mark when it is on, an empty box when it is not.
+
+        Textual's own `render` pads the label a cell either side and assembles
+        it with the button, which for an empty label is still two cells of
+        padding — three cells of content in a box one cell wide, and what shows
+        in it is the ellipsis of the overflow rather than the mark. It also
+        draws the mark whether or not the box is on, in the colour of whatever
+        is behind it, which is a mark that has to be hidden rather than not
+        drawn. Off is nothing in the box.
+        """
+        return self._button if self.value else Content("")
+
+
+class SelectableLog(RichLog):
+    """The run's output, with the pointer able to pick text out of it.
+
+    Textual selects by reading a per-cell offset off whatever a widget drew and
+    handing that widget back a range in its own coordinates. `RichLog` writes
+    neither: it keeps finished `Strip`s and paints them, so a drag across one
+    reports no offsets at all. The screen reads that as "select the whole
+    widget" and the whole widget then answers with nothing, because the
+    inherited `get_selection` looks for a renderable a log does not have — which
+    is why the terminal was the one pane here that could not be copied out of.
+
+    Both halves are supplied. `render_line` stamps each cell with where in the
+    log it came from and paints whatever is selected; `get_selection` reads the
+    text back off the same strips. That reading is the wrapped line as it
+    appears on screen, which is the point — this is the mouse taking what it is
+    pointing at. `RunSession.transcript` is the other reading, every line at its
+    own length, and that is what COPY sends.
+    """
+
+    def render_line(self, y: int) -> Strip:
+        scroll_x, scroll_y = self.scroll_offset
+        index = scroll_y + y
+        strip = super().render_line(y)
+        selection = self.text_selection
+        if selection is not None and 0 <= index < len(self.lines):
+            span = selection.get_span(index)
+            if span is not None:
+                start, end = span
+                if end == -1:
+                    end = len(self.lines[index].text)
+                strip = self._highlight(strip, start - scroll_x, end - scroll_x)
+        # The offsets go on last, over the highlight rather than under it: they
+        # are what the next drag reads, and a strip rebuilt after them carries
+        # none.
+        return strip.apply_offsets(scroll_x, index)
+
+    def _highlight(self, strip: Strip, start: int, end: int) -> Strip:
+        """Paint `start`-`end` of an already-cropped line as selected.
+
+        Over the line's own colours rather than under them. `Strip.apply_style`
+        puts a style underneath, where every cell the log has already coloured
+        wins and the selection changes nothing — which is what a log full of
+        marker colours is. `post_style` is the same combination the other way
+        round.
+
+        Partial, so what arrives is a background and nothing else. The whole
+        style resolves its unset foreground against what is behind it, and this
+        theme leaves that foreground unset: it comes back as the selection
+        colour written over itself, one block of flat colour with the line
+        inside it invisible.
+        """
+        width = strip.cell_length
+        start = max(0, min(start, width))
+        end = max(start, min(end, width))
+        if start == end:
+            return strip
+        style = self.screen.get_component_rich_style("screen--selection", partial=True)
+        before, selected, after = strip.divide([start, end, width])
+        painted = Strip(
+            Segment.apply_style(selected, post_style=style), selected.cell_length
+        )
+        return Strip.join([before, painted, after])
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        text = "\n".join(strip.text.rstrip() for strip in self.lines)
+        return selection.extract(text), "\n"
+
+
+class VisualStatic(Static):
+    """Expose stable semantic copy while painting reference-specific copy."""
+
+    def __init__(self, content: str, *, visual: str, **kwargs) -> None:
+        super().__init__(content, **kwargs)
+        self._visual = visual
+
+    def render(self):
+        return self._visual
+
+
+class DisplayKeyHint(KeyHint):
+    """A key hint whose spoken/tested label can differ from its painted copy."""
+
+    def __init__(
+        self,
+        key: str,
+        label: str,
+        *,
+        display_key: str,
+        display_label: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(key, label, **kwargs)
+        self._display_key = display_key
+        self._display_label = display_label
+
+    def compose(self) -> ComposeResult:
+        yield VisualStatic(
+            self._key, visual=self._display_key, classes="hint--key"
+        )
+        yield VisualStatic(
+            self._label, visual=self._display_label, classes="hint--label"
+        )
 
 
 class RunScreen(Screen[None]):
@@ -142,6 +317,45 @@ class RunScreen(Screen[None]):
         border-title-style: bold;
     }
 
+    RunScreen #tabs-stack {
+        width: 100%;
+        height: 2;
+        layers: rule tabs;
+    }
+
+    RunScreen #tabs-rule {
+        dock: bottom;
+        layer: rule;
+        width: 100%;
+        height: 1;
+        border-top: solid $primary-lighten-1;
+    }
+
+    RunScreen #tabs {
+        layer: tabs;
+    }
+
+    RunScreen #tab-keys {
+        width: 100%;
+        height: 2;
+        margin-top: 1;
+        padding: 0 1;
+        border-bottom: solid $primary-lighten-1;
+    }
+
+    RunScreen #tab-keys KeyHint {
+        margin-right: 3;
+    }
+
+    RunScreen #tab-keys KeyHint .hint--key {
+        color: $accent;
+        text-style: bold;
+    }
+
+    RunScreen #tab-keys KeyHint .hint--label {
+        color: $text-muted;
+    }
+
     RunScreen #terminal-body {
         width: 100%;
         height: 1fr;
@@ -165,6 +379,15 @@ class RunScreen(Screen[None]):
        Held off the first row on purpose: the prompt line there is the only
        place the panel says which stack this tab belongs to, and with a tab per
        context that is the one thing a blank terminal must not cover. */
+    /* Said here rather than left to a framework default that resolves its
+       foreground against the background it is about to paint — which comes
+       back as one flat block with the line inside it invisible. A background
+       and nothing else, so the markers keep their colours: which line failed
+       is the thing somebody copying a run out of here is after. */
+    RunScreen > .screen--selection {
+        background: $primary;
+    }
+
     RunScreen #terminal-empty {
         layer: guide;
         width: 100%;
@@ -179,45 +402,72 @@ class RunScreen(Screen[None]):
         display: block;
     }
 
+    /* Full width and centred text, not `width: auto`. `align` on the parent
+       centres the children as one block, so auto-width leaves each line flush
+       with the left edge of the widest one — which put the art out at the start
+       of the hint rather than over the middle of it. */
     RunScreen #terminal-art {
-        width: auto;
+        width: 100%;
         height: auto;
         margin-bottom: 1;
-        color: $primary-lighten-2;
+        text-align: center;
+        color: $accent;
     }
 
     RunScreen #terminal-title {
-        width: auto;
+        width: 100%;
         height: 1;
-        color: $text-muted;
+        text-align: center;
+        color: $foreground;
         text-style: bold;
     }
 
     RunScreen #terminal-hint {
-        width: auto;
+        width: 100%;
         height: 1;
+        text-align: center;
         color: $text-disabled;
     }
 
-    RunScreen #stdin-row {
+    RunScreen #terminal-input {
         width: 100%;
-        height: 2;
+        height: 6;
         border-top: solid $primary-lighten-1;
-        padding: 0 1;
+        padding: 1 1 0 1;
+    }
+
+    RunScreen #stdin-row {
+        border-top: none transparent;
+        width: 100%;
+        height: 3;
+    }
+
+    RunScreen.-asking #stdin-row {
+        border-top: none $accent;
+    }
+
+    RunScreen #stdin-box {
+        width: 1fr;
+        height: 3;
+        margin-right: 1;
+        border: round $primary-lighten-1;
+        background: transparent;
+        align: left middle;
     }
 
     /* A run is actually waiting on an answer, so the row stops reading as
        furniture. Nothing else on the panel is asking the user for anything,
        and a question nobody notices is a run that has silently stopped. */
-    RunScreen.-asking #stdin-row {
-        border-top: solid $accent;
+    RunScreen.-asking #stdin-box {
+        border: round $accent;
     }
 
     RunScreen #stdin-label {
-        width: auto;
+        width: 3;
         height: 1;
-        margin-right: 1;
-        color: $text-disabled;
+        content-align: center middle;
+        color: $text-muted;
+        text-style: bold;
     }
 
     RunScreen.-asking #stdin-label {
@@ -237,18 +487,67 @@ class RunScreen(Screen[None]):
         background: $panel;
     }
 
-    RunScreen #stdin-hint {
-        margin-left: 1;
-        margin-right: 0;
+    /* Three of them share this row, so they share a width: a row of buttons
+       that are each as wide as their own word reads as three unrelated
+       controls. Nine cells is CLEAR with a cell either side of it, and it is
+       what the box beside them can spare — the input is answering a yes/no or
+       a name, not holding a paragraph. */
+    RunScreen #stdin-send,
+    RunScreen #terminal-copy,
+    RunScreen #terminal-clear {
+        width: 9;
+        min-width: 9;
+        height: 3;
+        border: round $primary-lighten-1 !important;
+        background: transparent;
+        color: $foreground;
+        text-style: bold;
+        content-align: center middle;
     }
 
-    /* The keys that act on the tab strip, kept off it: anything sharing that
-       row is width the tabs do not get, and the tabs are the part with no
-       fixed size. */
-    RunScreen #tab-keys {
+    RunScreen #terminal-copy,
+    RunScreen #terminal-clear {
+        margin-left: 1;
+    }
+
+    RunScreen #stdin-send:focus,
+    RunScreen #terminal-copy:focus,
+    RunScreen #terminal-clear:focus {
+        border: round $accent !important;
+        background: transparent;
+        background-tint: 0%;
+    }
+
+    /* Send is disabled for most of a run's life — it only takes anything while
+       something is actually asking — so dimming it would leave the row looking
+       broken. These two are disabled only when the terminal is empty, which is
+       a real "nothing to do here", and they say so. */
+    RunScreen #stdin-send:disabled {
+        opacity: 100%;
+        color: $foreground;
+    }
+
+    RunScreen #terminal-copy:disabled,
+    RunScreen #terminal-clear:disabled {
+        opacity: 45%;
+    }
+
+    RunScreen #stdin-keys {
         width: 100%;
         height: 1;
-        padding: 0 1;
+    }
+
+    RunScreen #stdin-keys KeyHint {
+        margin-right: 2;
+    }
+
+    RunScreen #stdin-keys #stdin-newline-hint .hint--key {
+        color: $accent;
+        text-style: bold;
+    }
+
+    RunScreen #stdin-keys #stdin-newline-hint .hint--label {
+        color: $text-muted;
     }
 
     RunScreen .section--title {
@@ -287,7 +586,7 @@ class RunScreen(Screen[None]):
     }
 
     RunScreen .field--input:focus {
-        border: round $accent;
+        border: round $primary-lighten-3;
     }
 
     /* The field keeps the row's width and the button takes what it needs, so a
@@ -299,50 +598,120 @@ class RunScreen(Screen[None]):
 
     RunScreen .field--path .field--input {
         width: 1fr;
+        margin-bottom: 0;
     }
 
     RunScreen .field--browse {
         width: auto;
         min-width: 10;
+        height: 3;
         margin-left: 1;
-    }
-
-    /* A checkbox ships with a "block cursor" label — reversed text on a solid
-       block — which in a form reads as accidentally selected text rather than
-       as focus. Focus is said the same way everything else here says it. */
-    RunScreen Checkbox {
-        width: 100%;
-        margin-bottom: 1;
-        border: none;
-        padding: 0;
-        background: transparent;
-    }
-
-    RunScreen Checkbox:focus {
-        border: none;
-        background: transparent;
-        background-tint: 0%;
-    }
-
-    RunScreen Checkbox > .toggle--label,
-    RunScreen Checkbox:blur:hover > .toggle--label {
+        border: round $primary-lighten-1 !important;
         background: transparent;
         color: $foreground;
+    }
+
+    /* Focus doubles the line and does nothing else, the same as the dialogs.
+       Textual's `$button-focus-text-style` is `bold reverse`, and the reverse
+       swaps the label's colours — a filled button by another route, whatever
+       the background is set to. `!important` because `flat=True` puts a class
+       on the button that outranks a plain two-type selector. */
+    RunScreen .field--browse:hover,
+    RunScreen .field--browse.-active,
+    RunScreen .field--browse:focus,
+    RunScreen #stdin-send:hover,
+    RunScreen #stdin-send.-active,
+    RunScreen #stdin-send:focus,
+    RunScreen #terminal-copy:hover,
+    RunScreen #terminal-copy.-active,
+    RunScreen #terminal-copy:focus,
+    RunScreen #terminal-clear:hover,
+    RunScreen #terminal-clear.-active,
+    RunScreen #terminal-clear:focus {
+        background: transparent;
+        background-tint: 0%;
+        tint: $background 0%;
+        text-style: bold !important;
+    }
+
+    RunScreen .field--browse:focus,
+    RunScreen #stdin-send:focus,
+    RunScreen #terminal-copy:focus,
+    RunScreen #terminal-clear:focus {
+        border: double $accent !important;
+    }
+
+    /* Only the box is the control. Textual's checkbox is a mark and its label
+       in one widget, so the label takes the click, the hover and the focus
+       along with the box — and in a form, a stray click on the text of a
+       question answers it. The label is a `Static` beside this instead, so a
+       click has to land on the box, and the box is the only thing that ever
+       changes: doubled while it is on, and coloured for what is happening to
+       it — gold under the keyboard, blue under the pointer, orange when it is on
+       and neither. The label never moves. */
+    RunScreen .field--toggle {
+        width: 100%;
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    RunScreen .field--toggle-label {
+        width: 1fr;
+        height: 3;
+        margin-left: 1;
+        content-align: left middle;
+        color: $foreground;
+    }
+
+    /* Wider than the mark needs, because a terminal cell is about twice as tall
+       as it is wide: a box three cells across and three rows down is drawn as a
+       tall thin slot, not as a box. Five across is the mark with a cell either
+       side of it, which is as close to square as an odd number of cells gets
+       without the box starting to crowd the label. */
+    RunScreen FieldToggle {
+        width: 5;
+        height: 3;
+        padding: 0;
+        content-align: center middle;
+        border: round $primary-lighten-1;
+        background: transparent;
+    }
+
+    /* The mark, and only the mark. Textual paints a background behind it —
+       one cell of `$panel` inside a box that is otherwise the screen's own
+       colour, which reads as a fill and is the one thing this design must not
+       have. Every state has to say so: the `.-on` rules carry a class each, so
+       a rule without one never reaches them. */
+    RunScreen FieldToggle > .toggle--button {
+        background: transparent;
         text-style: none;
     }
 
-    RunScreen Checkbox:focus > .toggle--label {
-        background: transparent;
-        color: $accent;
-        text-style: bold;
+    RunScreen FieldToggle:hover {
+        border: round $secondary;
     }
 
-    RunScreen Checkbox > .toggle--button {
-        background: transparent;
-        color: $primary-lighten-2;
+    RunScreen FieldToggle.-on:hover {
+        border: double $secondary;
     }
 
-    RunScreen Checkbox.-on > .toggle--button {
+    RunScreen FieldToggle.-on:hover > .toggle--button {
+        background: transparent;
+        color: $secondary;
+    }
+
+    /* Last, so that a box under the pointer *and* under the keyboard says
+       keyboard: that is the one a key press is about to act on. */
+    RunScreen FieldToggle:focus {
+        border: round $accent;
+        background-tint: 0%;
+    }
+
+    RunScreen FieldToggle.-on:focus {
+        border: double $accent;
+    }
+
+    RunScreen FieldToggle.-on:focus > .toggle--button {
         background: transparent;
         color: $accent;
     }
@@ -360,8 +729,9 @@ class RunScreen(Screen[None]):
        last field does not shuffle the whole form up by a line. */
     RunScreen #validation {
         width: 100%;
-        height: auto;
-        min-height: 1;
+        height: 2;
+        min-height: 2;
+        border-bottom: solid $primary-lighten-1;
         color: $warning;
     }
 
@@ -370,37 +740,29 @@ class RunScreen(Screen[None]):
         text-style: bold;
     }
 
-    RunScreen #actions {
+    /* The one button gets the whole width. Leaving the run is Esc — and the
+       footer hint that says so is itself the button for it, so there is no
+       second control here to keep in step with the first. */
+    RunScreen #run {
         width: 100%;
         height: 3;
         margin-top: 1;
-    }
-
-    RunScreen #run {
-        width: 1fr;
-        height: 3;
         border: none !important;
+        background: $accent;
+        color: $background;
+        text-style: bold;
         content-align: center middle;
     }
 
-    RunScreen #run:focus,
-    RunScreen #close:focus {
+    RunScreen #run:focus {
         text-style: bold;
         background-tint: 0%;
     }
 
-    /* Only worth offering once there is a finished run to walk away from. */
-    RunScreen #close {
-        display: none;
-        width: 12;
-        height: 3;
-        margin-left: 1;
-        border: none !important;
-        content-align: center middle;
-    }
-
-    RunScreen.-done #close {
-        display: block;
+    RunScreen #run:hover,
+    RunScreen #run:focus {
+        background: $accent-lighten-1;
+        color: $background;
     }
 
     RunScreen.-narrow #panes {
@@ -428,6 +790,23 @@ class RunScreen(Screen[None]):
         width: 100%;
         height: 1fr;
     }
+    """ + f"""
+    /* The one colour here that is not a theme token, and the only reason these
+       two rules sit apart from the rest: `$toggle-on` cannot be a theme
+       variable, because a widget's `DEFAULT_CSS` is parsed before any theme is
+       active and the reference would be undefined at that point. Interpolated
+       from `branding` so the colour still lives in one place — see `TOGGLE_ON`.
+
+       Both carry one class, so the `:hover` and `:focus` rules above still win
+       over them wherever they overlap. */
+    RunScreen FieldToggle.-on {{
+        border: double {TOGGLE_ON};
+    }}
+
+    RunScreen FieldToggle.-on > .toggle--button {{
+        background: transparent;
+        color: {TOGGLE_ON};
+    }}
     """
 
     # ------------------------------------------------- what the panel reports
@@ -462,6 +841,9 @@ class RunScreen(Screen[None]):
         self._session = session
         self._sessions = sessions if sessions is not None else SessionRegistry()
         self._was_finished = session.finished
+        self._copied_for: Timer | None = None
+        """Ticking while COPY is saying it worked, so a second press restarts
+        the message rather than being cut short by the first one's timer."""
         self._refused = False
         """Whether Run has been pressed on this form and turned down.
 
@@ -486,14 +868,29 @@ class RunScreen(Screen[None]):
                     with VerticalScroll(id="fields"):
                         yield from self._form_widgets()
                     yield Static("", id="validation")
-                    with Horizontal(id="actions"):
-                        yield Button("Run", id="run", variant="primary", flat=True)
-                        yield Button("Close", id="close", flat=True)
+                    yield RunActionButton(
+                        "Run",
+                        action_name=self._session.base,
+                        id="run",
+                        variant="primary",
+                        flat=True,
+                    )
                 with Vertical(id="terminal-pane") as pane:
                     pane.border_title = "TERMINAL"
-                    yield SessionTabs(id="tabs")
+                    with Container(id="tabs-stack"):
+                        yield Static("", id="tabs-rule")
+                        yield SessionTabs(id="tabs")
+                    with Horizontal(id="tab-keys"):
+                        for key, label, press in TAB_KEYS:
+                            yield DisplayKeyHint(
+                                key,
+                                label,
+                                display_key=key.replace("⌃", "Ctrl+"),
+                                display_label=f"{label.title()} tab",
+                                press=press,
+                            )
                     with Container(id="terminal-body"):
-                        yield RichLog(
+                        yield SelectableLog(
                             id="terminal",
                             min_width=1,
                             wrap=True,
@@ -504,13 +901,40 @@ class RunScreen(Screen[None]):
                             yield Static(TERMINAL_ART, id="terminal-art")
                             yield Static(EMPTY_TITLE, id="terminal-title")
                             yield Static(EMPTY_HINT, id="terminal-hint")
-                    with Horizontal(id="stdin-row"):
-                        yield Static("stdin ›", id="stdin-label")
-                        yield Input(id="stdin", placeholder=STDIN_IDLE, disabled=True)
-                        yield KeyHint("Enter", "Send", dim=True, id="stdin-hint")
-                    with Horizontal(id="tab-keys"):
-                        for key, label, press in TAB_KEYS:
-                            yield KeyHint(key, label, press=press, dim=True)
+                    with Vertical(id="terminal-input"):
+                        with Horizontal(id="stdin-row"):
+                            with Horizontal(id="stdin-box"):
+                                yield Static("›", id="stdin-label")
+                                yield Input(
+                                    id="stdin", placeholder=STDIN_IDLE, disabled=True
+                                )
+                            yield Button(
+                                "SEND", id="stdin-send", flat=True, disabled=True
+                            )
+                            # Beside Send rather than up by the tabs: these act
+                            # on the terminal, and the terminal ends here.
+                            yield Button(
+                                COPY_LABEL,
+                                id="terminal-copy",
+                                flat=True,
+                                disabled=True,
+                                tooltip=COPY_TOOLTIP,
+                            )
+                            yield Button(
+                                "CLEAR",
+                                id="terminal-clear",
+                                flat=True,
+                                disabled=True,
+                                tooltip=CLEAR_TOOLTIP,
+                            )
+                        with Horizontal(id="stdin-keys"):
+                            yield KeyHint("Enter", "Send", dim=True, id="stdin-hint")
+                            yield KeyHint(
+                                "Ctrl+Enter",
+                                "New line",
+                                dim=True,
+                                id="stdin-newline-hint",
+                            )
             yield AppFooter(self.HINTS_READY)
 
     def _form_widgets(self) -> list[Widget]:
@@ -539,7 +963,11 @@ class RunScreen(Screen[None]):
 
             if option.kind is OptionKind.BOOLEAN:
                 widgets.append(
-                    Checkbox(option.label, value=bool(option.default), id=widget_id)
+                    Horizontal(
+                        FieldToggle(value=bool(option.default), id=widget_id),
+                        Static(option.label, classes="field--toggle-label"),
+                        classes="field--toggle",
+                    )
                 )
                 if option.help:
                     widgets.append(Static(option.help, classes="field--help"))
@@ -680,7 +1108,6 @@ class RunScreen(Screen[None]):
             return
         session = self._session
         asking = session.answer is not None and not session.answer.done()
-        self.set_class(session.finished, "-done")
         self.set_class(session.started, "-running")
         self.set_class(asking, "-asking")
         self._set_fields_disabled(session.started)
@@ -725,8 +1152,15 @@ class RunScreen(Screen[None]):
 
     def _show_empty(self) -> None:
         """Whether this tab has anything in it but the prompt it opened with."""
-        if self._composed:
-            self.set_class(len(self._session.log) <= 1, "-empty")
+        if not self._composed:
+            return
+        empty = len(self._session.log) <= 1
+        self.set_class(empty, "-empty")
+        # Nothing to take a copy of and nothing to clear away. Both say so
+        # rather than waiting for a press that would go nowhere, which is the
+        # same rule the Run button and the validation line already follow.
+        for button in self.query("#terminal-copy, #terminal-clear").results(Button):
+            button.disabled = empty
 
     def _hints(self) -> Sequence[tuple[str, str]]:
         if self._session.finished:
@@ -745,6 +1179,10 @@ class RunScreen(Screen[None]):
         # of the time it would fire into whatever holds the focus instead.
         for hint in self.query("#stdin-hint").results(KeyHint):
             hint.pressable = asking
+        for hint in self.query("#stdin-newline-hint").results(KeyHint):
+            hint.pressable = False
+        for button in self.query("#stdin-send").results(Button):
+            button.disabled = not asking
 
     def _show_tabs(self) -> None:
         shown = self._sessions.visible(self._session.scope)
@@ -840,12 +1278,60 @@ class RunScreen(Screen[None]):
         self.render_state()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "close":
-            self._session.decide(again=False)
-        elif event.button.id == "run":
+        if event.button.id == "run":
             self.action_primary()
+        elif event.button.id == "stdin-send":
+            self._submit_stdin()
+        elif event.button.id == "terminal-copy":
+            self._copy_terminal()
+        elif event.button.id == "terminal-clear":
+            self._clear_terminal()
         elif event.button.id and event.button.id.startswith("browse-"):
             self._browse(event.button.id.removeprefix("browse-"))
+
+    # ---------------------------------------------------------- the terminal
+
+    def _copy_terminal(self) -> None:
+        """Put the whole transcript on the clipboard.
+
+        The whole of it rather than whatever is selected, and deliberately: a
+        press is a click, a click is what ends a drag, and the screen has
+        already dropped the selection by the time this runs. Selected text has
+        its own answer — Ctrl+C, which the screen answers before the app's own
+        binding for that key gets it — so this button is the other question,
+        which is "give me all of it".
+        """
+        transcript = self._session.transcript()
+        if not transcript:
+            return
+        self.app.copy_to_clipboard(transcript)
+        self._say_copied()
+
+    def _say_copied(self) -> None:
+        self._set_copy_label(COPIED_LABEL)
+        if self._copied_for is not None:
+            self._copied_for.stop()
+        self._copied_for = self.set_timer(COPIED_FOR, self._offer_copy_again)
+
+    def _offer_copy_again(self) -> None:
+        self._copied_for = None
+        self._set_copy_label(COPY_LABEL)
+
+    def _set_copy_label(self, label: str) -> None:
+        for button in self.query("#terminal-copy").results(Button):
+            button.label = label
+
+    def _clear_terminal(self) -> None:
+        """Empty this tab's log, and the view of it, back to its prompt.
+
+        The session is cleared rather than the widget, because the widget is a
+        view: clearing only what is drawn would leave every line still held,
+        still written down at the next save, and back on screen the moment the
+        user switched tabs and switched back.
+        """
+        self.clear_selection()
+        self._session.clear_log()
+        self._replay_terminal()
 
     def _browse(self, key: str) -> None:
         """Fill a path field from the tree, starting where the field points.
@@ -976,11 +1462,18 @@ class RunScreen(Screen[None]):
         """Ask in the terminal pane; wait for the stdin box, like a real shell."""
         return await self._session.prompt(question)
 
+    def _submit_stdin(self, value: str | None = None) -> None:
+        answer = self._session.answer
+        if answer is None or answer.done():
+            return
+        box = self.query_one("#stdin", Input)
+        self._session.reply((box.value if value is None else value).strip())
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "stdin":
             return
         event.stop()
-        self._session.reply(event.value.strip())
+        self._submit_stdin(event.value)
 
 
 __all__ = [

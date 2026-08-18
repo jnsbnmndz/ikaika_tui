@@ -14,13 +14,14 @@ from pathlib import Path
 
 from company_tui.domain.config import TemplateSource
 from company_tui.domain.identity import NotAnIkaikaProject
-from company_tui.domain.options import Option, OptionKind
+from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.project_name import ProjectName
 from company_tui.domain.scaffolding import (
     CannotStampIdentity,
     IdentityRewrite,
     display_path,
 )
+from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
 from company_tui.domain.template_pack import (
     Generator,
     PackActionResult,
@@ -28,6 +29,7 @@ from company_tui.domain.template_pack import (
     ToolRequirement,
     project_options,
 )
+from company_tui.templates import scripts
 from company_tui.templates.react_native import expo
 from company_tui.templates.services import (
     RAW,
@@ -47,10 +49,22 @@ TEMPLATE = TemplateSource(
     url="https://github.com/JDM-Github/react_native_structure.git"
 )
 
+SCRIPTS = TemplateSource(
+    url="https://github.com/JDM-Github/react_native_scripts.git"
+)
+"""The repository the build workflows come from.
+
+Cloned once into the shared store rather than into each project, which is what
+makes editing a template there mean editing it for every React Native project on
+the machine. Its `ikaika.script.json` is what decides which workflows exist; this
+file names the repository and nothing else about it.
+"""
+
 GIT_TOOL = ToolRequirement("git", f"clones the {STACK_NAME} template")
 NPM_TOOL = ToolRequirement("npm", "installs project dependencies", required=False)
+NODE_TOOL = ToolRequirement("node", "runs the build scripts", required=False)
 REQUIRED_TOOLS = (GIT_TOOL,)
-DECLARED_TOOLS = (GIT_TOOL, NPM_TOOL)
+DECLARED_TOOLS = (GIT_TOOL, NPM_TOOL, NODE_TOOL)
 
 INSTALL_OPTION = Option(
     key="install",
@@ -188,10 +202,77 @@ async def scaffold_controller(
     return await run_generator(context, services, GENERATORS, RENDERERS, STACK_NAME)
 
 
+def script_source(services: PackServices) -> TemplateSource:
+    return services.config.script_source(PACK_KEY, SCRIPTS)
+
+
+async def script_actions(services: PackServices) -> ScriptCatalogue:
+    return await scripts.catalogue_for(
+        script_source(services),
+        services,
+        STACK_NAME,
+        compare=services.config.script_check(PACK_KEY),
+    )
+
+
+async def script_status(services: PackServices, *, compare: bool = False) -> ScriptCatalogue:
+    return await scripts.status_for(script_source(services), services, compare=compare)
+
+
+async def install_scripts(
+    services: PackServices, *, replace: bool = False
+) -> PackActionResult:
+    problem = await scripts.install(
+        script_source(services), services, STACK_NAME, replace=replace
+    )
+    if problem:
+        return PackActionResult(available=True, message=problem, exit_code=1)
+    verb = "Replaced" if replace else "Installed"
+    return PackActionResult(
+        available=True,
+        message=f"{verb} the {STACK_NAME} scripts in the store.",
+    )
+
+
+async def apply_script_update(
+    choice: ScriptUpdate, services: PackServices
+) -> PackActionResult:
+    if choice is ScriptUpdate.RECLONE:
+        return await install_scripts(services, replace=True)
+    if choice is ScriptUpdate.SILENCE:
+        written = scripts.stop_watching(PACK_KEY, services)
+        return PackActionResult(
+            available=True,
+            message=(
+                f"Not checking the {STACK_NAME} scripts again — "
+                f"noted in {written}, and still in Settings."
+            ),
+        )
+    return PackActionResult(
+        available=True, message=f"Carrying on with the {STACK_NAME} scripts in the store."
+    )
+
+
+async def run_script(
+    action: ScriptAction, values: OptionValues, services: PackServices
+) -> PackActionResult:
+    repository = scripts.repository_path(
+        services.config.scripts_root(), script_source(services)
+    )
+    return await scripts.run_action(action, values, repository, services)
+
+
 async def build(services: PackServices) -> PackActionResult:
+    # Reached when the store is readable and declares nothing Build can offer —
+    # a store that could not be read says so on the stack menu long before here.
+    # A section with no template and no filename is a workflow; one carrying
+    # both is a generator, and those are Scaffold's Components.
     return PackActionResult(
         available=False,
-        message=f"{STACK_NAME} builds are not available yet.",
+        message=(
+            f"{STACK_NAME} declares no build workflow. "
+            f"Add a config section without a template to {SCRIPTS.url}."
+        ),
     )
 
 

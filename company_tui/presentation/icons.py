@@ -128,14 +128,134 @@ _ART = {
             " ╰╌╌╌╌╌╌╯",
         )
     ),
+    # What a script repository declares. Keyed by the manifest's own words, so a
+    # repository that adds a section gets a placeholder rather than nothing —
+    # `art_for` already falls back, and these are the ones the stacks use today.
+    "screen": "\n".join(
+        (
+            " ╭────────╮",
+            " │        │",
+            " ╰───┬────╯",
+            "   ──┴──",
+        )
+    ),
+    "layout": "\n".join(
+        (
+            " ╭───┬────╮",
+            " ├───┼────┤",
+            " │   │    │",
+            " ╰───┴────╯",
+        )
+    ),
+    "widget": "\n".join(
+        (
+            "   ╭───╮",
+            " ╭─┤   ├─╮",
+            " │ ╰───╯ │",
+            " ╰───────╯",
+        )
+    ),
+    "apiEndpoint": "\n".join(
+        (
+            " ●───╮",
+            "     ╰──▸",
+            " ●───╮",
+            "     ╰──▸",
+        )
+    ),
+    "apiModel": "\n".join(
+        (
+            " ╭───────╮",
+            " ├───────┤",
+            " ├───────┤",
+            " ╰───────╯",
+        )
+    ),
+    "service": "\n".join(
+        (
+            "  ╭─╮ ╭─╮",
+            " ─┤ ├─┤ ├─",
+            "  ╰─╯ ╰─╯",
+        )
+    ),
+    "storage": "\n".join(
+        (
+            " ╭───────╮",
+            " ╰───────╯",
+            " ╭───────╮",
+            " ╰───────╯",
+        )
+    ),
+    "utility": "\n".join(
+        (
+            "  ╭─╮",
+            " ─┤ ├───╮",
+            "  ╰─╯   │",
+            "      ──╯",
+        )
+    ),
+    "state": "\n".join(
+        (
+            " ╭─╮   ╭─╮",
+            " ╰┬╯───╯ │",
+            "  ╰──────╯",
+        )
+    ),
+    "manager": "\n".join(
+        (
+            "    ╭─╮",
+            "  ╭─┴─┴─╮",
+            " ╭┴╮   ╭┴╮",
+            " ╰─╯   ╰─╯",
+        )
+    ),
+    "constant": "\n".join(
+        (
+            " ╭───────╮",
+            " │ ══ ══ │",
+            " ╰───────╯",
+        )
+    ),
+    "enum": "\n".join(
+        (
+            " ● ─────",
+            " ● ───",
+            " ● ───────",
+        )
+    ),
+    # The three ways out of a store that has fallen behind.
+    "reclone": "\n".join(
+        (
+            " ╭───────╮",
+            " ╵       ▾",
+            " ▴       ╷",
+            " ╰───────╯",
+        )
+    ),
+    "keep": "\n".join(
+        (
+            " ╭───────╮",
+            " │  ═══  │",
+            " │  ═══  │",
+            " ╰───────╯",
+        )
+    ),
+    "silence": "\n".join(
+        (
+            " ╭───────╮",
+            " │ ╲   ╱ │",
+            " │   ╳   │",
+            " ╰───────╯",
+        )
+    ),
 }
 
 
 TERMINAL_ART = "\n".join(
     (
-        "╭──────────╮",
-        "│ ❯_       │",
-        "╰──────────╯",
+        "╭─────╮",
+        "│ ❯_  │",
+        "╰─────╯",
     )
 )
 """Shown in the middle of a run panel's terminal while it has nothing in it —

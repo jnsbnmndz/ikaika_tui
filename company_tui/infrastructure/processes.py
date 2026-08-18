@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from contextlib import suppress
+from pathlib import Path
 
 from company_tui.domain.ports import ProcessResult, ProcessRunner
 
@@ -22,11 +23,12 @@ class LocalProcessRunner(ProcessRunner):
     def locate(self, executable: str) -> str | None:
         return shutil.which(executable)
 
-    def run(self, command: tuple[str, ...]) -> ProcessResult:
+    def run(self, command: tuple[str, ...], cwd: Path | None = None) -> ProcessResult:
         completed = subprocess.run(
             _resolve_command(command),
             capture_output=True,
             check=False,
+            cwd=cwd,
             shell=False,
             text=True,
         )
@@ -37,11 +39,15 @@ class LocalProcessRunner(ProcessRunner):
         )
 
     async def stream(
-        self, command: tuple[str, ...], on_output: Callable[[str], None]
+        self,
+        command: tuple[str, ...],
+        on_output: Callable[[str], None],
+        cwd: Path | None = None,
     ) -> ProcessResult:
         try:
             process = await asyncio.create_subprocess_exec(
                 *_resolve_command(command),
+                cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 # Interleaved, because the point is to show what the user would
                 # have seen in their own terminal, in the order it happened.

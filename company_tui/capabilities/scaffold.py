@@ -1,7 +1,23 @@
+"""Creating a project, and adding to one that already exists.
+
+The two are one capability because they are one question asked twice — which
+stack, and then what of it — but they are not the same work. New Project hands
+a name and a destination to the pack. Components hands a form to whatever the
+stack's script repository declares it can add, because those generators are
+maintained where the templates they write are, and a toolbox release is the
+wrong unit for "React Native grew a widget generator".
+
+A stack with no script repository, or one whose repository declares nothing
+that writes a file, falls back to the generators the pack itself ships. That is
+what keeps Components meaningful for a stack that has never had scripts.
+"""
+
 from company_tui.application.template_registry import TemplatePackRegistry
+from company_tui.capabilities import script_actions
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.destinations import DestinationBusy, DestinationLocks
 from company_tui.domain.project_name import InvalidProjectName
+from company_tui.domain.script_config import components
 from company_tui.domain.template_pack import (
     SCAFFOLD_TARGET_OPTIONS,
     ScaffoldTarget,
@@ -55,6 +71,20 @@ class ScaffoldCapability(Capability):
                 if pack is None:
                     target = None
                 continue
+
+            if target is ScaffoldTarget.CONTROLLER:
+                walk = await script_actions.walk(
+                    self._console, pack, wanted=components
+                )
+                if walk.ending is script_actions.Ending.BACK:
+                    notice = walk.notice
+                    pack = None
+                    continue
+                if walk.ending is script_actions.Ending.DONE:
+                    return walk.exit_code
+                # NOTHING falls through to whatever the pack ships with, which
+                # for a stack that has never had a script repository is the only
+                # thing Components could mean.
 
             options = pack.options(target)
             if not options:

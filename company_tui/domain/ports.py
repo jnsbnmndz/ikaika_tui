@@ -14,24 +14,35 @@ class ProcessResult:
 
 class ProcessRunner(ABC):
     @abstractmethod
-    def run(self, command: tuple[str, ...]) -> ProcessResult:
+    def run(self, command: tuple[str, ...], cwd: Path | None = None) -> ProcessResult:
         raise NotImplementedError
 
     @abstractmethod
     async def stream(
-        self, command: tuple[str, ...], on_output: Callable[[str], None]
+        self,
+        command: tuple[str, ...],
+        on_output: Callable[[str], None],
+        cwd: Path | None = None,
     ) -> ProcessResult:
         """Run `command`, handing each output line over as it arrives.
 
         For anything slow enough that the user should see it working. `run`
         stays for short commands whose output only matters once it is complete.
 
+        `cwd` is where the command is run from, which is not always where the
+        toolbox was started. A script repository writes its commands against
+        its own directory — `node scripts/finalize.mjs` means the copy of that
+        script beside the config that named it — so the directory a command came
+        from travels with it rather than being guessed at from the argument.
+
         Cancelling the caller must kill the command rather than orphan it: a
         stopped run means the work stops, not just the waiting.
         """
         raise NotImplementedError
 
-    async def capture(self, command: tuple[str, ...]) -> ProcessResult:
+    async def capture(
+        self, command: tuple[str, ...], cwd: Path | None = None
+    ) -> ProcessResult:
         """`run`, off the interface's thread.
 
         `run` blocks until the command is done, which from inside a workflow
@@ -39,7 +50,7 @@ class ProcessRunner(ABC):
         would stop it. Anything called while a screen is up goes through here;
         `run` stays for the plain console, where there is no frame to hold up.
         """
-        return await asyncio.to_thread(self.run, command)
+        return await asyncio.to_thread(self.run, command, cwd)
 
     @abstractmethod
     def locate(self, executable: str) -> str | None:
@@ -77,6 +88,17 @@ class FileSystemPort(ABC):
 
     @abstractmethod
     def write_project(self, root: Path, files: Mapping[str, str]) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def remove_file(self, path: Path) -> None:
+        """Delete one file, and say nothing if it was not there.
+
+        For undoing a single write when the step after it failed. A staged
+        template left behind by a command that never finished is not a partial
+        project file — it is the template itself, comment wrapper and
+        placeholders intact, sitting where the finished thing was meant to be.
+        """
         raise NotImplementedError
 
     @abstractmethod

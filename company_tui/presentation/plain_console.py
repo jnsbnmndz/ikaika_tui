@@ -3,6 +3,7 @@ from typing import TypeVar
 
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionKind, OptionValue
+from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
 from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
 
 T = TypeVar("T")
@@ -81,6 +82,40 @@ class PlainConsole:
             return None
         return packs[index]
 
+    async def choose_script_action(
+        self,
+        actions: Sequence[ScriptAction],
+        notice: str = "",
+    ) -> ScriptAction | None:
+        if notice:
+            self.error(notice)
+        index = await self._select(
+            "Choose a workflow",
+            [(action.name, action.summary) for action in actions],
+        )
+        if index is None:
+            return None
+        return actions[index]
+
+    async def choose_script_update(
+        self, catalogue: ScriptCatalogue
+    ) -> ScriptUpdate | None:
+        self.write(
+            f"Scripts in {catalogue.location} are {catalogue.installed}; "
+            f"{catalogue.available} is published."
+        )
+        index = await self._select(
+            "These scripts are not the published ones",
+            [
+                ("Re-clone", "Replace the copy in the store"),
+                ("Keep this copy", "Carry on with what is installed"),
+                ("Stop asking", "Keep it, and never check again"),
+            ],
+        )
+        if index is None:
+            return None
+        return (ScriptUpdate.RECLONE, ScriptUpdate.KEEP, ScriptUpdate.SILENCE)[index]
+
     async def _select(
         self,
         title: str,
@@ -132,6 +167,11 @@ class PlainConsole:
                 answer = await self.ask(option.label)
                 values[option.key] = answer or str(option.default)
         return values
+
+    async def working(self, label: str, work: Awaitable[T]) -> T:
+        """Said once and then waited for: a script's log is the whole record."""
+        self.write(label)
+        return await work
 
     async def run_in_panel(self, work: Awaitable[T]) -> T | None:
         """Nothing to stop here: Ctrl+C is already the terminal's own answer.

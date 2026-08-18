@@ -6,16 +6,26 @@ from typing import TypeVar
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
+from textual.timer import Timer
 from textual.widgets import RichLog
 
 from company_tui.application.app import Application
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
+from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
+from company_tui.domain.session_memory import SessionMemory
 from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
+from company_tui.infrastructure.window_shape import (
+    MIN_HEIGHT,
+    MIN_WIDTH,
+    AppWindow,
+    cramped,
+    current_window,
+)
 from company_tui.presentation.branding import APP_NAME, APP_TAGLINE, APP_VERSION, IKAIKA_THEME, PEAK_ART
 from company_tui.presentation.card import MenuEntry
-from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader
+from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, BusyLine
 from company_tui.presentation.run_screen import RunScreen
 from company_tui.presentation.screens import (
     TRAIL_SEPARATOR,
@@ -34,15 +44,91 @@ from company_tui.presentation.session import (
     current_session,
 )
 
-TRAIL_STEPS = ("capability", "scaffold_target", "template_pack")
+TRAIL_STEPS = ("capability", "scaffold_target", "template_pack", "script_action")
+
+SCRIPT_UPDATE_ANSWERS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        ScriptUpdate.RECLONE.value,
+        "Re-clone",
+        "Replace the copy in the store",
+        "Deletes the store copy and clones it again — anything edited there goes with it.",
+    ),
+    (
+        ScriptUpdate.KEEP.value,
+        "Keep this copy",
+        "Carry on with what is installed",
+        "Runs the version in the store. Asked again next time you come through here.",
+    ),
+    (
+        ScriptUpdate.SILENCE.value,
+        "Stop asking",
+        "Keep it, and never check again",
+        "Written to your settings, where it can be turned back on. Skips the check entirely.",
+    ),
+)
+"""Key, name, card line and focus line for each way out of a stale store.
+
+A menu because there are three, and because two of them are only safe to take
+once you know what the third costs: re-cloning is the one step here that throws
+away work, and it says so on the card rather than after the fact."""
 
 RAW_OUTPUT_PREFIX = "  "
 """Marks a line as verbatim output from a subprocess rather than the toolbox
 talking. Reads as indentation in the plain console, and as dimmed process output
 in the run panel."""
 
-QUIT_WITH_RUNS = "still running. Stop everything and quit?"
-QUIT_CONFIRM = f"Leave {APP_NAME}?"
+QUIT_CONFIRM = f"Quit {APP_NAME}?"
+QUIT_DETAIL = (
+    "Are you sure you want to close the toolbox?\nNothing is running right now."
+)
+QUIT_WITH_RUNS = (
+    "Are you sure you want to close the toolbox?\n"
+    "{count} still going — every one of them will be stopped."
+)
+"""What quitting costs, spelled out rather than left to the title.
+
+Two versions because they are two different prices: with nothing going, quitting
+loses a menu position, and with N runs going it is N directories abandoned
+half-written. The title asks the same question either way.
+"""
+
+QUIT_ANSWER = f"QUIT {APP_NAME}"
+
+CLOSE_TAB_CONFIRM = "Close this tab?"
+CLOSE_TAB_DETAIL = "'{name}' is still running.\nClosing the tab stops it."
+CLOSE_TAB_ANSWER = "CLOSE TAB"
+
+BUSY_DELAY = 0.25
+"""How long a step has to take before the app says it is working on it.
+
+Every step is a screen popped and another pushed, and most of them are over
+before the frame in between has been drawn. Announcing those would be a mark
+that appears and vanishes at every choice the user makes — motion that says
+nothing and reads as flicker. Waited out rather than measured beforehand,
+because whether reading a stack's scripts is instant or is a network round trip
+depends on what is in the store and on what settings say to check."""
+
+WINDOW_POLL_INTERVAL = 1.0
+"""How often the window is measured.
+
+There is no event for it: the window is resized by the window manager, and what
+reaches the app is a new cell grid — which the same drag produces several of, and
+a drag onto a display at another scale produces none of, while changing the size
+in pixels. So it is asked for rather than waited for.
+
+Once a second, because the answer is only ever a sentence in the chrome. Reading
+the window is a few microseconds and nothing is redrawn unless the measurement
+changed, so a poll this slow costs nothing and a faster one would buy nothing.
+The version of this that resized the window did run ten times a second, and see
+`infrastructure/window_shape.py` for what that cost.
+"""
+
+WINDOW_NOTICE = "▲ window {width}x{height} → {floor_width}x{floor_height}"
+"""Said in the header while the window is smaller than the layout wants.
+
+The size it is against the size it should be, because "too small" without a
+number leaves the user dragging an edge and guessing whether they are there yet.
+"""
 
 T = TypeVar("T")
 
@@ -94,10 +180,19 @@ class TuiConsole(App):
     }
     """
 
-    def __init__(self, workspace_label: str | None = None) -> None:
+    def __init__(
+        self,
+        workspace_label: str | None = None,
+        memory: SessionMemory | None = None,
+        workspace: str = "",
+    ) -> None:
         super().__init__()
         self.application: Application | None = None
         self.workspace_label = workspace_label
+        self._memory = memory
+        self._workspace = workspace
+        """Which project's tabs these are. One machine holds several, and the
+        tabs of one are not the tabs of another."""
         self.result_code = 0
         # Choice already made at each step, for navigation that has not become a
         # session yet. Once it has, the session carries its own.
@@ -111,10 +206,20 @@ class TuiConsole(App):
         self._foreground_free.set()
         self._attachment = asyncio.Event()
         self._result_acknowledged = False
+        self._window: AppWindow | None = None
+        self._window_watch: Timer | None = None
+        self._window_notice = ""
+        self._leaving = False
+        """Set once the app is on its way out, so the menu loop stops asking.
+
+        Stopping the runs frees the screen, which reads to the loop that started
+        them as a workflow letting go — and it comes back round and pushes
+        another menu into an app that is already unmounting."""
 
     def compose(self) -> ComposeResult:
         with AppFrame():
             yield AppHeader()
+            yield BusyLine(id="busy")
             yield RichLog(id="output", wrap=True, markup=True, classes="-quiet")
             yield AppFooter([("Ctrl+Q", "Quit")])
 
@@ -123,10 +228,107 @@ class TuiConsole(App):
         self.theme = "ikaika"
         output = self.query_one("#output", RichLog)
         output.border_title = "Activity"
-        # Nothing here resizes the terminal. Asking it to leaves its cell grid
-        # and ours disagreeing, and from then on the pointer lands somewhere
-        # other than where it points.
+        # The window is measured and reported on, never resized and never asked
+        # for a cell grid. Both of those are the app telling the terminal what
+        # shape to be, and the terminal wins: one leaves its idea of the grid and
+        # ours disagreeing until the pointer lands somewhere other than where it
+        # points, the other is a fight over rounded pixels that pegs the GPU.
+        self._watch_window_shape()
+        self._recall()
         self._start()
+
+    # -------------------------------------------------------------- the tabs
+
+    def _recall(self) -> None:
+        """Put back the tabs the last run of the app left open.
+
+        Before the workflow starts, so a menu walked straight into finds its
+        strip already populated. Nothing is resumed and no menu is skipped: a
+        restored tab has no workflow behind it, which is what lets the first
+        workflow to arrive in that context pick it up rather than open a second
+        tab beside it.
+        """
+        if self._memory is None:
+            return
+        for remembered in self._memory.remembered(self._workspace):
+            self._sessions.restore(remembered, _nothing)
+
+    def _remember(self) -> None:
+        """Write the tabs down, at the points where there is something new.
+
+        Not on every line of output: a build prints tens of thousands of them
+        and a file rewritten per line is the same mistake as a window resized
+        per frame. Called instead when a run ends, a tab is renamed or closed,
+        and when the app does — which between them covers everything the user
+        typed.
+        """
+        if self._memory is None:
+            return
+        self._memory.remember(self._workspace, self._sessions.remembered())
+
+    # ------------------------------------------------------------- the window
+
+    def _watch_window_shape(self) -> None:
+        """Start reporting on the window the interface is drawn in.
+
+        Nothing to measure without a real terminal in front of one: under a test
+        pilot the only window this process could find is the one the test runner
+        happens to be sitting in.
+        """
+        if self._driver is None or self.is_headless:
+            return
+        self._window = current_window()
+        if self._window is None:
+            return
+        self._check_window_shape()
+        self._window_watch = self.set_interval(WINDOW_POLL_INTERVAL, self._check_window_shape)
+
+    def _check_window_shape(self) -> None:
+        window = self._window
+        if window is None:
+            return
+        state = window.state()
+        if state is None:
+            # The window is gone — every later reading would name a handle that
+            # is either dead or, once Windows reuses it, somebody else's.
+            self._window = None
+            self._stop_watching_window()
+            self._say_about_window("")
+            return
+        if not cramped(state):
+            self._say_about_window("")
+            return
+        self._say_about_window(
+            WINDOW_NOTICE.format(
+                width=state.width,
+                height=state.height,
+                floor_width=MIN_WIDTH,
+                floor_height=MIN_HEIGHT,
+            )
+        )
+
+    def _stop_watching_window(self) -> None:
+        if self._window_watch is not None:
+            self._window_watch.stop()
+            self._window_watch = None
+
+    def _say_about_window(self, notice: str) -> None:
+        """Put the notice in every header, and only when it has changed.
+
+        The guard is the point of the whole arrangement: a window nobody is
+        dragging is measured once a second and nothing is drawn at all.
+        """
+        if notice == self._window_notice:
+            return
+        self._window_notice = notice
+        for screen in self.screen_stack:
+            for header in screen.query(AppHeader):
+                header.show_window(notice)
+
+    @property
+    def window_notice(self) -> str:
+        """What a header composed after the fact should show. See `AppHeader`."""
+        return self._window_notice
 
     def _write_to_terminal(self, data: str) -> None:
         """Send an escape sequence the way Textual sends its own.
@@ -188,7 +390,7 @@ class TuiConsole(App):
         await self.push_screen_wait(SplashScreen())
         assert self.application is not None
         self.result_code = await self.application.run()
-        await self._stop_every_run()
+        await self._shut_down()
         self.exit()
 
     # ------------------------------------------------------------- the output
@@ -252,6 +454,44 @@ class TuiConsole(App):
         await self._claim_screen(session)
         return await self.push_screen_wait(ConfirmScreen(prompt, self.trail_label()))
 
+    # --------------------------------------------- the gap between screens
+
+    async def working(self, label: str, work: Awaitable[T]) -> T:
+        """Do `work` with the app saying so, for a step that has no panel.
+
+        A workflow between two menus has nowhere of its own to narrate into:
+        the screen it was started from has been popped and the one it is
+        heading for cannot be built until this answers. What shows meanwhile is
+        the app's own frame — which is the right thing for the tenth of a
+        second most steps take, and the wrong thing entirely for a step that
+        goes to the network and comes back four seconds later, because an empty
+        frame that stays put is exactly what a wedged one looks like.
+
+        Only announced once it has outlasted `BUSY_DELAY`, so nothing flickers
+        on a step that was never slow. The work itself is untouched either way,
+        and a cancel reaches it rather than orphaning it.
+        """
+        task = asyncio.ensure_future(work)
+        try:
+            done, _pending = await asyncio.wait({task}, timeout=BUSY_DELAY)
+            if task in done:
+                return task.result()
+            self._show_busy(label)
+            try:
+                return await task
+            finally:
+                self._show_busy("")
+        except asyncio.CancelledError:
+            # `asyncio.wait` hands the cancel on without touching what it was
+            # waiting for, and a fetch left running past the workflow that
+            # wanted it is a subprocess nothing will ever reap.
+            task.cancel()
+            raise
+
+    def _show_busy(self, label: str) -> None:
+        for line in self.query("#busy").results(BusyLine):
+            line.show(label)
+
     # ------------------------------------------------------------- the panel
 
     @property
@@ -307,6 +547,7 @@ class TuiConsole(App):
         # Nothing is driving it any more, which is what lets a workflow that
         # walks back in here pick it up instead of opening a tab beside it.
         session.task = None
+        self._remember()
         self._background(session)
         if not session.ran:
             self._sessions.remove(session)
@@ -399,6 +640,7 @@ class TuiConsole(App):
         moved.answers = dict(session.answers)
         moved.preset = dict(session.preset)
         moved.foreground = session.foreground
+        self._teach(session.place, session.workflow)
         # The worker follows the workflow. Left on the tab behind, Stop and
         # quit would reach for this run through a session it has walked out of.
         moved.task, session.task = session.task, None
@@ -406,6 +648,20 @@ class TuiConsole(App):
             self._sessions.remove(session)
         CURRENT_SESSION.set(moved)
         return moved
+
+    def _teach(self, place: tuple[str, ...], workflow: Workflow) -> None:
+        """Hand this context's workflow to every tab in it that is idle.
+
+        A tab restored from the last run of the app has no workflow — a callable
+        is not something a JSON file can hold — and the strip's "+" is "another
+        one of these", which needs one. Every tab in a context leads to the same
+        capability, so the first workflow to walk in can say what it is for all
+        of them; a tab with a run in it is left alone, because its own workflow
+        is the one that is running.
+        """
+        for tab in self._sessions.visible(place):
+            if tab.task is None:
+                tab.workflow = workflow
 
     def _free_at(self, place: tuple[str, ...]) -> RunSession | None:
         """A tab in this context with no workflow behind it, if there is one.
@@ -629,8 +885,10 @@ class TuiConsole(App):
     async def _close_session(self, session: RunSession) -> None:
         if session.status.live and not await self.push_screen_wait(
             ConfirmScreen(
-                f"'{session.name}' is still running. Stop it and close the tab?",
+                CLOSE_TAB_CONFIRM,
                 self.trail_label(),
+                detail=CLOSE_TAB_DETAIL.format(name=session.name),
+                confirm=CLOSE_TAB_ANSWER,
             )
         ):
             return
@@ -644,6 +902,7 @@ class TuiConsole(App):
         await self._stop_run(session)
         if self._attached is session:
             self._detach()
+        self._remember()
 
     def _neighbour(self, session: RunSession) -> RunSession | None:
         shown = self._sessions.visible(session.scope)
@@ -657,6 +916,7 @@ class TuiConsole(App):
         )
         self._sessions.rename(session, name)
         self._refresh_panel()
+        self._remember()
 
     # ------------------------------------------------------- coming back to it
 
@@ -705,7 +965,7 @@ class TuiConsole(App):
     async def _leave(self) -> None:
         if not await self._confirm_quit():
             return
-        await self._stop_every_run()
+        await self._shut_down()
         self.exit()
 
     async def _confirm_quit(self, deliberate: bool = True) -> bool:
@@ -719,13 +979,34 @@ class TuiConsole(App):
         """
         live = self._sessions.live()
         if live:
-            return await self._ask_quit(f"{len(live)} {QUIT_WITH_RUNS}")
+            count = f"{len(live)} run{'s are' if len(live) > 1 else ' is'}"
+            return await self._ask_quit(QUIT_WITH_RUNS.format(count=count))
         if deliberate:
             return True
-        return await self._ask_quit(QUIT_CONFIRM)
+        return await self._ask_quit(QUIT_DETAIL)
 
-    async def _ask_quit(self, prompt: str) -> bool:
-        return await self.push_screen_wait(ConfirmScreen(prompt, self.trail_label()))
+    async def _ask_quit(self, detail: str) -> bool:
+        return await self.push_screen_wait(
+            ConfirmScreen(
+                QUIT_CONFIRM,
+                self.trail_label(),
+                detail=detail,
+                confirm=QUIT_ANSWER,
+            )
+        )
+
+    async def _shut_down(self) -> None:
+        """Write the tabs down, then take the runs down — in that order.
+
+        Stopping a run removes its session from the registry, so tabs written
+        down afterwards are no tabs at all, and "no tabs" is how this store says
+        the project was closed out. Written first, the record is of the app as
+        the user left it: every form as filled in, every name as given, and a
+        run that was going logged up to the moment it was killed.
+        """
+        self._leaving = True
+        self._remember()
+        await self._stop_every_run()
 
     async def _stop_every_run(self) -> None:
         """N tasks to unwind and N subprocesses to kill, not one of each.
@@ -800,6 +1081,12 @@ class TuiConsole(App):
         self,
         capabilities: Sequence[Capability],
     ) -> Capability | None:
+        if self._leaving:
+            # Nothing left to choose: the loop asking is on its way out, and a
+            # menu pushed now would be mounted into a screen stack being torn
+            # down. Reads to the loop as "the user walked out of the top menu",
+            # which is what has just happened.
+            return None
         session = current_session()
         # A workflow that was stopped never reached its pause, so the flag it
         # left behind is cleared here rather than swallowing the next one.
@@ -902,6 +1189,75 @@ class TuiConsole(App):
             return None
         self._record("template_pack", packs[index].info.name, packs[index])
         return packs[index]
+
+    async def choose_script_action(
+        self,
+        actions: Sequence[ScriptAction],
+        notice: str = "",
+    ) -> ScriptAction | None:
+        inherited = self._replay("script_action")
+        if isinstance(inherited, ScriptAction):
+            # Matched by identifier rather than by identity: the catalogue is
+            # read off the disk again on the way back in, so a sibling tab
+            # repeating this step is holding an equal action, not the same one.
+            match = next(
+                (a for a in actions if a.identifier == inherited.identifier), None
+            )
+            if match is not None:
+                self._record("script_action", match.name, match)
+                return match
+
+        await self._claim_screen(current_session())
+        trail = self._enter_step("script_action")
+        index = await self.push_screen_wait(
+            CardMenuScreen(
+                "Choose a workflow",
+                [
+                    MenuEntry(
+                        action.reference,
+                        action.name,
+                        action.summary,
+                        self._sessions.running_under((*trail, action.name)),
+                        action.detail,
+                    )
+                    for action in actions
+                ],
+                subtitle="Read from this stack's script repository.",
+                trail=trail,
+                notice=notice,
+                runs=self._sessions.summary(),
+            )
+        )
+        if index is None:
+            return None
+        self._record("script_action", actions[index].name, actions[index])
+        return actions[index]
+
+    async def choose_script_update(
+        self, catalogue: ScriptCatalogue
+    ) -> ScriptUpdate | None:
+        await self._claim_screen(current_session())
+        trail = tuple(self._current_steps().values())
+        answers = SCRIPT_UPDATE_ANSWERS
+        index = await self.push_screen_wait(
+            CardMenuScreen(
+                "These scripts are not the published ones",
+                [
+                    MenuEntry(key, name, description, detail=detail)
+                    for key, name, description, detail in answers
+                ],
+                subtitle=(
+                    f"Running {catalogue.installed or 'an unnamed version'}; "
+                    f"{catalogue.available} is published."
+                ),
+                trail=trail,
+                notice=f"Store: {catalogue.location}",
+                runs=self._sessions.summary(),
+            )
+        )
+        if index is None:
+            return None
+        return ScriptUpdate(answers[index][0])
 
     async def pause(self) -> None:
         session = current_session()

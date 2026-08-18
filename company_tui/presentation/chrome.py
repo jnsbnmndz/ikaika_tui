@@ -3,6 +3,8 @@ from collections.abc import Sequence
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Static
 
@@ -121,6 +123,21 @@ class AppHeader(Widget):
     AppHeader #header-runs.-empty {{
         display: none;
     }}
+
+    /* A window smaller than the interface was laid out for. Said rather than
+       corrected: the app resizing the window it is drawn in fought the terminal
+       over every rounded pixel, ten times a second — see
+       `infrastructure/window_shape.py`. */
+    AppHeader #header-window {{
+        width: auto;
+        height: 1;
+        margin-left: 2;
+        color: $warning;
+    }}
+
+    AppHeader #header-window.-empty {{
+        display: none;
+    }}
     """
 
     RUNS_HINT = "Ctrl+B"
@@ -142,6 +159,8 @@ class AppHeader(Widget):
         yield Static(
             self._runs_text(runs), id="header-runs", classes="" if runs else "-empty"
         )
+        window = self._resolve_window()
+        yield Static(window, id="header-window", classes="" if window else "-empty")
 
     def show_runs(self, summary: str) -> None:
         """Say how many runs are going, or say nothing at all."""
@@ -149,12 +168,27 @@ class AppHeader(Widget):
             badge.update(self._runs_text(summary))
             badge.set_class(not summary, "-empty")
 
+    def show_window(self, notice: str) -> None:
+        """Say the window is too small for the layout, or say nothing at all."""
+        for badge in self.query("#header-window"):
+            badge.update(notice)
+            badge.set_class(not notice, "-empty")
+
     @classmethod
     def _runs_text(cls, summary: str) -> str:
         return f"{summary} · {cls.RUNS_HINT}" if summary else ""
 
     def _resolve_runs(self) -> str:
         return getattr(self.app, "runs_summary", "") or ""
+
+    def _resolve_window(self) -> str:
+        """Read at compose time as well as on change.
+
+        Every step of a workflow composes a fresh header, and a notice only ever
+        pushed on change would be lost by the next screen and reappear whenever
+        the window next happened to move.
+        """
+        return getattr(self.app, "window_notice", "") or ""
 
     def _resolve_workspace(self) -> str:
         if self._workspace:
@@ -345,3 +379,77 @@ class AppFooter(Widget):
 
     def on_resize(self, event: events.Resize) -> None:
         self.set_class(event.size.width < SIGNATURE_MIN_WIDTH, "-narrow")
+
+
+BUSY_FRAMES = ("◐", "◓", "◑", "◒")
+"""The turning mark, from the same geometric block as everything else here.
+
+Four quarters of one circle, so the motion is a rotation rather than a set of
+shapes taking turns. Nothing from the emoji planes — see `presentation/icons.py`
+and `tests/test_glyphs.py` for why a spinner is exactly the sort of thing that
+gets one in."""
+
+BUSY_INTERVAL = 0.12
+"""Seconds a frame is held. Eight or so a second reads as turning rather than
+as a character changing, and the line is one cell wide: this is a repaint of one
+row, and only while something is actually being waited on."""
+
+
+class BusyLine(Widget):
+    """What the app has to say for itself while a step is taking a while.
+
+    Every workflow step pops one screen before pushing the next, and what shows
+    in between is the app's own frame. That is deliberate — the same chrome
+    reads as the same surface — but it means a step that goes away to the
+    network has nothing on screen saying so, and an empty frame that stays for
+    five seconds is indistinguishable from one that is never going to change.
+
+    A line rather than a screen of its own, in the margin the activity log
+    would use, so a step that also narrates itself reads as this line and then
+    its output rather than as two different things.
+    """
+
+    DEFAULT_CSS = """
+    BusyLine {
+        height: 1;
+        margin: 1 2 0 2;
+        color: $text-muted;
+        display: none;
+    }
+
+    BusyLine.-busy {
+        display: block;
+    }
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._label = ""
+        self._frame = 0
+        self._turning: Timer | None = None
+
+    def render(self) -> Content:
+        glyph = BUSY_FRAMES[self._frame % len(BUSY_FRAMES)]
+        return Content.assemble((f"{glyph}  ", "$secondary"), self._label)
+
+    def show(self, label: str) -> None:
+        """Say `label` and start turning, or stop and go away when it is empty.
+
+        The timer only exists while there is something to wait for. A mark that
+        kept turning over a finished step would be the interface reporting work
+        nobody is doing, and a repaint every eighth of a second for the life of
+        the app to do it.
+        """
+        self._label = label
+        self.set_class(bool(label), "-busy")
+        if label and self._turning is None:
+            self._frame = 0
+            self._turning = self.set_interval(BUSY_INTERVAL, self._turn)
+        elif not label and self._turning is not None:
+            self._turning.stop()
+            self._turning = None
+        self.refresh()
+
+    def _turn(self) -> None:
+        self._frame += 1
+        self.refresh()

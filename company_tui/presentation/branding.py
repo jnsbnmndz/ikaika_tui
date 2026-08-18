@@ -52,6 +52,22 @@ SPLASH_MARK = "\n".join(
     )
 )
 
+TOGGLE_ON = "#EA7B2E"
+"""The colour of a switch that is on.
+
+Its own colour because neither of the two it sits between will do. `$error` is
+red and red is for something that cannot be undone, which an option being ticked
+is not; `$accent` is gold and gold already means focus, so a box that is both on
+and focused would have nothing left to say the difference with. Orange is
+between them in the palette as well as in what it means.
+
+A constant rather than a theme variable, because a widget's `DEFAULT_CSS` is
+parsed before any theme is active and `$toggle-on` would be an undefined
+reference at that point. Interpolate this into an f-string of CSS instead — a
+theme variable that resolves on some screens and not others is worse than not
+having one.
+"""
+
 IKAIKA_THEME = Theme(
     name="ikaika",
     primary="#123A63",

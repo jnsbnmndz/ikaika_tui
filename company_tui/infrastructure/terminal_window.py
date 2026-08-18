@@ -4,8 +4,12 @@ Nothing here changes the *shape* of the terminal, on purpose. Asking one to
 resize itself leaves its cell grid and the app's disagreeing until something
 forces them back into step, and until then every mouse report names a cell the
 app never drew there — the pointer lands somewhere other than where it points.
-A window's size belongs to the terminal's own profile, not to the program
-running inside it.
+
+The window's pixel rectangle is a separate thing, and `window_shape` does hold
+that to a minimum and a ratio. The difference is who measures: a terminal handed
+a new window remeasures its own grid from it and reports the result, so the two
+stay in step, while a grid demanded by escape sequence is a number the app made
+up about a window that never changed.
 """
 
 import ctypes

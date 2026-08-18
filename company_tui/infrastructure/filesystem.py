@@ -35,6 +35,9 @@ class LocalFileSystem(FileSystemPort):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
 
+    def remove_file(self, path: Path) -> None:
+        path.unlink(missing_ok=True)
+
     async def remove_tree(self, path: Path) -> None:
         # Off the event loop: deleting a dependency directory means tens of
         # thousands of files, and doing that inline freezes the interface for
