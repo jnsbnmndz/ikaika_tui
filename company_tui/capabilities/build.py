@@ -53,6 +53,11 @@ class BuildCapability(Capability):
             walk = await script_actions.walk(self._console, pack, wanted=workflows)
 
             if walk.ending is script_actions.Ending.NOTHING:
+                if walk.notice:
+                    # The store was asked about on the way here, and nothing
+                    # after this puts up a screen — both lines land in the
+                    # activity log at the same pause, in the order they happened.
+                    self._console.write(walk.notice)
                 result = await pack.build()
                 self._console.write(result.message)
                 return result.exit_code

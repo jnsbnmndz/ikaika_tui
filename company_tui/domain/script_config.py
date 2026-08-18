@@ -27,6 +27,7 @@ config needs two roots at all.
 
 import json
 import re
+import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -87,6 +88,14 @@ INVALID_PATH = "message-invalid-path"
 INVALID_TEMPLATE = "message-invalid-template"
 
 AFTER_SUCCESS = "command-after-success"
+AFTER_CLONE = "after-clone-command"
+"""What a repository needs run once, in itself, before it can serve anybody.
+
+A script repository is a program as well as a pile of templates, and a
+program that was cloned is not a program that was installed. Declared at the
+top of the document rather than inside `config` because it belongs to the
+repository rather than to any action in it: it runs at the clone, once, and
+no workflow can ask for it."""
 
 OVERWRITE = "overwrite"
 """The flag an action declares to let a run write over what is already there.
@@ -100,6 +109,61 @@ which is guessing at a shell line to find out what a form already said.
 """
 
 _TRUE_WORDS = ("1", "on", "true", "yes")
+
+
+def split_command(raw: str) -> tuple[str, ...]:
+    """One declared command as an argument array, with no shell involved.
+
+    Split before any reference is filled in, never after. A Windows path
+    substituted first arrives full of backslashes, every one of which is an
+    escape to the splitter, and `C:\\src` comes back out as `C:src` — a path to
+    somewhere that does not exist and, occasionally, to somewhere that does.
+    """
+    try:
+        return tuple(shlex.split(raw, posix=True))
+    except ValueError:
+        return ()
+
+
+def executable_of(raw: str) -> str:
+    """The program one declared command needs on the machine, or `""`.
+
+    Empty for the two cases nothing can be said about. A name written as a
+    reference is not known until a form has been filled in, and this question
+    is asked before there is one. A name with a path in it is a file in the
+    repository rather than a program on the PATH — `node` is a tool, and
+    `scripts/build.mjs` is an argument to it.
+    """
+    tokens = split_command(raw)
+    if not tokens:
+        return ""
+    name = tokens[0]
+    if unresolved(name) or _looks_like_a_path(name):
+        return ""
+    return name
+
+
+def _looks_like_a_path(name: str) -> bool:
+    return name.startswith(".") or "/" in name or "\\" in name
+
+
+def _distinct(names: Sequence[str]) -> tuple[str, ...]:
+    """The names in the order they were declared in, each said once."""
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
+def executables_from(document: Mapping[str, Any]) -> tuple[str, ...]:
+    """Every program this repository's own commands invoke.
+
+    Derived rather than declared, because it cannot then drift: this is token
+    zero of the command that is actually going to run. A repository that starts
+    calling `pnpm` says so by calling it, and a hand-kept list somewhere else
+    would be a second copy of that fact with nothing keeping the two in step.
+    """
+    return _distinct(
+        [executable_of(command) for command in after_clone_from(document)]
+        + [name for action in actions_from(document) for name in action.executables]
+    )
 
 
 def humanise(key: str) -> str:
@@ -267,6 +331,11 @@ class ScriptAction:
     def writes_a_file(self) -> bool:
         return bool(self.template and self.filename)
 
+    @property
+    def executables(self) -> tuple[str, ...]:
+        """The programs this action's commands need on the machine."""
+        return _distinct([executable_of(command) for command in self.after_success])
+
     def message(self, key: str, references: Mapping[str, str], fallback: str = "") -> str:
         return expand(self.messages.get(key, "") or fallback, references)
 
@@ -339,6 +408,13 @@ class ScriptCatalogue:
     available: str = ""
     """The version of the manifest the remote has, when it was worth asking."""
 
+    executables: tuple[str, ...] = ()
+    """What this repository's commands need on the machine.
+
+    Part of what a store offers, because it is the half a machine can fail to
+    hold up: Doctor reads it to report the tools a stack actually calls rather
+    than the ones a pack remembered to list."""
+
     @property
     def stale(self) -> bool:
         """Whether the copy being run is a different one from what is published.
@@ -384,6 +460,16 @@ def action_options(action: ScriptAction, project_root: str = ".") -> tuple[Optio
             )
         )
     return tuple(options)
+
+
+def after_clone_from(document: Mapping[str, Any]) -> tuple[str, ...]:
+    """The setup this repository says it needs, in the order it wrote them."""
+    declared = document.get(AFTER_CLONE)
+    return tuple(
+        str(command)
+        for command in (declared if isinstance(declared, list) else ())
+        if str(command).strip()
+    )
 
 
 def components(actions: Sequence[ScriptAction]) -> tuple[ScriptAction, ...]:
@@ -585,6 +671,7 @@ def _as_number(value: object) -> float | None:
 
 
 __all__: Sequence[str] = (
+    "AFTER_CLONE",
     "AFTER_SUCCESS",
     "DEFAULT_RULES",
     "ERROR",
@@ -602,9 +689,13 @@ __all__: Sequence[str] = (
     "ScriptUpdate",
     "action_options",
     "actions_from",
+    "after_clone_from",
+    "executable_of",
+    "executables_from",
     "components",
     "expand",
     "humanise",
+    "split_command",
     "unresolved",
     "workflows",
 )

@@ -131,6 +131,54 @@ _ART = {
     # What a script repository declares. Keyed by the manifest's own words, so a
     # repository that adds a section gets a placeholder rather than nothing —
     # `art_for` already falls back, and these are the ones the stacks use today.
+    "android": "\n".join(
+        (
+            "  ╲     ╱",
+            " ╭───────╮",
+            " │ ●   ● │",
+            " ╰───────╯",
+        )
+    ),
+    "ios": "\n".join(
+        (
+            " ╭─────╮",
+            " │     │",
+            " │     │",
+            " ╰──▭──╯",
+        )
+    ),
+    "web": "\n".join(
+        (
+            " ╭───────╮",
+            " │ ● ● ● │",
+            " ├───────┤",
+            " ╰───────╯",
+        )
+    ),
+    "window": "\n".join(
+        (
+            " ╭──┬────╮",
+            " ├──┼────┤",
+            " │  │    │",
+            " ╰──┴────╯",
+        )
+    ),
+    "macos": "\n".join(
+        (
+            " ╭───────╮",
+            " │       │",
+            " ╰──┬─┬──╯",
+            "  ──┴─┴──",
+        )
+    ),
+    "linux": "\n".join(
+        (
+            "  ╭───╮",
+            "  │● ●│",
+            " ╭╯ ▾ ╰╮",
+            " ╰─────╯",
+        )
+    ),
     "screen": "\n".join(
         (
             " ╭────────╮",

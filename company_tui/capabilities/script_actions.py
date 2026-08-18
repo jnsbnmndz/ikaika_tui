@@ -46,9 +46,11 @@ class Ending(Enum):
     NOTHING = auto()
     """This stack's store offers nothing of the kind asked for.
 
-    Not a failure and not something to report: a stack whose scripts declare no
-    generators has whatever the pack itself can generate, and one that declares
-    no workflows has the build it ships with. The caller knows which."""
+    Not a failure: a stack whose scripts declare no generators has whatever the
+    pack itself can generate, and one that declares no workflows has the build
+    it ships with. The caller knows which. It may still carry a `notice`, since
+    the version question is asked before this is decided and what was done about
+    it has to be said somewhere."""
 
     DONE = auto()
 
@@ -85,15 +87,18 @@ async def walk(
             if catalogue.problem:
                 return Walk(Ending.BACK, notice=catalogue.problem)
 
-            offered = wanted(catalogue.actions)
-            if not offered:
-                return Walk(Ending.NOTHING)
-
             if catalogue.stale and not settled:
                 # Asked before the workflows are offered, because what they are
                 # is read out of the copy in question — a menu built from the
                 # old manifest and then replaced under the user is a menu they
                 # chose from and did not get.
+                #
+                # And before deciding there are none, because *that* is read out
+                # of the old manifest too. A store one version back declaring no
+                # workflow is a store that may have grown one, and the walk that
+                # checked the catalogue first fell through to the build the pack
+                # ships with — reporting that the stack has no build workflow on
+                # the strength of a manifest it had just been told was stale.
                 choice = await console.choose_script_update(catalogue)
                 if choice is None:
                     return Walk(Ending.BACK)
@@ -104,6 +109,14 @@ async def walk(
                 notice = outcome.message
                 settled = choice is not ScriptUpdate.RECLONE
                 continue
+
+            offered = wanted(catalogue.actions)
+            if not offered:
+                # The notice goes with it: what the walk did to the store on the
+                # way past is not something the caller can work out from an
+                # empty catalogue, and a clone that failed is exactly the case
+                # where "this stack has nothing of the kind" is a lie.
+                return Walk(Ending.NOTHING, notice=notice)
 
             action = await console.choose_script_action(offered, notice)
             notice = ""

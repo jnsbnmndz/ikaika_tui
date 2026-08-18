@@ -17,11 +17,13 @@ from company_tui.domain.session_memory import SessionMemory
 from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
 from company_tui.infrastructure.window_shape import (
-    MIN_HEIGHT,
-    MIN_WIDTH,
+    DEFAULT_PLAN,
     AppWindow,
+    SizeGuard,
+    WindowPlan,
     cramped,
     current_window,
+    window_plan,
 )
 from company_tui.presentation.branding import APP_NAME, APP_TAGLINE, APP_VERSION, IKAIKA_THEME, PEAK_ART
 from company_tui.presentation.card import MenuEntry
@@ -108,7 +110,7 @@ nothing and reads as flicker. Waited out rather than measured beforehand,
 because whether reading a stack's scripts is instant or is a network round trip
 depends on what is in the store and on what settings say to check."""
 
-WINDOW_POLL_INTERVAL = 1.0
+WINDOW_POLL_INTERVAL = 0.2
 """How often the window is measured.
 
 There is no event for it: the window is resized by the window manager, and what
@@ -116,11 +118,16 @@ reaches the app is a new cell grid — which the same drag produces several of, 
 a drag onto a display at another scale produces none of, while changing the size
 in pixels. So it is asked for rather than waited for.
 
-Once a second, because the answer is only ever a sentence in the chrome. Reading
-the window is a few microseconds and nothing is redrawn unless the measurement
-changed, so a poll this slow costs nothing and a faster one would buy nothing.
-The version of this that resized the window did run ten times a second, and see
-`infrastructure/window_shape.py` for what that cost.
+Five times a second, because the poll is also where the end of a drag is noticed
+(`SizeGuard.hold`), and a window that snaps back a whole second after the button
+came up reads as the app arguing rather than as a floor. A tick is two reads
+against state the input system and the window manager already hold, and nothing
+is drawn unless the measurement changed.
+
+What must not follow from a faster poll is a resize per tick. The version of this
+that held the window to a floor *and* a ratio ran ten times a second and asked
+every time, and see `infrastructure/window_shape.py` for what that cost — the cap
+and the wait-for-the-button-up are both there.
 """
 
 WINDOW_NOTICE = "▲ window {width}x{height} → {floor_width}x{floor_height}"
@@ -209,6 +216,8 @@ class TuiConsole(App):
         self._window: AppWindow | None = None
         self._window_watch: Timer | None = None
         self._window_notice = ""
+        self._plan: WindowPlan = DEFAULT_PLAN
+        self._guard: SizeGuard | None = None
         self._leaving = False
         """Set once the app is on its way out, so the menu loop stops asking.
 
@@ -228,11 +237,11 @@ class TuiConsole(App):
         self.theme = "ikaika"
         output = self.query_one("#output", RichLog)
         output.border_title = "Activity"
-        # The window is measured and reported on, never resized and never asked
-        # for a cell grid. Both of those are the app telling the terminal what
-        # shape to be, and the terminal wins: one leaves its idea of the grid and
-        # ours disagreeing until the pointer lands somewhere other than where it
-        # points, the other is a fight over rounded pixels that pegs the GPU.
+        # The window is opened at a size, measured, and put back onto the floor
+        # once a drag that took it under one has ended — and never asked for a
+        # cell grid, which is the app telling the terminal what shape to be and a
+        # fight the terminal wins: its idea of the grid and ours disagree until
+        # the pointer lands somewhere other than where it points.
         self._watch_window_shape()
         self._recall()
         self._start()
@@ -269,17 +278,25 @@ class TuiConsole(App):
     # ------------------------------------------------------------- the window
 
     def _watch_window_shape(self) -> None:
-        """Start reporting on the window the interface is drawn in.
+        """Open the window at its size, then start reporting on it.
 
-        Nothing to measure without a real terminal in front of one: under a test
-        pilot the only window this process could find is the one the test runner
-        happens to be sitting in.
+        Nothing to measure or to size without a real terminal in front of one:
+        under a test pilot the only window this process could find is the one the
+        test runner happens to be sitting in, and resizing that would be a unit
+        test rearranging the developer's desk.
+
+        The plan is read once. Which screen the window is on can change, but a
+        floor that moved under a window the user had already settled would resize
+        it for having been dragged onto another display.
         """
         if self._driver is None or self.is_headless:
             return
         self._window = current_window()
         if self._window is None:
             return
+        self._plan = window_plan()
+        self._guard = SizeGuard(self._window, self._plan)
+        self._guard.open_at_start_size()
         self._check_window_shape()
         self._window_watch = self.set_interval(WINDOW_POLL_INTERVAL, self._check_window_shape)
 
@@ -292,18 +309,24 @@ class TuiConsole(App):
             # The window is gone — every later reading would name a handle that
             # is either dead or, once Windows reuses it, somebody else's.
             self._window = None
+            self._guard = None
             self._stop_watching_window()
             self._say_about_window("")
             return
-        if not cramped(state):
+        if self._guard is not None and self._guard.hold(state):
+            # It just asked for a size, so this measurement is already history.
+            # The next tick reads the answer, and says something about it only if
+            # the window did not get there.
+            return
+        if not cramped(state, self._plan):
             self._say_about_window("")
             return
         self._say_about_window(
             WINDOW_NOTICE.format(
                 width=state.width,
                 height=state.height,
-                floor_width=MIN_WIDTH,
-                floor_height=MIN_HEIGHT,
+                floor_width=self._plan.min_width,
+                floor_height=self._plan.min_height,
             )
         )
 
@@ -640,6 +663,13 @@ class TuiConsole(App):
         moved.answers = dict(session.answers)
         moved.preset = dict(session.preset)
         moved.foreground = session.foreground
+        # Handed over, not shared. A tab something has already been run in is
+        # kept rather than removed, and one kept still wanting the screen is a
+        # claim with no workflow left to release it: `_retire` only ever reaches
+        # the session the workflow ended up in, so the menu loop would wait on
+        # this one for the rest of the app's life — the empty frame with nothing
+        # but the quit chord on it.
+        session.foreground = False
         self._teach(session.place, session.workflow)
         # The worker follows the workflow. Left on the tab behind, Stop and
         # quit would reach for this run through a session it has walked out of.

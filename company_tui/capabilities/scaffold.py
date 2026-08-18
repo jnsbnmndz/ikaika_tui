@@ -82,6 +82,13 @@ class ScaffoldCapability(Capability):
                     continue
                 if walk.ending is script_actions.Ending.DONE:
                     return walk.exit_code
+                if walk.notice:
+                    # Written rather than carried onto a menu, because what
+                    # follows is a form and not a menu. Carrying it back to the
+                    # stack menu would drop the "keep this copy" answer with it
+                    # — that is settled per walk — and ask the same question
+                    # again the moment the user walked back in.
+                    self._console.write(walk.notice)
                 # NOTHING falls through to whatever the pack ships with, which
                 # for a stack that has never had a script repository is the only
                 # thing Components could mean.

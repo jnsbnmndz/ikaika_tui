@@ -11,6 +11,13 @@ edited a template in that directory did so because that is the point of keeping
 one copy, and a toolbox that quietly reset it would be taking that back. Which
 revision arrives is settled at the clone, from the ref in `ikaika.toml`.
 
+A clone is not an install. A repository that carries its own program declares
+`after-clone-command`, and the store is not usable until that has run — so it
+runs here, once, as part of arriving, and a store whose setup failed is thrown
+away rather than kept. Half an install is the same hazard as half a clone, only
+quieter: everything is present, nothing says so, and what fails is a build three
+menus later with an error from inside somebody else's tool.
+
 `domain/script_config.py` is what reads the document; this is what has a disk.
 The split matters more than it looks: the rules a config declares are worth
 testing against a dozen malformed documents, and none of those need a clone.
@@ -20,7 +27,9 @@ import asyncio
 import dataclasses
 import os
 import shlex
+from collections import deque
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 
 from company_tui.domain import json_document
@@ -41,11 +50,20 @@ from company_tui.domain.script_config import (
     ScriptAction,
     ScriptCatalogue,
     actions_from,
+    after_clone_from,
+    executable_of,
+    executables_from,
     expand,
+    split_command,
     unresolved,
 )
 from company_tui.domain.template_pack import PackActionResult, ToolRequirement
-from company_tui.templates.services import RAW, PackServices, missing_tools
+from company_tui.templates.services import (
+    RAW,
+    PackServices,
+    describe_missing,
+    missing_tools,
+)
 
 GIT_TOOL = ToolRequirement("git", "fetches the build scripts")
 
@@ -115,6 +133,7 @@ async def catalogue_for(
         present=True,
         installed=str(document.get("version", "")),
         available=await _published_version(source, root, services) if compare else "",
+        executables=executables_from(document),
     )
 
 
@@ -140,6 +159,7 @@ async def status_for(
         present=True,
         installed=str(document.get("version", "")),
         available=await _published_version(source, root, services) if compare else "",
+        executables=executables_from(document),
     )
 
 
@@ -250,6 +270,25 @@ async def run_action(
         if filename:
             target = Path(directory) / filename
 
+    missing = missing_tools(
+        services.process_runner,
+        tuple(
+            ToolRequirement(name, f"{action.name} runs it")
+            for name in action.executables
+        ),
+    )
+    if missing:
+        # Before the template is staged rather than after: a tool that is not
+        # on this machine will not be on it a moment later either, and the
+        # alternative is writing a file only to take it back out again.
+        return _refused(
+            action.message(
+                FAILURE,
+                {**references, ERROR: describe_missing(missing)},
+                f"{describe_missing(missing)} and try again.",
+            )
+        )
+
     services.console.write(f"Running {action.name} in '{identity.title}'.")
 
     staged: _Staged | None = None
@@ -312,18 +351,118 @@ async def _ensure(
 
     services.console.write(f"Fetching the {stack} scripts from {source.described}...")
     services.console.write(f"{RAW}into {root}")
-    result = await services.process_runner.stream(
-        _clone_command(source, root),
-        lambda line: services.console.write(f"{RAW}{line}"),
-    )
-    if result.exit_code != 0:
-        # Half a clone is a directory that would pass for a good one next time,
-        # and the run after this would fail somewhere far less obvious.
-        if services.file_system.exists(root):
-            await services.file_system.remove_tree(root)
-        return f"Could not fetch {source.described}."
+    try:
+        result = await services.process_runner.stream(
+            _clone_command(source, root),
+            lambda line: services.console.write(f"{RAW}{line}"),
+        )
+        if result.exit_code != 0:
+            # Half a clone is a directory that would pass for a good one next
+            # time, and the run after this would fail somewhere far less obvious.
+            await _discard(root, services)
+            return f"Could not fetch {source.described}."
+
+        problem = await _set_up(root, services, stack)
+        if problem:
+            await _discard(root, services)
+            return problem
+    except asyncio.CancelledError:
+        # A stopped fetch is not a store. This matters more once there is setup
+        # to run than it did for the clone alone: a complete clone whose install
+        # was stopped half way is a directory that passes every test the next
+        # run makes of it.
+        await _discard(root, services, shielded=True)
+        raise
+
     services.console.write(f"Fetched the {stack} scripts into {root}.")
     return ""
+
+
+async def _discard(root: Path, services: PackServices, *, shielded: bool = False) -> None:
+    """Take a store back off the disk, even while being cancelled.
+
+    Shielded on the way out of a cancellation, or the removal is cancelled too
+    and what is left is the directory this exists to not leave behind."""
+    if not services.file_system.exists(root):
+        return
+    removal = services.file_system.remove_tree(root)
+    if not shielded:
+        await removal
+        return
+    with suppress(asyncio.CancelledError):
+        await asyncio.shield(asyncio.ensure_future(removal))
+
+
+async def _set_up(root: Path, services: PackServices, stack: str) -> str:
+    """Run what the freshly cloned repository says it needs, or say what failed.
+
+    Streamed like the clone above it but written down rather than written out.
+    There is no panel here — this is the gap between two menus, and what a
+    workflow says without one goes to the activity log in the header's margin.
+    `git clone` says a dozen lines there; `npm install` says tens of thousands,
+    most of them a progress bar redrawing itself, and an uncapped log in a
+    four-line margin is the same mistake as a window resized per frame. So the
+    lines go into a bounded tail and are read out only if the command fails;
+    `working` is already holding a mark up for the wait.
+
+    Streamed rather than captured because `capture` is a thread, and cancelling
+    a thread cancels the waiting and not the work: a stopped setup would leave
+    `npm` running with nothing left to reap it. `stream` kills its child.
+    """
+    document, _ = _manifest_at(root, services)
+    if document is None:
+        # Not a script repository. The caller reads the same manifest and says
+        # so properly; a clone that is merely the wrong repository is not a
+        # clone to throw away underneath that message.
+        return ""
+
+    commands = after_clone_from(document)
+    if not commands:
+        return ""
+
+    missing = missing_tools(
+        services.process_runner,
+        tuple(
+            ToolRequirement(name, f"the {stack} scripts set themselves up with it")
+            for name in _distinct(executable_of(command) for command in commands)
+        ),
+    )
+    if missing:
+        # Before a single command runs, so what comes back is a sentence about
+        # this machine rather than whatever the shell says about a name it
+        # could not find.
+        return f"{describe_missing(missing)} and try again."
+
+    services.console.write(f"Setting up the {stack} scripts...")
+    for raw in commands:
+        command = _command_from(raw, {})
+        if not command:
+            continue
+        if any(unresolved(argument) for argument in command):
+            # Nothing can answer a reference at clone time: there is no project
+            # yet, and `${root}` passed through literally is an argument naming
+            # a directory that does not exist.
+            return f"{SCRIPT_MANIFEST} asks for '{raw}', which nothing here can fill in."
+
+        services.console.write(f"{RAW}$ {shlex.join(command)}")
+        tail: deque[str] = deque(maxlen=SETUP_TAIL)
+        result = await services.process_runner.stream(command, tail.append, root)
+        if result.exit_code == 0:
+            continue
+        for line in (line for line in tail if line.strip()):
+            services.console.write(f"{RAW}{line}")
+        return (
+            f"Setting up the {stack} scripts failed: "
+            f"{command[0]} exited {result.exit_code}."
+        )
+    return ""
+
+
+SETUP_TAIL = 12
+"""How much of a failed setup command is worth reading in the header's margin.
+
+The end rather than the beginning: a tool that fails says why in its last few
+lines, and the first dozen lines of `npm install` are its banner."""
 
 
 def _clone_command(source: TemplateSource, root: Path) -> tuple[str, ...]:
@@ -511,22 +650,20 @@ async def _run_commands(
 
 
 def _command_from(raw: str, references: Mapping[str, str]) -> tuple[str, ...]:
-    """One declared command as an argument array, with no shell involved.
+    """One declared command as an argument array, filled in and ready to run.
 
-    Split before the references are filled in, never after. A Windows path
-    substituted first arrives full of backslashes, and every one of them is an
-    escape to the splitter — `C:\\src` comes back out as `C:src`, which is a
-    path to somewhere that does not exist and, occasionally, to somewhere that
-    does.
+    The splitting is `split_command`, which is also what reads the executable
+    out of a command nobody has filled in yet — one splitter, so what is
+    checked for on the PATH is exactly what is later handed to the runner.
     """
-    try:
-        tokens = shlex.split(raw, posix=True)
-    except ValueError:
-        return ()
-    return tuple(expand(token, references) for token in tokens)
+    return tuple(expand(token, references) for token in split_command(raw))
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _distinct(names) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name for name in names if name))
 
 
 def _refused(message: str) -> PackActionResult:
