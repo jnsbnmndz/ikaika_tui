@@ -12,7 +12,12 @@ from textual.widgets import RichLog
 from company_tui.application.app import Application
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
-from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptSection,
+    ScriptUpdate,
+)
 from company_tui.domain.session_memory import SessionMemory
 from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
@@ -1219,6 +1224,44 @@ class TuiConsole(App):
             return None
         self._record("template_pack", packs[index].info.name, packs[index])
         return packs[index]
+
+    async def choose_script_section(
+        self,
+        sections: Sequence[ScriptSection],
+        notice: str = "",
+    ) -> ScriptSection | None:
+        inherited = self._replay("script_section")
+        if isinstance(inherited, ScriptSection):
+            # Matched by key rather than by identity: the document is read off the
+            # disk again on the way back in, so a sibling tab repeating this step is
+            # holding an equal section, not the same one.
+            match = next((s for s in sections if s.key == inherited.key), None)
+            if match is not None:
+                self._record("script_section", match.name, match)
+                return match
+
+        await self._claim_screen(current_session())
+        trail = self._enter_step("script_section")
+        index = await self.push_screen_wait(
+            CardMenuScreen(
+                "Choose a group",
+                [
+                    # No detail passed: CardMenuScreen falls through to hints.py for a
+                    # key it knows, which is every domain this toolkit ships, and to the
+                    # card's own description for one it does not.
+                    self._entry(trail, section.key, section.name, section.summary)
+                    for section in sections
+                ],
+                subtitle="Read from this project's own script config.",
+                trail=trail,
+                notice=notice,
+                runs=self._sessions.summary(),
+            )
+        )
+        if index is None:
+            return None
+        self._record("script_section", sections[index].name, sections[index])
+        return sections[index]
 
     async def choose_script_action(
         self,

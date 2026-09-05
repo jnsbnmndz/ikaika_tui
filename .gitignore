@@ -67,8 +67,12 @@ app.*.map.json
 .changes/
 artifacts/
 company_tui.egg-info/
-tests/
 tools/
+
+# tests/ was ignored here, which is why this repository had none: the definition of
+# done asks for `python -m unittest discover` to pass and for focused tests under
+# tests/, and nothing under an ignored path can be either. `test/` and `test.*` below
+# still cover scratch files.
 
 # Python
 __pycache__/

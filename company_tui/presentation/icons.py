@@ -272,6 +272,76 @@ _ART = {
         )
     ),
     # The three ways out of a store that has fallen behind.
+    # Sections of a project's own script config, keyed by the domain names the
+    # IKAIKA PowerShell toolkit emits. A document naming its sections anything
+    # else gets DEFAULT_ART, which is what art_for's fallback exists for.
+    # A branch leaving a line of commits and coming back to it.
+    "git": "\n".join(
+        (
+            "    ╭─●─╮",
+            " ─●─╯   ╰─●─",
+            "  │       │",
+            "  ╰───────╯",
+        )
+    ),
+    # A ribboned seal: a signature, which is what these commands produce.
+    "windows": "\n".join(
+        (
+            " ╭─────╮",
+            " │  ✓  │",
+            " ╰──┬──╯",
+            "   ╱ ╲",
+            "  ╵   ╵",
+        )
+    ),
+    # A prompt with a caret, for a project's own commands.
+    "commands": "\n".join(
+        (
+            " ╭────────╮",
+            " │ ❯ ▁▁▁  │",
+            " │ ❯ ▁▁   │",
+            " ╰────────╯",
+        )
+    ),
+    # Plates coming off a compiler and stacking up.
+    "dotnet": "\n".join(
+        (
+            "  ╭─────╮",
+            "  ╰──┬──╯",
+            " ╭───┴───╮",
+            " ╰───┬───╯",
+            "     ╵",
+        )
+    ),
+    # A wireframe solid - a model, which is what the host add-in works on.
+    "navisworks": "\n".join(
+        (
+            "   ╭───╮",
+            "  ╱│  ╱│",
+            " ╭───╮ │",
+            " │ ╰─│─╯",
+            " ╰───╯",
+        )
+    ),
+    # A crate with a version band: the tooling as the thing being shipped.
+    "toolkit": "\n".join(
+        (
+            " ╭───────╮",
+            " │═══════│",
+            " │  ┼┼   │",
+            " ╰───────╯",
+        )
+    ),
+    # An elephant's head in profile, the way the language is usually drawn.
+    "php": "\n".join(
+        (
+            " ╭──────╮",
+            " │ ●  ● │",
+            " ╰──┬───╯",
+            "    │╲",
+            "    ╵ ╲",
+        )
+    ),
     "reclone": "\n".join(
         (
             " ╭───────╮",

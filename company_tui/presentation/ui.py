@@ -3,7 +3,12 @@ from typing import Protocol, TypeVar
 
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
-from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptSection,
+    ScriptUpdate,
+)
 from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
 
 T = TypeVar("T")
@@ -98,6 +103,18 @@ class Ui(Protocol):
         A workflow that sends the user back has something to tell them, and the
         place to tell them is the menu they land on. Writing it to the console
         instead would put it behind whatever screen comes next.
+        """
+        ...
+
+    async def choose_script_section(
+        self, sections: Sequence[ScriptSection], notice: str = ""
+    ) -> ScriptSection | None:
+        """Pick which group of a document's actions to look at.
+
+        A menu above the workflow menu, for a repository that declares more than
+        one section. It is the document's own grouping rather than one invented
+        here: the sections were named by whoever wrote the config, and a card per
+        section is the only arrangement that cannot disagree with them.
         """
         ...
 

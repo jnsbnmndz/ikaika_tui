@@ -45,12 +45,19 @@ NUMBER = "number"
 BOOLEAN = "boolean"
 ARRAY = "array"
 OBJECT = "object"
+PATH = "path"
+"""A string that names a directory.
+
+Its own type rather than a string with a convention, because the difference is
+what the form can offer: a PATH row gets a picker, and a text row asking for a
+directory is a box somebody has to remember the answer to."""
 
 GLOBAL_RULES = "global"
 
 DEFAULT_RULES: Mapping[str, tuple[str, ...]] = {
     GLOBAL_RULES: ("flag", "type", "required", "description", "default"),
     STRING: ("allowed_regex",),
+    PATH: ("allowed_regex",),
     ARRAY: ("allowed_values",),
     OBJECT: ("required_keys",),
     NUMBER: ("min", "max"),
@@ -283,6 +290,14 @@ class ScriptAction:
     path: str = ""
     template: str = ""
     filename: str = ""
+    description: str = ""
+    """What the repository says this action is for, in its own words.
+
+    Preferred over anything derived from the section name: a document that
+    bothered to describe an action knows more about it than "Runs the git
+    workflow", which is all a section of ten commands can otherwise say about
+    any one of them."""
+
     messages: Mapping[str, str] = field(default_factory=dict)
     after_success: tuple[str, ...] = ()
 
@@ -303,7 +318,7 @@ class ScriptAction:
     def summary(self) -> str:
         """Where this writes, in the words the project would use for it."""
         if not self.path:
-            return f"Runs the {humanise(self.section).lower()} workflow"
+            return self.description or f"Runs the {humanise(self.section).lower()} workflow"
         target = f"{self.path}/{self.filename}" if self.filename else self.path
         stripped = target.replace(f"${{{ROOT}}}/", "").replace(f"${{{ROOT}}}", ".")
         return _ARGUMENT_REFERENCE.sub(lambda m: f"<{m.group(1)}>", stripped)
@@ -319,7 +334,7 @@ class ScriptAction:
             (argument.description for argument in self.arguments if argument.description),
             "",
         )
-        return described or self.summary
+        return self.description or described or self.summary
 
     @property
     def preview(self) -> str:
@@ -439,6 +454,40 @@ ROOT_OPTION = Option(
 TARGET_KEY = "target"
 
 
+@dataclass(frozen=True, slots=True)
+class ScriptSection:
+    """One `config` section, and the actions declared under it."""
+
+    key: str
+    actions: tuple[ScriptAction, ...] = ()
+
+    @property
+    def name(self) -> str:
+        return humanise(self.key)
+
+    @property
+    def summary(self) -> str:
+        return f"{len(self.actions)} command{'' if len(self.actions) == 1 else 's'}"
+
+
+def sections_from(actions: Sequence[ScriptAction]) -> tuple[ScriptSection, ...]:
+    """The actions grouped as the document groups them, in declaration order.
+
+    A menu per section rather than one menu of everything, because a repository
+    that declares fifty actions has already said how it thinks about them — and
+    fifty cards in one grid is a list to scroll rather than a choice to make.
+    A section carrying one action still gets a card: skipping it would make the
+    depth of the menu depend on how much a repository happened to declare.
+    """
+    grouped: dict[str, list[ScriptAction]] = {}
+    for action in actions:
+        grouped.setdefault(action.section, []).append(action)
+    return tuple(
+        ScriptSection(key=key, actions=tuple(members))
+        for key, members in grouped.items()
+    )
+
+
 def action_options(action: ScriptAction, project_root: str = ".") -> tuple[Option, ...]:
     """The form for one action: where it runs, then what the document asks for."""
     options = [replace(ROOT_OPTION, default=project_root)]
@@ -539,6 +588,7 @@ def _action_from(
         path=str(entry.get("path", "")),
         template=str(entry.get("template", "")),
         filename=str(entry.get("filename", "")),
+        description=str(entry.get("description", "")),
         messages={
             name: str(value)
             for name, value in entry.items()
@@ -581,6 +631,15 @@ def _argument_from(
 
 
 def _option_for(argument: ScriptArgument) -> Option:
+    if argument.kind == PATH and not argument.allowed_values:
+        return Option(
+            key=argument.flag,
+            label=argument.label,
+            kind=OptionKind.PATH,
+            default=argument.default,
+            required=argument.required,
+            help=argument.description,
+        )
     if argument.kind == BOOLEAN:
         return Option(
             key=argument.flag,
@@ -681,14 +740,17 @@ __all__: Sequence[str] = (
     "INVALID_PATH",
     "INVALID_TEMPLATE",
     "OVERWRITE",
+    "PATH",
     "ROOT",
     "SUCCESS",
     "ScriptAction",
     "ScriptArgument",
     "ScriptCatalogue",
+    "ScriptSection",
     "ScriptUpdate",
     "action_options",
     "actions_from",
+    "sections_from",
     "after_clone_from",
     "executable_of",
     "executables_from",

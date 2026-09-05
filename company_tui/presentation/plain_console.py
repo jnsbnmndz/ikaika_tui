@@ -3,7 +3,12 @@ from typing import TypeVar
 
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionKind, OptionValue
-from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptSection,
+    ScriptUpdate,
+)
 from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
 
 T = TypeVar("T")
@@ -81,6 +86,21 @@ class PlainConsole:
         if index is None:
             return None
         return packs[index]
+
+    async def choose_script_section(
+        self,
+        sections: Sequence[ScriptSection],
+        notice: str = "",
+    ) -> ScriptSection | None:
+        if notice:
+            self.error(notice)
+        index = await self._select(
+            "Choose a group",
+            [(section.name, section.summary) for section in sections],
+        )
+        if index is None:
+            return None
+        return sections[index]
 
     async def choose_script_action(
         self,
