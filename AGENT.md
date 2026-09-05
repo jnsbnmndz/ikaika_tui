@@ -165,6 +165,27 @@ A launcher can open straight on a capability — `python -m company_tui --start 
 - `Card` and the card row are both height-capped (`max-height`) so a maximised terminal does not stretch the tiles; the leftover space falls below the hint line rather than between it and the cards.
 - The accent color means "this has focus" and nothing else — do not spend it on decoration.
 
+## graphify
+
+There is a knowledge graph at `graphify-out/` — god nodes, community structure, cross-file
+relationships. It is **gitignored on purpose**: every file in it is regenerated from source
+by an AST pass that costs nothing, and `graph.json` churns on every edit.
+
+Build it on first use. This machine has no LLM API key set, so the `claude-cli` backend is
+the one that works — it drives the locally installed `claude` CLI instead:
+
+```sh
+graphify extract . --backend claude-cli   # first build
+graphify extract . --code-only            # structure only, no backend needed
+graphify update .                         # after any code change (AST only, no cost)
+```
+
+- Codebase questions: `graphify query "<question>"` before reading source. `graphify path
+  "<A>" "<B>"` for relationships, `graphify explain "<concept>"` for one concept. Each
+  returns a scoped subgraph, usually much smaller than the report or raw search.
+- `graphify-out/GRAPH_REPORT.md` is for broad architecture review only.
+- Run `graphify update .` after any code change, so the graph is not quietly a version behind.
+
 ## Rules
 
 - Keep capabilities independent and register them in `bootstrap.py`.

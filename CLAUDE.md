@@ -165,6 +165,27 @@ The *window's pixel rectangle* is not the terminal's cell grid, and `terminal_wi
 
 `python -m unittest` cannot cover any of this — a pilot has no window at all — which is why the guard against running headless matters and why `tools/window_trace.py` exists: it prints every candidate handle with its class, its measurement and whether that reads as cramped, plus the plan — the screen it measured, the square the app would open at and the floor it would hold. Run it *in the terminal that misbehaves*, because the answer differs per host. It has no `--resize`, and must not grow one: a resize belongs to `SizeGuard` and to the two moments it is allowed.
 
+## graphify
+
+There is a knowledge graph at `graphify-out/` — god nodes, community structure, cross-file
+relationships. It is **gitignored on purpose**: every file in it is regenerated from source
+by an AST pass that costs nothing, and `graph.json` churns on every edit.
+
+Build it on first use. This machine has no LLM API key set, so the `claude-cli` backend is
+the one that works — it drives the locally installed `claude` CLI instead:
+
+```sh
+graphify extract . --backend claude-cli   # first build
+graphify extract . --code-only            # structure only, no backend needed
+graphify update .                         # after any code change (AST only, no cost)
+```
+
+- Codebase questions: `graphify query "<question>"` before reading source. `graphify path
+  "<A>" "<B>"` for relationships, `graphify explain "<concept>"` for one concept. Each
+  returns a scoped subgraph, usually much smaller than the report or raw search.
+- `graphify-out/GRAPH_REPORT.md` is for broad architecture review only.
+- Run `graphify update .` after any code change, so the graph is not quietly a version behind.
+
 ## Working agreement
 
 - Prefer the smallest complete vertical slice.
