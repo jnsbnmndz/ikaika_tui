@@ -16,6 +16,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="tui",
         nargs="?",
     )
+    parser.add_argument(
+        "--start",
+        default="",
+        metavar="CAPABILITY",
+        help=(
+            "open on this capability instead of the menu, e.g. --start scripts. "
+            "Backing out of it lands on the menu."
+        ),
+    )
     return parser
 
 
@@ -31,6 +40,6 @@ def main(argv: list[str] | None = None) -> int:
         application = create_application(PlainConsole())
         return asyncio.run(application.run_capability("doctor"))
 
-    console = create_tui_console()
+    console = create_tui_console(args.start)
     console.run()
     return console.result_code

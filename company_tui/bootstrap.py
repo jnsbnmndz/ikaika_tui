@@ -71,7 +71,7 @@ def create_application(console: PlainConsole) -> Application:
     return Application(console=console, registry=_build_capability_registry(console))
 
 
-def create_tui_console() -> TuiConsole:
+def create_tui_console(start: str = "") -> TuiConsole:
     # Keyed by the directory the toolbox was started in, which is the project
     # whose tabs these are. The store itself lives under the user's home, so one
     # person's open forms never arrive in somebody else's checkout.
@@ -83,4 +83,5 @@ def create_tui_console() -> TuiConsole:
     console.application = Application(
         console=console, registry=_build_capability_registry(console)
     )
+    console.start_capability = start
     return console

@@ -51,7 +51,22 @@ from company_tui.presentation.session import (
     current_session,
 )
 
-TRAIL_STEPS = ("capability", "scaffold_target", "template_pack", "script_action")
+TRAIL_STEPS = (
+    "capability",
+    "scaffold_target",
+    "template_pack",
+    "script_section",
+    "script_action",
+)
+"""Every menu a workflow can walk, in the order it walks them.
+
+ORDER IS LOAD-BEARING: `_enter_step` forgets a step and everything AFTER it in
+this tuple, so a step listed too late leaves its own successors standing when the
+user goes back. And a step MISSING from here is worse than misplaced -
+`TRAIL_STEPS.index` raises, the exception is caught as a failed run, and the
+workflow dies into the session log while the menu loop calmly puts the top menu
+back. Which is what "script_section" did: Scripts opened, vanished, and left a
+card menu that looked like nothing had been asked for."""
 
 SCRIPT_UPDATE_ANSWERS: tuple[tuple[str, str, str, str], ...] = (
     (
@@ -200,6 +215,8 @@ class TuiConsole(App):
     ) -> None:
         super().__init__()
         self.application: Application | None = None
+        self.start_capability = ""
+        """A capability to open on instead of the menu. See Ui.choose_capability."""
         self.workspace_label = workspace_label
         self._memory = memory
         self._workspace = workspace
@@ -417,7 +434,7 @@ class TuiConsole(App):
     async def _start(self) -> None:
         await self.push_screen_wait(SplashScreen())
         assert self.application is not None
-        self.result_code = await self.application.run()
+        self.result_code = await self.application.run(self.start_capability)
         await self._shut_down()
         self.exit()
 
@@ -1115,7 +1132,17 @@ class TuiConsole(App):
     async def choose_capability(
         self,
         capabilities: Sequence[Capability],
+        preselect: str = "",
     ) -> Capability | None:
+        chosen = next((c for c in capabilities if c.info.key == preselect), None)
+        if chosen is not None:
+            # Recorded exactly as a real choice is, so the breadcrumb, the session's
+            # scope and the tab this lands in are the same either way. No screen is
+            # claimed because nothing has taken one yet - this only ever answers the
+            # first call.
+            self._enter_step("capability")
+            self._record("capability", chosen.info.name, chosen)
+            return chosen
         if self._leaving:
             # Nothing left to choose: the loop asking is on its way out, and a
             # menu pushed now would be mounted into a screen stack being torn

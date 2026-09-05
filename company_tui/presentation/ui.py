@@ -88,8 +88,20 @@ class Ui(Protocol):
     async def confirm(self, prompt: str) -> bool: ...
 
     async def choose_capability(
-        self, capabilities: Sequence[Capability]
-    ) -> Capability | None: ...
+        self, capabilities: Sequence[Capability], preselect: str = ""
+    ) -> Capability | None:
+        """Choose what to do, or take `preselect` as already chosen.
+
+        A launcher that exists to run one kind of work opens on it rather than on a
+        menu whose first job is to be dismissed. It is answered through the same
+        recording a real choice makes, so the breadcrumb, the session's scope and
+        the tab it lands in are identical either way - the alternative was starting
+        a run with no step behind it, which is a tab belonging to nowhere.
+
+        Only the first call honours it. Backing out of that capability then lands on
+        the menu, so nothing is unreachable.
+        """
+        ...
 
     async def choose_scaffold_target(
         self, options: Sequence[ScaffoldTargetOption], notice: str = ""

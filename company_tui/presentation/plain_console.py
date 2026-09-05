@@ -46,7 +46,11 @@ class PlainConsole:
     async def choose_capability(
         self,
         capabilities: Sequence[Capability],
+        preselect: str = "",
     ) -> Capability | None:
+        chosen = next((c for c in capabilities if c.info.key == preselect), None)
+        if chosen is not None:
+            return chosen
         self._result_acknowledged = False
         index = await self._select(
             "Company Developer Toolbox",
