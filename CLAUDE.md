@@ -2,7 +2,7 @@
 
 Guidance for working in this repository.
 
-This is the IKAIKA developer toolbox (v0.0.0+1) — a Python company developer toolbox for repeatable scaffolding and automation. It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
+This is the IKAIKA developer toolbox — a Python company developer toolbox for repeatable scaffolding and automation. Its version lives in `VERSION` at the repository root, one line, `x.y.z+n`; `presentation/branding.py` reads it, so a release rewrites one file and nothing restates it (`docs/decisions/0002-the-version-is-one-file.md`). It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
 
 The interactive UI is branded: `presentation/branding.py` defines `IKAIKA_THEME` (colors drawn from the company logo) plus the name/tagline/version, registered and activated by `TuiConsole` on mount. New CSS should reference theme tokens (`$primary`, `$accent`, `$surface`, `$panel`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand and adapts if the theme changes.
 
@@ -10,7 +10,7 @@ Every screen sits inside the same chrome from `presentation/chrome.py`: an `AppF
 
 Every key hint is also a button. A `KeyHint` reads its own label back into the key it names (`key_for`) and clicking it presses that key, so the mouse reaches everywhere the keyboard does without a second set of controls to keep in step with the first — and so a hint cannot drift from what it does. A hint naming a range rather than a key stays inert instead of lighting up for a press it could never send, and so does one whose key is dead at the time. Add a hint by putting it in a footer's tuples; do not wire a handler to it.
 
-Nothing the interface draws may be an emoji, and `tests/test_glyphs.py` checks rather than trusts. A codepoint with Unicode `Emoji=Yes` is rendered from an emoji font instead of a text one: double width, so every column after it is wrong, in a colour that ignores the theme and at a weight nothing like the box-drawing art beside it. This is easy to get wrong because these codepoints read fine in an editor — a stop mark on the Run button and a stopwatch on each run's timestamp both got in that way. Draw from the geometric shapes, dingbat and box-drawing blocks (`◆ ✓ ▲ ✗ ● ○ ✕ ❯ ▸ ■`); if nothing legible is available, use no glyph and let colour do the work.
+Nothing the interface draws may be an emoji, and `tests/test_glyphs.py` checks rather than trusts — reading every string literal in the package with `ast`, so an escape like `"😀"` is caught however innocent it looks in the file. The check bans the emoji Unicode blocks outright and allows four text glyphs (`✓ ✕ ✗ ❯`) by name, because width does not separate them: `U+23F1 STOPWATCH` is narrow and is an emoji, `U+2715 MULTIPLICATION X` is narrow and is not. A codepoint a terminal treats as emoji is rendered from an emoji font instead of a text one: double width, so every column after it is wrong, in a colour that ignores the theme and at a weight nothing like the box-drawing art beside it. This is easy to get wrong because these codepoints read fine in an editor — a stop mark on the Run button and a stopwatch on each run's timestamp both got in that way. Draw from the geometric shapes, dingbat and box-drawing blocks (`◆ ✓ ▲ ✗ ● ○ ✕ ❯ ▸ ■`); if nothing legible is available, use no glyph and let colour do the work.
 
 A button is an outline, and focus **doubles** its border — never fills it. Colour says which answer is which (`$warning` for the way back, `$error` for the step there is no way back from) and is the same colour focused or not, border and label alike; the doubled line says which one Enter would take. A filled answer reads as an answer already chosen, and every question `ConfirmScreen` asks — quit with runs going, overwrite a tree, close a live tab — is about something that cannot be undone, so neither answer may look pre-selected. Focus doubles the line rather than recolouring it because a recoloured border would be the answer's own colour arguing with the focus colour. A confirmation is a title, an optional `detail` saying what saying yes costs, and two answers; a dialog reached by a chord puts that chord under the affirmative's label (`key`), so someone who pressed `Ctrl+Q` to get there can see that pressing it again is the same answer. A checkbox follows the same rule and is *only the box* (`FieldToggle`): Textual's ships as a mark and its label in one widget, so the words of a question are part of the control that answers it — a stray click on the text answers it, and focus paints a reversed block behind it. The label is a `Static` beside the box instead, so a click has to land on the box, hover lights what the pointer is actually over, and the label never changes. The box says everything: doubled while it is on, orange when on (`TOGGLE_ON` in `branding.py`, interpolated rather than a theme variable — a widget's `DEFAULT_CSS` is parsed before any theme is active, so `$toggle-on` would be an undefined reference), blue under the pointer, gold under the keyboard, with focus beating hover because that is the one a key press is about to act on.
 
@@ -21,9 +21,11 @@ Anything clickable made of more than one widget mixes in `HoverLight` (`presenta
 ## Commands
 
 ```sh
-python -m company_tui        # interactive Textual UI
-python -m company_tui list   # plain stdout, scriptable
-python -m company_tui doctor # plain stdout, scriptable
+python -m company_tui                  # interactive Textual UI
+python -m company_tui --start scripts  # open straight on a capability
+python -m company_tui list             # plain stdout, scriptable
+python -m company_tui doctor           # plain stdout, scriptable
+python -m company_tui check            # everything the definition of done asks for
 python -m unittest discover
 ```
 
@@ -115,6 +117,18 @@ One store, two menus. An action carrying a template and a filename puts a file i
 
 A stack whose store offers nothing of the kind asked for falls back rather than reporting anything — once the version question above has been settled — because nothing to choose between is not a problem: Build runs the build the pack ships with (`TemplatePack.build`), and Components offers the generators the pack ships with (`TemplatePack.generators`), which is the only thing Components could mean for a stack that has never had scripts.
 
+## A project's own commands
+
+Build runs the workflows a *stack's* script repository declares. **Scripts** runs the ones the project in front of you declares, out of the `ikaika.script.json` in its own root — the case above already allows for when it says a command runs where its config lives, so a project carrying a `config` of its own runs in the project. `docs/decisions/0001-a-project-declares-its-own-commands.md` is why.
+
+Nothing in `capabilities/scripts.py` knows what wrote that file. The IKAIKA PowerShell toolkit emits one describing every command it can dispatch, and that is what this was built for and deliberately not what it depends on: a project whose commands are npm scripts, a Makefile, or a shell script per task declares them the same way and arrives at the same menus. The document is the contract; the program that produced it is not.
+
+The walk is section, then action, then the run panel. Sections come from `config`'s own grouping rather than one invented here — a repository that declares fifty actions has already said how it thinks about them, and fifty cards in one grid is a list to scroll rather than a choice to make. The run itself is `templates/scripts.py: run_action`, the same function Build and Components go through: an action with no template and no path skips the staging half and runs what the config named, which keeps the parts that are easy to leave out — answers checked against the document's own rules, tools looked for on the machine before anything runs, and a stopped run unwinding to the subprocess.
+
+Which project it is comes from `IKAIKA_PROJECT_ROOT`, then the working directory. The toolbox may be started from its own checkout while driving another tree, so the directory it happens to be in is not always the answer.
+
+A launcher can open straight on a capability — `python -m company_tui --start scripts`, which is what a bare `script.ps1` does. It is answered through the same `_enter_step`/`_record` a real menu choice makes, so the breadcrumb, the session's scope and the tab it lands in are identical either way; only the first call honours it, so backing out reaches the menu and nothing becomes unreachable. **A new menu step must go in `TRAIL_STEPS`** — one that is missing raises inside the run supervisor, which reports a failed workflow into a log nobody is reading and puts the previous menu back. See `docs/pitfalls.md` 1.1.
+
 ## Transitions
 
 Every step of a workflow pops one screen before pushing the next, so the app's own screen shows in between. It carries the same chrome, and its activity log stays hidden (`-quiet`) until something is written to it, so the gap reads as the same surface rather than as somewhere else. A workflow that sends the user back therefore passes a `notice` to the menu they land on instead of writing to the console, which would put the message behind whatever comes next. What a workflow without a panel does write there is read at the pause that follows it, and the log is emptied and hidden again when the menu loop comes back round — a line left standing shows through every later gap as if the workflow now running had said it.
@@ -192,9 +206,14 @@ The menu grid wraps at three cards per row (`CARDS_PER_ROW`), so registering a f
 
 ## Definition of done
 
+- `python -m company_tui check` passes — it runs the three below and reports a skip
+  rather than omitting it. An empty test discovery is a FAIL, not a pass: this
+  repository shipped with `tests/` gitignored and `discover` answering OK over nothing.
 - `python -m unittest discover` passes.
 - `python -m company_tui list` succeeds.
 - `python -m company_tui doctor` succeeds.
+- New decisions go in `docs/decisions/`; anything that failed silently goes in
+  `docs/pitfalls.md`.
 - New decisions and failure paths are tested.
 - Domain boundaries remain independent of concrete tools.
 - Graphify reflects the current source tree.

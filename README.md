@@ -11,9 +11,11 @@ Scaffold and Build both drill down through the same two questions: *what* do you
 Python 3.11 or newer is required.
 
 ```sh
-python -m company_tui        # interactive Textual UI
-python -m company_tui list   # plain stdout, scriptable
-python -m company_tui doctor # plain stdout, scriptable
+python -m company_tui                  # interactive Textual UI
+python -m company_tui --start scripts  # open straight on a capability
+python -m company_tui list             # plain stdout, scriptable
+python -m company_tui doctor           # plain stdout, scriptable
+python -m company_tui check            # the gate: tests, list and doctor
 ```
 
 Install the `company` command locally when needed:
@@ -27,14 +29,19 @@ Run the tests:
 
 ```sh
 python -m unittest discover
+python -m company_tui check              # and everything else the gate covers
+python -m company_tui check --install-hook   # as a pre-push hook
 ```
+
+The version is `VERSION` at the repository root — one line, `x.y.z+n`, read by
+`presentation/branding.py`. A release rewrites that file and nothing restates it.
 
 ## Structure
 
 ```text
 company_tui/
 ├── application/      orchestration, capability registry, template pack registry
-├── capabilities/     independently executable product features (scaffold, build, doctor)
+├── capabilities/     independently executable product features (scaffold, build, scripts, doctor, ...)
 ├── domain/           stable models and interfaces
 ├── infrastructure/   operating system and external tool adapters
 ├── presentation/     Ui protocol, PlainConsole (stdout), TuiConsole (Textual app + screens + chrome)

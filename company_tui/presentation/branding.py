@@ -1,9 +1,33 @@
+from pathlib import Path
+
 from textual.theme import Theme
 
 APP_NAME = "IKAIKA"
 APP_TAGLINE = "Developer Toolbox"
-APP_VERSION = "v0.0.0+1"
 APP_SIGNATURE = "IKAIKA Engineering"
+
+VERSION_FILE = Path(__file__).resolve().parents[2] / "VERSION"
+
+
+def _version() -> str:
+    """The one place the version is written, read rather than restated.
+
+    A release rewrites `VERSION` and nothing else. The alternative was a literal
+    here, which is a second copy of a fact — and the copy the header shows, so it
+    is the one that goes stale while the file everything else derives from moves.
+
+    Falls back rather than raising: the version decorates a header, and an app
+    that refuses to start because it cannot find a text file is worse than one
+    whose title bar is vague. An installed wheel has no repository around it.
+    """
+    try:
+        raw = VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "v0.0.0+0"
+    return f"v{raw}" if raw else "v0.0.0+0"
+
+
+APP_VERSION = _version()
 
 PEAK_ART = "▲ ▲▲ ▲"
 WORDMARK = "I K A I K A"

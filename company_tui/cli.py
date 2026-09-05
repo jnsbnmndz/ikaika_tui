@@ -12,9 +12,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("tui", "list", "doctor"),
+        choices=("tui", "list", "doctor", "check"),
         default="tui",
         nargs="?",
+    )
+    parser.add_argument(
+        "--install-hook",
+        action="store_true",
+        help="with `check`, install it as this repository's pre-push hook",
     )
     parser.add_argument(
         "--start",
@@ -30,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "check":
+        from company_tui.check import main as run_checks
+
+        return run_checks(install=args.install_hook)
 
     if args.command == "list":
         application = create_application(PlainConsole())
