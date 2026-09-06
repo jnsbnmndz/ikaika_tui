@@ -94,10 +94,25 @@ class ScriptsCapability(Capability):
 
     async def execute(self) -> int:
         root = project_root()
-        sections, problem = self._read(root)
-        if problem:
-            self._console.error(problem)
-            return FAILED
+        # Asked for up front only when no launcher named a project. `.\script.ps1`
+        # names one, so the common path opens straight on its commands; started on
+        # its own, the toolbox is in whatever directory it happens to be in, and
+        # that is a guess rather than an answer.
+        if not os.environ.get(PROJECT_ROOT, "").strip():
+            root = await self._ask_where(root, "Which project's commands?")
+            if root is None:
+                return CANCELLED
+
+        sections: tuple[ScriptSection, ...] = ()
+        while True:
+            sections, problem = self._read(root)
+            if not problem:
+                break
+            # A dead end otherwise: the directory has no commands and there was no
+            # way from here to one that does.
+            root = await self._ask_where(root, problem)
+            if root is None:
+                return CANCELLED
 
         section: ScriptSection | None = None
         action: ScriptAction | None = None
@@ -195,6 +210,15 @@ class ScriptsCapability(Capability):
         if preview:
             return RefreshOutcome(message=said)
 
+        # Read back through the same command the form opened with. The document
+        # holds no fetched values any more, so re-reading it answers nothing and
+        # the dropdown would keep whatever it had while the line said "removed 2".
+        if option.refresh.values_command:
+            return RefreshOutcome(
+                message=said,
+                choices=await self._ask_for_choices(root, option.refresh.values_command),
+            )
+
         sections, problem = self._read(root)
         if problem:
             return RefreshOutcome(message=said or problem, ok=False)
@@ -266,6 +290,13 @@ class ScriptsCapability(Capability):
         return tuple(
             line.strip() for line in (result.stdout or "").splitlines() if line.strip()
         )
+
+    async def _ask_where(self, start: "Path | None", why: str) -> "Path | None":
+        """Which project to read commands from, or `None` if the user backed out."""
+        chosen = await self._console.choose_folder(str(start or Path.cwd()), why)
+        if not chosen:
+            return None
+        return Path(chosen).expanduser().resolve()
 
     def _read(self, root: Path) -> tuple[tuple[ScriptSection, ...], str]:
         """This project's declared actions, or why there are none.

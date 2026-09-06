@@ -62,6 +62,14 @@ class Refresh:
     command: str = ""
     preview: str = ""
 
+    values_command: str = ""
+    """How to read the list back after acting, when that is a separate command.
+
+    A declared refresh CHANGES something and reports what it did - it does not
+    print the new list. The values used to be re-read from the document, and then
+    the document stopped carrying them, so Update reported a success and left the
+    dropdown exactly as it was."""
+
     lists_values: bool = False
     """Whether `command` prints the new values, or a sentence about what it did.
 

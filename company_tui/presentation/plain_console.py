@@ -91,6 +91,13 @@ class PlainConsole:
             return None
         return packs[index]
 
+    async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
+        # No tree to draw, so it is asked for. An empty answer keeps what there was,
+        # which is the only sensible reading of pressing Enter on a prompt like this.
+        self.write(prompt or "Choose a project")
+        typed = (await self.ask(f"Folder [{start}]")).strip()
+        return typed or start or None
+
     async def choose_script_section(
         self,
         sections: Sequence[ScriptSection],

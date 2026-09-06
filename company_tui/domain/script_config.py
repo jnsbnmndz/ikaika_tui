@@ -801,7 +801,9 @@ def _refresh_for(argument: ScriptArgument) -> Refresh | None:
     nothing, so it never asks.
     """
     if argument.refresh is not None:
-        return argument.refresh
+        # The fetch is carried alongside, because acting and reading the result
+        # back are two different commands here.
+        return replace(argument.refresh, values_command=argument.choices_command)
     if argument.choices_command:
         return Refresh(
             label="Update", command=argument.choices_command, lists_values=True

@@ -33,6 +33,7 @@ from company_tui.infrastructure.window_shape import (
 from company_tui.presentation.branding import APP_NAME, APP_TAGLINE, APP_VERSION, IKAIKA_THEME, PEAK_ART
 from company_tui.presentation.card import MenuEntry
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, BusyLine
+from company_tui.presentation.path_screen import PathScreen
 from company_tui.presentation.run_screen import RunScreen
 from company_tui.presentation.screens import (
     TRAIL_SEPARATOR,
@@ -1262,6 +1263,15 @@ class TuiConsole(App):
             return None
         self._record("template_pack", packs[index].info.name, packs[index])
         return packs[index]
+
+    async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
+        # No step recorded: a folder is not one of the menus a run's breadcrumb is
+        # made of, and putting it in TRAIL_STEPS would make going back to a menu
+        # forget it.
+        await self._claim_screen(current_session())
+        return await self.push_screen_wait(
+            PathScreen(start, prompt or "Choose a project")
+        )
 
     async def choose_script_section(
         self,

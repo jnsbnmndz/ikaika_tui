@@ -131,6 +131,16 @@ class Ui(Protocol):
         """
         ...
 
+    async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
+        """Ask which directory to work in, or `None` if the user backed out.
+
+        A workflow that can only ever act on the directory it was started in is
+        one somebody has to restart in the right place. Separate from the PATH
+        field on a form, which asks where a single run should point: this asks
+        which project the workflow is about at all.
+        """
+        ...
+
     async def choose_script_section(
         self, sections: Sequence[ScriptSection], notice: str = ""
     ) -> ScriptSection | None:

@@ -607,6 +607,19 @@ class RunScreen(Screen[None]):
         margin-bottom: 0;
     }
 
+    /* A fetched list and its Update button. The list takes what is left after the
+       button, which is the opposite of the default: a Select is width:100% and would
+       push the button past the edge of the pane, where it is laid out and invisible. */
+    RunScreen .field--fetched {
+        width: 100%;
+        height: auto;
+    }
+
+    RunScreen .field--fetched Select {
+        width: 1fr;
+        margin-bottom: 0;
+    }
+
     RunScreen .field--browse {
         width: auto;
         min-width: 10;
@@ -1034,6 +1047,11 @@ class RunScreen(Screen[None]):
                     # Only on a list the command FETCHED, which is what carrying a
                     # refresh means. A declared set cannot change while the form is
                     # open, so a button there would never do anything.
+                    #
+                    # `field--fetched`, not `field--path`: that class shrinks a
+                    # `.field--input` to make room for its button, and a Select is not
+                    # one - so it kept its full width and pushed the button clean off
+                    # the pane. The button was there, laid out, and never visible.
                     widgets.append(
                         Horizontal(
                             chooser,
@@ -1043,9 +1061,14 @@ class RunScreen(Screen[None]):
                                 classes="field--browse",
                                 flat=True,
                             ),
-                            Static("", id=self._refresh_status_id(option),
-                                   classes="field--help"),
-                            classes="field--path",
+                            classes="field--fetched",
+                        )
+                    )
+                    # Under the row rather than beside the button: a third thing in
+                    # that Horizontal is width the dropdown does not get.
+                    widgets.append(
+                        Static(
+                            "", id=self._refresh_status_id(option), classes="field--help"
                         )
                     )
                 else:
@@ -1156,7 +1179,14 @@ class RunScreen(Screen[None]):
                 button.label = idle
 
     async def _ask_and_refresh(self, option: Option, runner, status) -> None:
-        """Preview, confirm if there is anything to confirm, then act."""
+        """Preview, confirm if there is anything to confirm, then act.
+
+        Everything it does is written into the terminal as well as onto the line
+        beside the button. The line has room for four words; the terminal is
+        where this run's history is, and a list that was brought up to date - or
+        a delete that was declined - belongs in it beside the run it was done
+        for.
+        """
         asked = await runner(option, True)
         if asked.message:
             # The first line is the question; the rest is what saying yes
@@ -1174,17 +1204,23 @@ class RunScreen(Screen[None]):
             if not agreed:
                 if status is not None:
                     status.update("left alone")
+                self._session.write(f"-{option.key}: left alone", marker="warn")
                 return
         if status is not None:
             status.update("fetching...")
+        self._session.write(f"Updating -{option.key}...", marker="step")
+
         outcome = await runner(option, False)
         self._apply_refresh(option, outcome)
+
+        said = outcome.message or f"{len(outcome.choices)} value(s)"
         if status is not None:
-            status.update(
-                outcome.message
-                or f"{len(outcome.choices)} value(s)"
-                if outcome.ok
-                else outcome.message or "failed"
+            status.update(said if outcome.ok else outcome.message or "failed")
+        self._session.write(said, marker="ok" if outcome.ok else "error")
+        if outcome.ok and outcome.choices:
+            self._session.write(
+                f"-{option.key} now offers: {', '.join(outcome.choices)}",
+                marker="output",
             )
 
     def _apply_refresh(self, option: Option, outcome: RefreshOutcome) -> None:

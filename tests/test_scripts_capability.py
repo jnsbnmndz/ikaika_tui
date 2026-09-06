@@ -92,7 +92,9 @@ class FakeFinalizer:
 class StubUi:
     """Answers each menu from a script of choices, then reports what it was asked."""
 
-    def __init__(self, sections=(), actions=(), answers=None, again=False):
+    def __init__(self, sections=(), actions=(), answers=None, again=False, folders=()):
+        self._folders = list(folders)
+        self.asked_where = []
         self._sections = list(sections)
         self._actions = list(actions)
         self._answers = answers or {}
@@ -113,6 +115,10 @@ class StubUi:
 
     def error(self, message):
         self.errors.append(message)
+
+    async def choose_folder(self, start="", prompt=""):
+        self.asked_where.append(prompt)
+        return self._folders.pop(0) if self._folders else None
 
     async def choose_script_section(self, sections, notice=""):
         self.offered_sections.append([s.key for s in sections])
@@ -173,31 +179,85 @@ def run(capability):
 
 
 class NothingToRunTest(unittest.TestCase):
+    """A directory with no commands is a question, not a dead end.
+
+    It used to report and exit, which left somebody who had opened the toolbox in
+    the wrong place with nothing to do but quit and start again somewhere else.
+    """
+
     def setUp(self):
         os.environ[PROJECT_ROOT] = str(ROOT)
         self.addCleanup(os.environ.pop, PROJECT_ROOT, None)
 
-    def test_a_project_with_no_manifest_says_so_and_fails(self):
+    def test_a_project_with_no_manifest_offers_to_look_elsewhere(self):
         console = StubUi()
         capability, _ = build(console, {})
-        self.assertEqual(1, run(capability))
-        self.assertIn(SCRIPT_MANIFEST, console.errors[0])
+        self.assertEqual(CANCELLED, run(capability))
+        self.assertEqual(1, len(console.asked_where))
+        self.assertIn(SCRIPT_MANIFEST, console.asked_where[0])
 
     def test_a_manifest_declaring_no_commands_is_told_apart_from_a_missing_one(self):
         # Both are "nothing to run", and reporting the second as unreadable would
-        # send somebody looking for a syntax error that is not there.
+        # send somebody looking for a syntax error that is not there. The wording
+        # is what the folder question is asked with, so it still has to be right.
         console = StubUi()
         capability, _ = build(
             console, {str(ROOT / SCRIPT_MANIFEST): '{"name": "demo"}'}
         )
-        self.assertEqual(1, run(capability))
-        self.assertIn("declares no commands", console.errors[0])
+        run(capability)
+        self.assertIn("declares no commands", console.asked_where[0])
 
     def test_a_manifest_that_will_not_parse_is_reported_rather_than_raised(self):
         console = StubUi()
         capability, _ = build(console, {str(ROOT / SCRIPT_MANIFEST): "{not json"})
-        self.assertEqual(1, run(capability))
-        self.assertIn("could not be read", console.errors[0])
+        run(capability)
+        self.assertIn("could not be read", console.asked_where[0])
+
+    def test_backing_out_of_the_question_leaves(self):
+        console = StubUi()
+        capability, _ = build(console, {})
+        self.assertEqual(CANCELLED, run(capability))
+
+    def test_a_folder_that_does_have_commands_gets_you_in(self):
+        elsewhere = Path("/other").resolve()
+        console = StubUi(folders=[str(elsewhere)])
+        capability, _ = build(console, {str(elsewhere / SCRIPT_MANIFEST): MANIFEST})
+        self.assertEqual(CANCELLED, run(capability))
+        # Asked once, then straight to the sections of the folder it was given.
+        self.assertEqual(1, len(console.asked_where))
+        self.assertEqual([["git", "windows"]], console.offered_sections)
+
+    def test_it_keeps_asking_rather_than_giving_up_on_the_second_wrong_folder(self):
+        good = Path("/good").resolve()
+        console = StubUi(folders=[str(Path("/bad").resolve()), str(good)])
+        capability, _ = build(console, {str(good / SCRIPT_MANIFEST): MANIFEST})
+        run(capability)
+        self.assertEqual(2, len(console.asked_where))
+        self.assertEqual([["git", "windows"]], console.offered_sections)
+
+
+class LauncherNamedProjectTest(unittest.TestCase):
+    """Who decides which project, and when the toolbox has to ask."""
+
+    def test_a_named_project_is_opened_without_a_question(self):
+        # `.\script.ps1` names one. Asking anyway would put a prompt in front of
+        # the common path for no information.
+        os.environ[PROJECT_ROOT] = str(ROOT)
+        self.addCleanup(os.environ.pop, PROJECT_ROOT, None)
+        console = StubUi()
+        capability, _ = build(console, {str(ROOT / SCRIPT_MANIFEST): MANIFEST})
+        run(capability)
+        self.assertEqual([], console.asked_where)
+
+    def test_with_no_project_named_it_asks_before_reading_anything(self):
+        # Started on its own, the toolbox is in whatever directory it happens to
+        # be in, and that is a guess rather than an answer.
+        os.environ.pop(PROJECT_ROOT, None)
+        console = StubUi(folders=[str(ROOT)])
+        capability, _ = build(console, {str(ROOT / SCRIPT_MANIFEST): MANIFEST})
+        run(capability)
+        self.assertEqual(1, len(console.asked_where))
+        self.assertEqual([["git", "windows"]], console.offered_sections)
 
 
 class WalkTest(unittest.TestCase):
@@ -263,12 +323,14 @@ class WalkTest(unittest.TestCase):
 REFRESHABLE = """
 {
   "version": "1.0.0+1", "name": "demo", "title": "Demo", "description": "A demo",
-  "rules": {"global": ["flag", "type", "required", "description", "default", "refresh"],
+  "rules": {"global": ["flag", "type", "required", "description", "default", "refresh",
+                       "choices"],
             "string": ["allowed_values"]},
   "config": {"git": {"pull-updates": {
     "description": "Pulls updates.",
     "args": [{"flag": "Branch", "type": "string", "default": "main",
               "allowed_values": ["main"],
+              "choices": "pwsh -File ${root}/script.ps1 choices git/pull-updates Branch",
               "refresh": {"label": "Update",
                           "command": "pwsh -File ${root}/script.ps1 refresh git/pull-updates Branch",
                           "preview": "pwsh -File ${root}/script.ps1 refresh git/pull-updates Branch -Preview"}}],
@@ -277,9 +339,6 @@ REFRESHABLE = """
 }
 """
 
-AFTER_REFRESH = REFRESHABLE.replace(
-    '"allowed_values": ["main"]', '"allowed_values": ["main", "development"]'
-)
 
 
 class CapturingRunner(FakeProcessRunner):
@@ -363,21 +422,21 @@ class RefreshTest(unittest.TestCase):
         self.assertTrue(any(str(ROOT) in token for token in command), command)
         self.assertEqual(ROOT, runner.captured[0][1])
 
-    def test_acting_re_reads_the_document_for_the_new_values(self):
-        # The refresh is what makes the fetched list current, so the values have
-        # to come back from the document rather than from what was on screen.
-        files = {}
+    def test_acting_reads_the_list_back_through_the_fetch(self):
+        # A declared refresh CHANGES something and reports what it did - it does
+        # not print the new list. That used to be re-read from the document, and
+        # then the document stopped carrying fetched values, so Update reported a
+        # success and left the dropdown exactly as it was.
+        runner = CapturingRunner(stdout="removed 1")
+        capability, option, _ = self.build(runner)
+        self.assertTrue(option.refresh.values_command)
 
-        def rewrite():
-            files[str(ROOT / SCRIPT_MANIFEST)] = AFTER_REFRESH
-
-        runner = CapturingRunner(stdout="removed 1", on_capture=rewrite)
-        capability, option, live = self.build(runner)
-        files = live
         outcome = self.refresh(capability, option, False)
-        self.assertEqual(("main", "development"), outcome.choices)
-        self.assertEqual("removed 1", outcome.message)
         self.assertTrue(outcome.ok)
+        # Two commands, in this order: act, then read back.
+        self.assertEqual(2, len(runner.captured))
+        self.assertNotIn("choices", " ".join(runner.captured[0][0]))
+        self.assertIn("choices", " ".join(runner.captured[1][0]))
 
     def test_exit_two_is_a_button_with_nothing_behind_it_not_a_failure(self):
         # The dispatcher answers 2 when the command declares no refresh for this
@@ -392,6 +451,22 @@ class RefreshTest(unittest.TestCase):
         self.assertFalse(outcome.ok)
         self.assertIn("no network", outcome.message)
         self.assertEqual((), outcome.choices)
+
+    def test_a_declared_refresh_reads_the_list_back_through_the_fetch(self):
+        # It CHANGES something and reports what it did; it does not print the new
+        # list. The values used to be re-read from the document, and then the
+        # document stopped carrying them - so Update reported a success and left
+        # the dropdown exactly as it was.
+        runner = CapturingRunner(stdout="removed 1")
+        capability, option, _ = self.build(runner)
+        self.assertTrue(option.refresh.values_command)
+
+        runner.stdout = "alpha\nbeta"
+        outcome = self.refresh(capability, option, False)
+        self.assertEqual(("alpha", "beta"), outcome.choices)
+        # Acting, then reading back: two commands, in that order.
+        self.assertEqual(2, len(runner.captured))
+        self.assertIn("choices", " ".join(runner.captured[1][0]))
 
     def test_an_option_with_no_refresh_declines(self):
         capability, option, _ = self.build(CapturingRunner())
