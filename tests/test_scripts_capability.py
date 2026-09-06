@@ -14,13 +14,14 @@ reaches the runner filled in - not that a subprocess happened.
 import asyncio
 import os
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from company_tui.capabilities.scripts import PROJECT_ROOT, ScriptsCapability
 from company_tui.domain.capability import CANCELLED
 from company_tui.domain.identity import SCRIPT_MANIFEST
 from company_tui.domain.options import defaults_for
+from company_tui.domain.script_config import action_options
 from company_tui.domain.ports import ProcessResult
 from company_tui.templates.services import PackServices
 
@@ -101,6 +102,7 @@ class StubUi:
         self.errors = []
         self.closed = []
         self.lines = []
+        self.refresh_runner = None
 
     def write(self, message=""):
         if message:
@@ -123,7 +125,8 @@ class StubUi:
         wanted = self._actions.pop(0)
         return next((a for a in actions if a.key == wanted), None)
 
-    async def open_run_panel(self, title, options, trail=()):
+    async def open_run_panel(self, title, options, trail=(), refresh=None):
+        self.refresh_runner = refresh
         if self._answers is None:
             return None
         values = dict(defaults_for(tuple(options)))
@@ -246,6 +249,143 @@ class WalkTest(unittest.TestCase):
         run(capability)
         self.assertTrue(console.closed[0][0])
 
+REFRESHABLE = """
+{
+  "version": "1.0.0+1", "name": "demo", "title": "Demo", "description": "A demo",
+  "rules": {"global": ["flag", "type", "required", "description", "default", "refresh"],
+            "string": ["allowed_values"]},
+  "config": {"git": {"pull-updates": {
+    "description": "Pulls updates.",
+    "args": [{"flag": "Branch", "type": "string", "default": "main",
+              "allowed_values": ["main"],
+              "refresh": {"label": "Update",
+                          "command": "pwsh -File ${root}/script.ps1 refresh git/pull-updates Branch",
+                          "preview": "pwsh -File ${root}/script.ps1 refresh git/pull-updates Branch -Preview"}}],
+    "command-after-success": ["pwsh -File ${root}/script.ps1 git/pull-updates"]
+  }}}
+}
+"""
+
+AFTER_REFRESH = REFRESHABLE.replace(
+    '"allowed_values": ["main"]', '"allowed_values": ["main", "development"]'
+)
+
+
+class CapturingRunner(FakeProcessRunner):
+    """Answers `capture`, and remembers what it was asked to run."""
+
+    def __init__(self, exit_code=0, stdout="", stderr="", on_capture=None):
+        super().__init__()
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.captured = []
+        self._on_capture = on_capture
+
+    async def capture(self, command, cwd=None):
+        self.captured.append((tuple(command), cwd))
+        if self._on_capture is not None:
+            self._on_capture()
+        return ProcessResult(
+            exit_code=self.exit_code, stdout=self.stdout, stderr=self.stderr
+        )
+
+
+class RefreshTest(unittest.TestCase):
+    """The Update button beside a fetched choice."""
+
+    def setUp(self):
+        os.environ[PROJECT_ROOT] = str(ROOT)
+        self.addCleanup(os.environ.pop, PROJECT_ROOT, None)
+
+    def build(self, runner, manifest=REFRESHABLE):
+        console = StubUi()
+        files = {str(ROOT / SCRIPT_MANIFEST): manifest}
+        file_system = FakeFileSystem(files)
+        services = PackServices(
+            console=console,
+            file_system=file_system,
+            process_runner=runner,
+            config=None,
+            finalizer=FakeFinalizer(),
+        )
+        capability = ScriptsCapability(console=console, services=services)
+        sections, problem = capability._read(ROOT)
+        self.assertEqual("", problem)
+        option = next(
+            o
+            for o in action_options(sections[0].actions[0], str(ROOT))
+            if o.key == "Branch"
+        )
+        return capability, option, files
+
+    def refresh(self, capability, option, preview):
+        return asyncio.run(capability._refresh(ROOT, option, preview))
+
+    def test_the_option_carries_both_commands(self):
+        _, option, _ = self.build(CapturingRunner())
+        self.assertIsNotNone(option.refresh)
+        self.assertTrue(option.refresh.is_usable)
+        self.assertEqual("Update", option.refresh.label)
+
+    def test_a_preview_runs_the_preview_command_and_reports_what_it_said(self):
+        runner = CapturingRunner(stdout="Delete 2 local branches?")
+        capability, option, _ = self.build(runner)
+        outcome = self.refresh(capability, option, True)
+        self.assertEqual("Delete 2 local branches?", outcome.message)
+        self.assertIn("-Preview", runner.captured[0][0])
+
+    def test_a_preview_offers_no_choices_because_it_changed_nothing(self):
+        # The panel must not repaint the field off the back of a dry run.
+        runner = CapturingRunner(stdout="Delete 2 local branches?")
+        capability, option, _ = self.build(runner)
+        self.assertEqual((), self.refresh(capability, option, True).choices)
+
+    def test_the_root_reference_is_filled_in(self):
+        runner = CapturingRunner()
+        capability, option, _ = self.build(runner)
+        self.refresh(capability, option, True)
+        command = runner.captured[0][0]
+        self.assertFalse(
+            any("${root}" in token for token in command), command
+        )
+        self.assertTrue(any(str(ROOT) in token for token in command), command)
+        self.assertEqual(ROOT, runner.captured[0][1])
+
+    def test_acting_re_reads_the_document_for_the_new_values(self):
+        # The refresh is what makes the fetched list current, so the values have
+        # to come back from the document rather than from what was on screen.
+        files = {}
+
+        def rewrite():
+            files[str(ROOT / SCRIPT_MANIFEST)] = AFTER_REFRESH
+
+        runner = CapturingRunner(stdout="removed 1", on_capture=rewrite)
+        capability, option, live = self.build(runner)
+        files = live
+        outcome = self.refresh(capability, option, False)
+        self.assertEqual(("main", "development"), outcome.choices)
+        self.assertEqual("removed 1", outcome.message)
+        self.assertTrue(outcome.ok)
+
+    def test_exit_two_is_a_button_with_nothing_behind_it_not_a_failure(self):
+        # The dispatcher answers 2 when the command declares no refresh for this
+        # parameter. Every fetched choice gets a button, so this is ordinary.
+        capability, option, _ = self.build(CapturingRunner(exit_code=2))
+        self.assertTrue(self.refresh(capability, option, True).ok)
+
+    def test_a_failing_refresh_is_reported_and_offers_nothing(self):
+        runner = CapturingRunner(exit_code=1, stderr="no network")
+        capability, option, _ = self.build(runner)
+        outcome = self.refresh(capability, option, False)
+        self.assertFalse(outcome.ok)
+        self.assertIn("no network", outcome.message)
+        self.assertEqual((), outcome.choices)
+
+    def test_an_option_with_no_refresh_declines(self):
+        capability, option, _ = self.build(CapturingRunner())
+        bare = replace(option, refresh=None)
+        self.assertFalse(self.refresh(capability, bare, True).ok)
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol, TypeVar
 
 from company_tui.domain.capability import Capability
-from company_tui.domain.options import Option, OptionValue
+from company_tui.domain.options import Option, OptionValue, RefreshOutcome
 from company_tui.domain.script_config import (
     ScriptAction,
     ScriptCatalogue,
@@ -14,6 +14,13 @@ from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOptio
 T = TypeVar("T")
 
 Workflow = Callable[[], Awaitable[None]]
+
+RefreshRunner = Callable[[Option, bool], Awaitable[RefreshOutcome]]
+"""Runs one option's refresh, previewing when the second argument is True.
+
+Supplied by whoever opened the panel rather than owned by it: acting means
+running a subprocess and re-reading a document, and a screen has neither. The
+preview/act split is what lets the panel ask before something is deleted."""
 
 
 class Ui(Protocol):
@@ -33,7 +40,11 @@ class Ui(Protocol):
         ...
 
     async def open_run_panel(
-        self, title: str, options: Sequence[Option], trail: Sequence[str] = ()
+        self,
+        title: str,
+        options: Sequence[Option],
+        trail: Sequence[str] = (),
+        refresh: "RefreshRunner | None" = None,
     ) -> dict[str, OptionValue] | None:
         """Collect every flag up front, then stay open while the work runs.
 

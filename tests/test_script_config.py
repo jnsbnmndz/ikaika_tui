@@ -1,9 +1,11 @@
 """What a script repository's document is read as.
 
-Focused on the three things a project's own config added, each of which is
-silent when it is wrong: a section grouping that decides the menu depth, an
-action description that decides what a card says, and a `path` type that decides
-whether a field is a picker or a blank box somebody has to remember the answer to.
+Focused on what a project's own config added, each of it silent when wrong: a
+section grouping that decides the menu depth, an action description that decides
+what a card says, and the control each declared type is offered as - a `path`
+that is a picker rather than a blank box, an `array` that is tick boxes rather
+than a dropdown accepting one where several were meant, and a `number` that is a
+numeric field rather than advice printed under a text one.
 """
 
 import unittest
@@ -140,6 +142,64 @@ class ArgumentTest(unittest.TestCase):
             "true", action.references_from({"Prune": True})["pull-updates.args.Prune"]
         )
 
+
+
+class MultiSelectTest(unittest.TestCase):
+    """Several of a known set is not one of a known set."""
+
+    DOC = {
+        "version": "1.0.0+1", "name": "d", "title": "D", "description": "d",
+        "rules": {"global": ["flag", "type", "required", "description", "default"],
+                  "array": ["allowed_values"], "number": ["min", "max"]},
+        "config": {"build": {"release": {"args": [
+            {"flag": "Targets", "type": "array", "default": "windows",
+             "allowed_values": ["windows", "android", "web"]},
+            {"flag": "Extra", "type": "array", "default": ""},
+            {"flag": "Port", "type": "number", "default": "8080", "min": 1024, "max": 65535},
+            {"flag": "Count", "type": "number", "default": "1"},
+        ]}}},
+    }
+
+    def options(self):
+        action = actions_from(self.DOC)[0]
+        return {o.key: o for o in action_options(action, "/proj")}
+
+    def test_an_array_with_a_declared_set_is_offered_as_tick_boxes(self):
+        # A dropdown here accepts one where two were meant, and says nothing
+        # about several being allowed.
+        option = self.options()["Targets"]
+        self.assertIs(OptionKind.MULTI, option.kind)
+        self.assertEqual(("windows", "android", "web"), option.choices)
+
+    def test_an_array_with_no_declared_set_stays_free_text(self):
+        # Nothing to tick. Comma-joined text is what a list without a vocabulary is.
+        self.assertIs(OptionKind.TEXT, self.options()["Extra"].kind)
+
+    def test_a_number_is_a_number_field_and_not_a_hint_on_a_text_one(self):
+        self.assertIs(OptionKind.NUMBER, self.options()["Port"].kind)
+
+    def test_a_declared_range_reaches_the_form(self):
+        option = self.options()["Port"]
+        self.assertEqual((1024, 65535), (option.minimum, option.maximum))
+        self.assertEqual("A number between 1024 and 65535.", option.help)
+
+    def test_a_range_is_said_in_whole_numbers(self):
+        # The document wrote 1024, not 1024.0, and the help is read by a person.
+        self.assertNotIn(".0", self.options()["Port"].help)
+
+    def test_a_number_with_no_range_still_says_what_it_is(self):
+        self.assertEqual("A number.", self.options()["Count"].help)
+
+    def test_a_comma_joined_answer_validates_against_the_declared_set(self):
+        # This is what the tick boxes produce, so it has to be what the rules accept.
+        argument = actions_from(self.DOC)[0].arguments[0]
+        self.assertEqual("", argument.reason_to_refuse("windows,android"))
+        self.assertIn("nintendo", argument.reason_to_refuse("windows,nintendo"))
+
+    def test_a_multi_answer_reaches_the_command_line_comma_joined(self):
+        action = actions_from(self.DOC)[0]
+        refs = action.references_from({"Targets": "windows,web"})
+        self.assertEqual("windows,web", refs["release.args.Targets"])
 
 if __name__ == "__main__":
     unittest.main()

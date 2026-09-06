@@ -43,6 +43,7 @@ from company_tui.presentation.screens import (
     RunsScreen,
     SplashScreen,
 )
+from company_tui.presentation.ui import RefreshRunner
 from company_tui.presentation.session import (
     CURRENT_SESSION,
     RunSession,
@@ -607,6 +608,7 @@ class TuiConsole(App):
         title: str,
         options: Sequence[Option],
         trail: Sequence[str] = (),
+        refresh: RefreshRunner | None = None,
     ) -> dict[str, OptionValue] | None:
         session = current_session()
         if session is None:
@@ -626,7 +628,9 @@ class TuiConsole(App):
         # A panel already open is one the user asked to keep for another run, so
         # it collects the next set of values rather than being replaced.
         if not session.panel_open:
-            session.load(title, options, trail or tuple(session.steps.values()))
+            session.load(
+                title, options, trail or tuple(session.steps.values()), refresh
+            )
         self._attach(session)
 
         values = await session.wait_for_values()

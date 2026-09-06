@@ -44,12 +44,14 @@ from textual.widgets import Button, Checkbox, Input, RichLog, Select, Static
 from company_tui.domain.options import (
     Option,
     OptionKind,
+    RefreshOutcome,
     OptionValue,
     missing_required,
 )
 from company_tui.presentation.branding import TOGGLE_ON
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, KeyHint
 from company_tui.presentation.icons import TERMINAL_ART
+from company_tui.presentation.screens import ConfirmScreen
 from company_tui.presentation.path_screen import PathScreen
 from company_tui.presentation.session import (
     MARKERS,
@@ -974,16 +976,64 @@ class RunScreen(Screen[None]):
                 continue
 
             widgets.append(Static(self._label(option), classes="field--label"))
-            if option.kind is OptionKind.CHOICE and option.choices:
+            if option.kind is OptionKind.MULTI and option.choices:
+                # One box per value, because the question is how many, not which.
+                # The answer is read back off the boxes rather than kept beside
+                # them: a value assembled from the widgets cannot disagree with
+                # what the user can see is ticked.
+                picked = self._picked(option)
+                for index, choice in enumerate(option.choices):
+                    widgets.append(
+                        Horizontal(
+                            FieldToggle(
+                                value=choice in picked,
+                                id=self._multi_id(option, index),
+                            ),
+                            Static(choice, classes="field--toggle-label"),
+                            classes="field--toggle",
+                        )
+                    )
+            elif option.kind is OptionKind.NUMBER:
                 widgets.append(
-                    Select(
-                        [(choice, choice) for choice in option.choices],
-                        value=str(self._session.values.get(option.key, ""))
-                        or option.choices[0],
-                        allow_blank=False,
+                    Input(
+                        value=str(self._session.values.get(option.key, "")),
+                        type="number",
                         id=widget_id,
+                        classes="field--input",
                     )
                 )
+            elif option.kind is OptionKind.CHOICE and option.choices:
+                # A value outside the option's own choices raises
+                # InvalidSelectValueError on mount and takes the app down, so it
+                # is clamped here as well as dropped in `session.load`. Two
+                # guards because there is no version of this worth crashing over.
+                stored = str(self._session.values.get(option.key, ""))
+                chooser = Select(
+                    [(choice, choice) for choice in option.choices],
+                    value=stored if stored in option.choices else option.choices[0],
+                    allow_blank=False,
+                    id=widget_id,
+                )
+                if option.refresh and self._session.refresh_runner is not None:
+                    # Only on a list the command FETCHED, which is what carrying a
+                    # refresh means. A declared set cannot change while the form is
+                    # open, so a button there would never do anything.
+                    widgets.append(
+                        Horizontal(
+                            chooser,
+                            Button(
+                                option.refresh.label,
+                                id=self._refresh_id(option),
+                                classes="field--browse",
+                                flat=True,
+                            ),
+                            Static("", id=self._refresh_status_id(option),
+                                   classes="field--help"),
+                            classes="field--path",
+                        )
+                    )
+                else:
+                    widgets.append(chooser)
             elif option.kind is OptionKind.PATH:
                 # Still typeable: browsing is the shortcut, not the only way in,
                 # and a path pasted from somewhere else should not need a walk
@@ -1030,6 +1080,143 @@ class RunScreen(Screen[None]):
     @staticmethod
     def _widget_id(option: Option) -> str:
         return f"field-{option.key}"
+
+    @staticmethod
+    def _refresh_id(option: Option) -> str:
+        return f"refresh-{option.key}"
+
+    @staticmethod
+    def _refresh_status_id(option: Option) -> str:
+        return f"refreshed-{option.key}"
+
+    async def _refresh(self, key: str) -> None:
+        """Re-fetch one choice's values, asking first if acting would change something.
+
+        The order is the whole point: preview, then confirm, then act. The refresh
+        behind this button may delete things - the branch list is brought up to
+        date by removing local branches whose remote is gone - and a button that
+        did that on a single click would be a button nobody could safely press.
+        An empty preview means there is nothing to ask about, so a refresh with
+        nothing to remove costs no dialog.
+        """
+        option = self._option_named(key)
+        runner = self._session.refresh_runner
+        if option is None or option.refresh is None or runner is None:
+            return
+
+        button = self._one(self._refresh_id(option), Button)
+        status = self._one(self._refresh_status_id(option), Static)
+        idle = str(button.label) if button else option.refresh.label
+        if button is not None:
+            button.disabled = True
+            button.label = "..."
+        if status is not None:
+            status.update("checking...")
+
+        try:
+            await self._ask_and_refresh(option, runner, status)
+        except Exception as error:  # noqa: BLE001 - reported, never swallowed
+            # The worker runs with exit_on_error=False, so an escape from here is
+            # silence: the button springs back and nothing says why. That is the
+            # same shape as the failure in docs/pitfalls.md 1.1.
+            if status is not None:
+                status.update(f"failed: {error}")
+        finally:
+            if button is not None:
+                button.disabled = False
+                button.label = idle
+
+    async def _ask_and_refresh(self, option: Option, runner, status) -> None:
+        """Preview, confirm if there is anything to confirm, then act."""
+        asked = await runner(option, True)
+        if asked.message:
+            # The first line is the question; the rest is what saying yes
+            # costs, which ConfirmScreen shows under it.
+            head, _, rest = asked.message.partition("\n")
+            detail = rest.strip()
+            agreed = await self.app.push_screen_wait(
+                ConfirmScreen(
+                    head,
+                    trail=self._session.title,
+                    detail=detail,
+                    confirm="UPDATE",
+                )
+            )
+            if not agreed:
+                if status is not None:
+                    status.update("left alone")
+                return
+        if status is not None:
+            status.update("fetching...")
+        outcome = await runner(option, False)
+        self._apply_refresh(option, outcome)
+        if status is not None:
+            status.update(
+                outcome.message
+                or f"{len(outcome.choices)} value(s)"
+                if outcome.ok
+                else outcome.message or "failed"
+            )
+
+    def _apply_refresh(self, option: Option, outcome: RefreshOutcome) -> None:
+        """Put the new values on the dropdown, keeping the selection if it survived.
+
+        An empty list is IGNORED. A refresh that failed, or that a network could
+        not answer, must not be the thing that empties a field the user had
+        already answered.
+        """
+        if not outcome.choices:
+            return
+        chooser = self._one(self._widget_id(option), Select)
+        if chooser is None:
+            return
+        was = str(chooser.value) if chooser.value is not Select.BLANK else ""
+        chooser.set_options((choice, choice) for choice in outcome.choices)
+        chooser.value = was if was in outcome.choices else outcome.choices[0]
+        self._store(self._widget_id(option), str(chooser.value))
+
+    def _one(self, widget_id: str, kind):
+        for widget in self.query(f"#{widget_id}"):
+            if isinstance(widget, kind):
+                return widget
+        return None
+
+    @staticmethod
+    def _multi_id(option: Option, index: int) -> str:
+        """One box's id. Indexed rather than named after the value it carries -
+        a choice read off a disk can hold anything, and a Textual id may not."""
+        return f"multi-{option.key}-{index}"
+
+    @staticmethod
+    def _multi_key(widget_id: str | None) -> str | None:
+        if not widget_id or not widget_id.startswith("multi-"):
+            return None
+        return widget_id.removeprefix("multi-").rsplit("-", 1)[0]
+
+    def _option_named(self, key: str) -> Option | None:
+        return next((o for o in self._session.options if o.key == key), None)
+
+    def _picked(self, option: Option) -> set[str]:
+        """What this option's stored answer says is ticked."""
+        stored = str(self._session.values.get(option.key, ""))
+        return {part.strip() for part in stored.split(",") if part.strip()}
+
+    def _multi_value(self, key: str) -> str:
+        """The ticked values, comma-joined, in the order the document declared.
+
+        Comma-joined rather than a list because that is what a command line
+        already reads a list in, and what the dispatcher on the other side
+        splits back out - one shape crossing the boundary instead of two.
+        """
+        option = self._option_named(key)
+        if option is None:
+            return ""
+        chosen = []
+        for index, choice in enumerate(option.choices):
+            for box in self.query(f"#{self._multi_id(option, index)}"):
+                if box.value:
+                    chosen.append(choice)
+        return ",".join(chosen)
 
     @staticmethod
     def _browse_id(option: Option) -> str:
@@ -1222,6 +1409,13 @@ class RunScreen(Screen[None]):
             self._store(event.input.id, event.value)
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        key = self._multi_key(event.checkbox.id)
+        if key is not None:
+            # Every box of this option, not just the one that moved: the answer
+            # is the set, and storing one box's value would store a boolean where
+            # a list belongs.
+            self._store(f"field-{key}", self._multi_value(key))
+            return
         self._store(event.checkbox.id, event.value)
 
     def on_select_changed(self, event: Select.Changed) -> None:
@@ -1288,6 +1482,14 @@ class RunScreen(Screen[None]):
             self._clear_terminal()
         elif event.button.id and event.button.id.startswith("browse-"):
             self._browse(event.button.id.removeprefix("browse-"))
+        elif event.button.id and event.button.id.startswith("refresh-"):
+            # As a worker, because it asks a question and runs a subprocess: a
+            # handler that awaited either would hold the interface while it did.
+            self.run_worker(
+                self._refresh(event.button.id.removeprefix("refresh-")),
+                group="refresh",
+                exit_on_error=False,
+            )
 
     # ---------------------------------------------------------- the terminal
 

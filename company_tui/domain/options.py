@@ -22,8 +22,59 @@ class OptionKind(Enum):
     it — the answer is somewhere on this machine, and remembering exactly where
     is not something to ask of whoever is filling the form in."""
 
+    MULTI = "multi"
+    """Several of a known set, offered as one tick box per value.
+
+    A single-select dropdown is the wrong control for an argument that takes
+    more than one: it silently accepts one where two were meant, and nothing
+    about it says several are allowed. The answer comes back comma-joined,
+    which is the form a command line already reads a list in."""
+
+    NUMBER = "number"
+    """A number, with the field refusing anything that is not one.
+
+    Its own kind rather than text with a hint, because the hint is advice and
+    this is the difference between a typo caught in the form and one that
+    reaches whatever the command hands its argument to."""
+
     INFO = "info"
     """Not an input: a value the workflow wants shown alongside the fields."""
+
+
+@dataclass(frozen=True, slots=True)
+class Refresh:
+    """An action that re-computes one option's choices.
+
+    A dropdown whose values were FETCHED can go out of date while a form is open,
+    and re-fetching them may mean changing something on the machine - the branch
+    list is brought up to date by deleting local branches whose remote is gone.
+
+    So there are two commands, not one. `preview` reports what acting would do
+    and does nothing; empty output means there is nothing to ask about. `command`
+    acts. A front end runs the first, confirms only if it said something, and
+    runs the second on a yes."""
+
+    label: str = "Update"
+    command: str = ""
+    preview: str = ""
+
+    @property
+    def is_usable(self) -> bool:
+        return bool(self.command)
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshOutcome:
+    """What running a refresh produced.
+
+    `choices` is the list as it stands AFTER acting, which is the whole point:
+    the values on screen were fetched, and the refresh is what makes them
+    current. Empty means the run failed or had nothing to offer, and the field
+    keeps what it already had rather than emptying itself."""
+
+    message: str = ""
+    choices: tuple[str, ...] = ()
+    ok: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +89,13 @@ class Option:
     template: str = ""
     """For INFO options: a format string over the other values, so a row can
     restate what the current input will actually do (`"./{name}"`)."""
+
+    minimum: float | None = None
+    maximum: float | None = None
+    """For NUMBER options: the range the document declared, if it declared one."""
+
+    refresh: "Refresh | None" = None
+    """For a CHOICE whose values were fetched: how to fetch them again."""
 
     @property
     def is_input(self) -> bool:

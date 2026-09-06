@@ -177,7 +177,10 @@ class PlainConsole:
         title: str,
         options: Sequence[Option],
         trail: Sequence[str] = (),
+        refresh: object = None,
     ) -> dict[str, OptionValue] | None:
+        # Accepted and ignored: an Update button needs a button. Asking the
+        # question one prompt at a time, there is nothing to keep current.
         """No two panes here — the same flags, asked one at a time."""
         self.write()
         self.write(" › ".join([*trail, title]) if trail else title)

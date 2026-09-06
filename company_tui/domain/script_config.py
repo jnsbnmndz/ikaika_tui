@@ -33,7 +33,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
-from company_tui.domain.options import Option, OptionKind, OptionValue
+from company_tui.domain.options import Option, OptionKind, OptionValue, Refresh
 
 ROOT = "root"
 """The reference standing for the project an action is aimed at."""
@@ -209,6 +209,7 @@ class ScriptArgument:
     required_keys: tuple[str, ...] = ()
     minimum: float | None = None
     maximum: float | None = None
+    refresh: Refresh | None = None
 
     @property
     def label(self) -> str:
@@ -624,6 +625,27 @@ def _argument_from(
         required_keys=tuple(str(item) for item in keys) if isinstance(keys, list) else (),
         minimum=_as_number(declared("min")),
         maximum=_as_number(declared("max")),
+        refresh=_refresh_from(declared("refresh")),
+    )
+
+
+def _refresh_from(declared: object) -> Refresh | None:
+    """The Update action an argument declares, or `None`.
+
+    Both commands are required. One without the other is either an action that
+    cannot be previewed - so it would act unasked - or a preview with nothing
+    behind it, and neither is worth drawing a button for.
+    """
+    if not isinstance(declared, dict):
+        return None
+    command = str(declared.get("command", "") or "")
+    preview = str(declared.get("preview", "") or "")
+    if not command or not preview:
+        return None
+    return Refresh(
+        label=str(declared.get("label", "") or "Update"),
+        command=command,
+        preview=preview,
     )
 
 
@@ -631,6 +653,30 @@ def _argument_from(
 
 
 def _option_for(argument: ScriptArgument) -> Option:
+    # Order matters. An ARRAY with a declared set is several of that set, and
+    # asking the `allowed_values` question first would hand it the single-select
+    # dropdown - which accepts one where two were meant and says nothing.
+    if argument.kind == ARRAY and argument.allowed_values:
+        return Option(
+            key=argument.flag,
+            label=argument.label,
+            kind=OptionKind.MULTI,
+            choices=argument.allowed_values,
+            default=argument.default,
+            required=argument.required,
+            help=argument.description or _shape_help(argument),
+        )
+    if argument.kind == NUMBER:
+        return Option(
+            key=argument.flag,
+            label=argument.label,
+            kind=OptionKind.NUMBER,
+            default=argument.default,
+            required=argument.required,
+            help=argument.description or _shape_help(argument),
+            minimum=argument.minimum,
+            maximum=argument.maximum,
+        )
     if argument.kind == PATH and not argument.allowed_values:
         return Option(
             key=argument.flag,
@@ -657,6 +703,7 @@ def _option_for(argument: ScriptArgument) -> Option:
             default=argument.default or argument.allowed_values[0],
             required=argument.required,
             help=argument.description,
+            refresh=argument.refresh,
         )
     return Option(
         key=argument.flag,
@@ -672,8 +719,22 @@ def _shape_help(argument: ScriptArgument) -> str:
     if argument.allowed_regex:
         return f"Must match {argument.allowed_regex}."
     if argument.kind == NUMBER:
+        low, high = argument.minimum, argument.maximum
+        if low is not None and high is not None:
+            return f"A number between {_plain(low)} and {_plain(high)}."
+        if low is not None:
+            return f"A number, {_plain(low)} or more."
+        if high is not None:
+            return f"A number, {_plain(high)} or less."
         return "A number."
+    if argument.kind == ARRAY and argument.allowed_values:
+        return "Choose as many as apply."
     return ""
+
+
+def _plain(value: float) -> str:
+    """`8080` rather than `8080.0` - the document wrote an integer."""
+    return str(int(value)) if float(value).is_integer() else str(value)
 
 
 def _as_format_template(text: str) -> str:

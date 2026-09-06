@@ -47,12 +47,16 @@ from company_tui.domain import json_document
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.identity import SCRIPT_MANIFEST
 from company_tui.domain.json_document import MalformedJson
+from company_tui.domain.options import Option, RefreshOutcome
 from company_tui.domain.script_config import (
+    ROOT,
     ScriptAction,
     ScriptSection,
     action_options,
     actions_from,
+    expand,
     sections_from,
+    split_command,
 )
 from company_tui.presentation.ui import Ui
 from company_tui.templates.scripts import run_action
@@ -108,7 +112,9 @@ class ScriptsCapability(Capability):
                     continue
 
             values = await self._console.open_run_panel(
-                action.name, action_options(action, str(root))
+                action.name,
+                action_options(action, str(root)),
+                refresh=lambda option, preview: self._refresh(root, option, preview),
             )
             if values is None:
                 action = None
@@ -132,6 +138,62 @@ class ScriptsCapability(Capability):
             ):
                 continue
             return result.exit_code
+
+    async def _refresh(
+        self, root: Path, option: Option, preview: bool
+    ) -> RefreshOutcome:
+        """Run one option's declared refresh, and read the choices back.
+
+        Two commands, and the caller decides which: `preview` reports what acting
+        would do and changes nothing, so the panel can ask before something is
+        deleted. Its output IS the question - empty means there is nothing to ask
+        about.
+
+        Acting is followed by re-reading the document, because that is where the
+        new values are. Whatever wrote the manifest is what re-computes it, so the
+        list the field ends up with is the one the next run would have been offered
+        anyway - there is no second answer to what the choices are.
+        """
+        if option.refresh is None:
+            return RefreshOutcome(ok=False)
+
+        raw = option.refresh.preview if preview else option.refresh.command
+        command = tuple(
+            expand(token, {ROOT: str(root)}) for token in split_command(raw)
+        )
+        if not command:
+            return RefreshOutcome(message="that refresh is not a command", ok=False)
+
+        result = await self._services.process_runner.capture(command, root)
+        said = (result.stdout or "").strip() or (result.stderr or "").strip()
+
+        # Exit 2 is the dispatcher saying the command declares no refresh for this
+        # parameter, which is not a failure - it is a button with nothing behind it.
+        if result.exit_code not in (0, 2):
+            return RefreshOutcome(message=said or "the refresh failed", ok=False)
+        if preview:
+            return RefreshOutcome(message=said)
+
+        sections, problem = self._read(root)
+        if problem:
+            return RefreshOutcome(message=said or problem, ok=False)
+        return RefreshOutcome(message=said, choices=self._choices(sections, option))
+
+    @staticmethod
+    def _choices(
+        sections: tuple[ScriptSection, ...], option: Option
+    ) -> tuple[str, ...]:
+        """The values the freshly-read document now offers for this option.
+
+        Matched by flag across every action, because the document was re-read from
+        scratch and holds equal objects rather than the same ones.
+        """
+        for section in sections:
+            for action in section.actions:
+                for argument in action.arguments:
+                    if argument.flag == option.key and argument.allowed_values:
+                        return argument.allowed_values
+        return ()
 
     def _read(self, root: Path) -> tuple[tuple[ScriptSection, ...], str]:
         """This project's declared actions, or why there are none.
