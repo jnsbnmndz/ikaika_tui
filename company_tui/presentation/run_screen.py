@@ -125,6 +125,10 @@ class RunActionButton(Button):
         return state.upper()
 
 
+PREVIEW_ID = "will-run"
+"""The row showing the command line the current answers add up to."""
+
+
 class FieldToggle(Checkbox):
     """A checkbox that is only the box.
 
@@ -949,6 +953,11 @@ class RunScreen(Screen[None]):
         widgets: list[Widget] = [
             Static(self._session.title.upper(), classes="section--title")
         ]
+        # What the command is for, under its name and above its fields - the
+        # subheading the desktop form has always carried. Read from the document,
+        # so it cannot drift from the summary the menu showed a moment ago.
+        if self._session.subtitle:
+            widgets.append(Static(self._session.subtitle, classes="field--help"))
         for option in self._session.options:
             widget_id = self._widget_id(option)
 
@@ -1003,15 +1012,22 @@ class RunScreen(Screen[None]):
                     )
                 )
             elif option.kind is OptionKind.CHOICE and option.choices:
-                # A value outside the option's own choices raises
-                # InvalidSelectValueError on mount and takes the app down, so it
-                # is clamped here as well as dropped in `session.load`. Two
-                # guards because there is no version of this worth crashing over.
+                # Row zero NAMES the default and binds nothing, which is what
+                # makes an untouched form run the command as if no argument had
+                # been passed. A dropdown resting on a blank line lists what is
+                # possible while saying nothing about what will happen, so the
+                # row carries the default's name - as a label, never as a value.
+                #
+                # A stored value outside the option's own choices would raise
+                # InvalidSelectValueError on mount and take the app down, so it
+                # falls back to that row here as well as being dropped in
+                # `session.load`. Two guards; nothing here is worth crashing over.
                 stored = str(self._session.values.get(option.key, ""))
                 chooser = Select(
                     [(choice, choice) for choice in option.choices],
-                    value=stored if stored in option.choices else option.choices[0],
-                    allow_blank=False,
+                    value=stored if stored in option.choices else Select.NULL,
+                    allow_blank=True,
+                    prompt=f"(default: {option.default})" if option.default else "",
                     id=widget_id,
                 )
                 if option.refresh and self._session.refresh_runner is not None:
@@ -1034,7 +1050,7 @@ class RunScreen(Screen[None]):
                     )
                 else:
                     widgets.append(chooser)
-            elif option.kind is OptionKind.PATH:
+            elif option.kind in (OptionKind.PATH, OptionKind.FILE):
                 # Still typeable: browsing is the shortcut, not the only way in,
                 # and a path pasted from somewhere else should not need a walk
                 # through a tree to be accepted.
@@ -1064,6 +1080,19 @@ class RunScreen(Screen[None]):
                 )
             if option.help:
                 widgets.append(Static(option.help, classes="field--help"))
+
+        # What the run will actually be, kept current as the form is filled in.
+        # The form and the command line are the same thing, and this is the row
+        # that says so: anything picked here once can be typed next time.
+        if self._session.preview_runner is not None:
+            widgets.append(Static("Will run", classes="field--label"))
+            widgets.append(
+                Static(
+                    self._session.command_preview(),
+                    id=PREVIEW_ID,
+                    classes="field--info",
+                )
+            )
         return widgets
 
     @staticmethod
@@ -1170,7 +1199,7 @@ class RunScreen(Screen[None]):
         chooser = self._one(self._widget_id(option), Select)
         if chooser is None:
             return
-        was = str(chooser.value) if chooser.value is not Select.BLANK else ""
+        was = str(chooser.value) if chooser.value is not Select.NULL else ""
         chooser.set_options((choice, choice) for choice in outcome.choices)
         chooser.value = was if was in outcome.choices else outcome.choices[0]
         self._store(self._widget_id(option), str(chooser.value))
@@ -1419,7 +1448,16 @@ class RunScreen(Screen[None]):
         self._store(event.checkbox.id, event.value)
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        self._store(event.select.id, str(event.value))
+        # The blank row is "leave it out", so it stores nothing rather than the
+        # words on it - reading that row back would pass "(default: development)"
+        # as a branch name.
+        #
+        # Select.NULL, NOT Select.BLANK. In this Textual, BLANK is literally
+        # `False`, so `is Select.BLANK` never matches an unselected Select and the
+        # label would have been stored as the answer. NULL is the sentinel the
+        # widget actually holds and the one the constructor accepts.
+        blank = event.value is Select.NULL
+        self._store(event.select.id, "" if blank else str(event.value))
 
     def _store(self, widget_id: str | None, value: OptionValue) -> None:
         if not widget_id or not widget_id.startswith("field-"):
@@ -1433,6 +1471,8 @@ class RunScreen(Screen[None]):
             if option.kind is OptionKind.INFO and option.template:
                 for row in self.query(f"#{self._widget_id(option)}"):
                     row.update(option.render(self._session.values))
+        for row in self.query(f"#{PREVIEW_ID}"):
+            row.update(self._session.command_preview())
 
     # -------------------------------------------------------------------- run
 
@@ -1543,13 +1583,26 @@ class RunScreen(Screen[None]):
         restate it exactly as if it had been typed.
         """
         field = self.query_one(f"#field-{key}", Input)
+        option = self._option_named(key)
+        # A file field browses for a file. Offering a directory tree with the files
+        # hidden to somebody looking for a manifest is offering them nothing - which
+        # is the difference the desktop form draws with "Choose file..." against
+        # "Choose folder...".
+        wants_file = option is not None and option.kind is OptionKind.FILE
 
         def chosen(path: str | None) -> None:
             if path:
                 field.value = path
             field.focus()
 
-        self.app.push_screen(PathScreen(field.value, self._session.label), chosen)
+        self.app.push_screen(
+            PathScreen(
+                field.value,
+                "Choose a file" if wants_file else "Choose a directory",
+                files=wants_file,
+            ),
+            chosen,
+        )
 
     def action_primary(self) -> None:
         """Whatever the one button says right now."""

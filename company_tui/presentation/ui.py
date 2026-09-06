@@ -45,6 +45,8 @@ class Ui(Protocol):
         options: Sequence[Option],
         trail: Sequence[str] = (),
         refresh: "RefreshRunner | None" = None,
+        preview: "Callable[[dict[str, OptionValue]], str] | None" = None,
+        subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
         """Collect every flag up front, then stay open while the work runs.
 

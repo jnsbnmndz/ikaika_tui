@@ -22,6 +22,10 @@ class OptionKind(Enum):
     it — the answer is somewhere on this machine, and remembering exactly where
     is not something to ask of whoever is filling the form in."""
 
+    FILE = "file"
+    """A file. PATH's other half, and separate because the picker is: browsing
+    for a file in a directory tree means never finding one."""
+
     MULTI = "multi"
     """Several of a known set, offered as one tick box per value.
 
@@ -57,6 +61,22 @@ class Refresh:
     label: str = "Update"
     command: str = ""
     preview: str = ""
+
+    lists_values: bool = False
+    """Whether `command` prints the new values, or a sentence about what it did.
+
+    A plain re-fetch of a list prints the list; a declared refresh acts on the
+    machine and reports, and the values are read back out of the document
+    afterwards. Told apart explicitly rather than by whether `preview` is empty,
+    because that would make one behaviour the side effect of another."""
+
+    @property
+    def asks_first(self) -> bool:
+        """Whether acting could change something worth confirming.
+
+        A re-fetch of a list changes nothing, so there is nothing to ask about
+        and no dialog to put in the way of a button press."""
+        return bool(self.preview)
 
     @property
     def is_usable(self) -> bool:

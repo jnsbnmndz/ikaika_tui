@@ -609,6 +609,8 @@ class TuiConsole(App):
         options: Sequence[Option],
         trail: Sequence[str] = (),
         refresh: RefreshRunner | None = None,
+        preview: object = None,
+        subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
         session = current_session()
         if session is None:
@@ -629,7 +631,12 @@ class TuiConsole(App):
         # it collects the next set of values rather than being replaced.
         if not session.panel_open:
             session.load(
-                title, options, trail or tuple(session.steps.values()), refresh
+                title,
+                options,
+                trail or tuple(session.steps.values()),
+                refresh,
+                preview,
+                subtitle,
             )
         self._attach(session)
 

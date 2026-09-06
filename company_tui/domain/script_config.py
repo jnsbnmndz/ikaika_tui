@@ -41,6 +41,7 @@ ROOT = "root"
 ERROR = "error"
 
 STRING = "string"
+FILE = "file"
 NUMBER = "number"
 BOOLEAN = "boolean"
 ARRAY = "array"
@@ -58,6 +59,7 @@ DEFAULT_RULES: Mapping[str, tuple[str, ...]] = {
     GLOBAL_RULES: ("flag", "type", "required", "description", "default"),
     STRING: ("allowed_regex",),
     PATH: ("allowed_regex",),
+    FILE: ("allowed_regex",),
     ARRAY: ("allowed_values",),
     OBJECT: ("required_keys",),
     NUMBER: ("min", "max"),
@@ -210,10 +212,25 @@ class ScriptArgument:
     minimum: float | None = None
     maximum: float | None = None
     refresh: Refresh | None = None
+    declared_label: str = ""
+    """What the document calls this argument, if it said.
+
+    The WPF form prints `-Branch   [String]` - the flag as it would be typed and
+    the type it expects - and a document written by that toolkit says so. Anything
+    else falls through to `humanise`, which is right for a manifest whose flags are
+    written for people (`apiEndpoint`) rather than for a shell."""
+
+    choices_command: str = ""
+    """How to ask the command for this argument's real values.
+
+    Carried instead of `allowed_values` wherever the list was fetched rather than
+    declared: a fetched list is local state - a branch list is this machine's -
+    and a committed document has no business holding it. The values are asked for
+    when the form opens, which is when the WPF dialog asks for them too."""
 
     @property
     def label(self) -> str:
-        return humanise(self.flag)
+        return self.declared_label or humanise(self.flag)
 
     def reason_to_refuse(self, value: OptionValue) -> str:
         """Why this value cannot be used, or `""` if it can.
@@ -291,6 +308,13 @@ class ScriptAction:
     path: str = ""
     template: str = ""
     filename: str = ""
+    skipped: tuple[str, ...] = ()
+    """Arguments the document refused to describe, named but never offered.
+
+    A credential has no field here and no default; what the name buys is the
+    sentence saying so, because a parameter silently absent reads as one that does
+    not exist rather than one that is deliberately not asked for."""
+
     description: str = ""
     """What the repository says this action is for, in its own words.
 
@@ -453,6 +477,7 @@ ROOT_OPTION = Option(
 )
 
 TARGET_KEY = "target"
+SKIPPED_KEY = "skipped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +524,19 @@ def action_options(action: ScriptAction, project_root: str = ".") -> tuple[Optio
         for argument in action.arguments
         if argument.flag != ROOT
     ]
+    if action.skipped:
+        options.append(
+            Option(
+                key=SKIPPED_KEY,
+                label="Not shown here",
+                kind=OptionKind.INFO,
+                default=(
+                    ", ".join(f"-{name}" for name in action.skipped)
+                    + " - a form will not collect a credential. Pass it on the "
+                    "command line, or put it in the environment."
+                ),
+            )
+        )
     if action.path:
         options.append(
             Option(
@@ -510,6 +548,33 @@ def action_options(action: ScriptAction, project_root: str = ".") -> tuple[Optio
             )
         )
     return tuple(options)
+
+
+def command_preview(action: ScriptAction, values: Mapping[str, OptionValue]) -> str:
+    """What the run will actually be, in the words somebody could type instead.
+
+    The same rules the run itself uses, because a preview that disagrees with the
+    run is worse than none: an unanswered field is OMITTED rather than passed as an
+    empty string, a switch appears as a bare flag only when it is on, and a
+    multi-select is comma-joined.
+
+    Mirrors `Get-ParamCommandPreview` in the WPF form, which is what makes the two
+    front ends say the same thing about the same answers.
+    """
+    name = f"{action.section}/{action.key}" if action.key else action.section
+    parts = [f".{chr(92)}script.ps1 {name}"]
+    for argument in action.arguments:
+        value = values.get(argument.flag, "")
+        if argument.kind == BOOLEAN:
+            if _as_flag(value):
+                parts.append(f"-{argument.flag}")
+            continue
+        text = _as_text(value).strip()
+        if not text:
+            continue
+        shown = f"'{text}'" if " " in text else text
+        parts.append(f"-{argument.flag} {shown}")
+    return " ".join(parts)
 
 
 def after_clone_from(document: Mapping[str, Any]) -> tuple[str, ...]:
@@ -590,6 +655,9 @@ def _action_from(
         template=str(entry.get("template", "")),
         filename=str(entry.get("filename", "")),
         description=str(entry.get("description", "")),
+        skipped=tuple(
+            str(name) for name in entry.get("skipped", []) if isinstance(name, str)
+        ),
         messages={
             name: str(value)
             for name, value in entry.items()
@@ -626,6 +694,8 @@ def _argument_from(
         minimum=_as_number(declared("min")),
         maximum=_as_number(declared("max")),
         refresh=_refresh_from(declared("refresh")),
+        choices_command=str(declared("choices", "") or ""),
+        declared_label=str(declared("label", "") or ""),
     )
 
 
@@ -653,6 +723,7 @@ def _refresh_from(declared: object) -> Refresh | None:
 
 
 def _option_for(argument: ScriptArgument) -> Option:
+    refresh = _refresh_for(argument)
     # Order matters. An ARRAY with a declared set is several of that set, and
     # asking the `allowed_values` question first would hand it the single-select
     # dropdown - which accepts one where two were meant and says nothing.
@@ -665,6 +736,7 @@ def _option_for(argument: ScriptArgument) -> Option:
             default=argument.default,
             required=argument.required,
             help=argument.description or _shape_help(argument),
+            refresh=refresh,
         )
     if argument.kind == NUMBER:
         return Option(
@@ -677,11 +749,11 @@ def _option_for(argument: ScriptArgument) -> Option:
             minimum=argument.minimum,
             maximum=argument.maximum,
         )
-    if argument.kind == PATH and not argument.allowed_values:
+    if argument.kind in (PATH, FILE) and not argument.allowed_values:
         return Option(
             key=argument.flag,
             label=argument.label,
-            kind=OptionKind.PATH,
+            kind=OptionKind.PATH if argument.kind == PATH else OptionKind.FILE,
             default=argument.default,
             required=argument.required,
             help=argument.description,
@@ -703,7 +775,7 @@ def _option_for(argument: ScriptArgument) -> Option:
             default=argument.default or argument.allowed_values[0],
             required=argument.required,
             help=argument.description,
-            refresh=argument.refresh,
+            refresh=refresh,
         )
     return Option(
         key=argument.flag,
@@ -713,6 +785,28 @@ def _option_for(argument: ScriptArgument) -> Option:
         required=argument.required,
         help=argument.description or _shape_help(argument),
     )
+
+
+def _refresh_for(argument: ScriptArgument) -> Refresh | None:
+    """How to bring this argument's list up to date, if there is a way.
+
+    A command that DECLARES a refresh wins: it can do more than re-read - the
+    branch list is brought up to date by deleting branches whose remote is gone,
+    and the tag list by fetching from the remote.
+
+    Otherwise, any list that was fetched can simply be fetched again. The desktop
+    form does not offer that - its Update button exists only where a refresh
+    provider does - but here the fetch is a declared command, so there is no
+    reason a list read when the form opened cannot be read again. It changes
+    nothing, so it never asks.
+    """
+    if argument.refresh is not None:
+        return argument.refresh
+    if argument.choices_command:
+        return Refresh(
+            label="Update", command=argument.choices_command, lists_values=True
+        )
+    return None
 
 
 def _shape_help(argument: ScriptArgument) -> str:
@@ -800,6 +894,7 @@ __all__: Sequence[str] = (
     "INVALID_ARGS",
     "INVALID_PATH",
     "INVALID_TEMPLATE",
+    "FILE",
     "OVERWRITE",
     "PATH",
     "ROOT",
@@ -810,6 +905,7 @@ __all__: Sequence[str] = (
     "ScriptSection",
     "ScriptUpdate",
     "action_options",
+    "command_preview",
     "actions_from",
     "sections_from",
     "after_clone_from",

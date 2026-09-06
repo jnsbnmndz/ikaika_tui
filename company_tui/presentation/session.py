@@ -182,6 +182,13 @@ class RunSession:
         """How to re-fetch a fetched choice on this session's form, if the
         workflow that opened it supplied a way. Set by `load`."""
 
+        self.subtitle = ""
+        """One line saying what the command is for, shown above its fields."""
+
+        self.preview_runner: object = None
+        """What the current answers add up to, as a command line. Supplied by
+        whoever opened the panel, because only they know what running it means."""
+
         # Choice made at each step of this session's own navigation, and the
         # breadcrumb the panel and the dialogs are titled with. It keeps
         # changing as the workflow walks; `scope` does not.
@@ -306,6 +313,8 @@ class RunSession:
         options: Sequence[Option],
         trail: Sequence[str] = (),
         refresh: object = None,
+        preview: object = None,
+        subtitle: str = "",
     ) -> None:
         """Set the form up for a run of this session.
 
@@ -314,16 +323,27 @@ class RunSession:
         different workflows, and an Update button has to run the refresh
         belonging to the form it is drawn on."""
         self.refresh_runner = refresh
+        self.preview_runner = preview
+        self.subtitle = subtitle
         answered = self.values
         self.title = title
         self.options = tuple(options)
         self.trail = tuple(trail)
         self.values = defaults_for(self.options)
         for option in self.options:
-            # A choice with no default still has a value: whatever the list
-            # opens on. Settled here so it is true before any widget exists.
-            if option.kind is OptionKind.CHOICE and option.choices:
-                self.values[option.key] = str(option.default) or option.choices[0]
+            # A dropdown opens on the row that NAMES its default and binds nothing,
+            # and a checklist opens with nothing ticked. Both mean "leave this
+            # argument out", so an untouched form runs the command exactly as
+            # typing its name with no arguments would.
+            #
+            # Binding the default explicitly looks identical and is not.
+            # flutter/build-release refuses a run outright when an argument that
+            # does not apply to the chosen platform is bound, and its remembered
+            # choices key off which arguments were bound at all - so a form that
+            # always passed -Platform would defeat the memory it exists to use.
+            # Settled here so it is true before any widget exists.
+            if option.kind in (OptionKind.CHOICE, OptionKind.MULTI) and option.choices:
+                self.values[option.key] = ""
         # What this tab was answered with last time. Coming back to a run that
         # failed on one field should not mean typing the other five again, and
         # the form is the record of what was asked for either way.
@@ -350,6 +370,12 @@ class RunSession:
         # sent the workflow back to the menu it had just come from.
         self._rearm()
         self._open_prompt()
+
+    def command_preview(self) -> str:
+        """The command line these answers add up to, or `''` if nobody said how."""
+        if self.preview_runner is None:
+            return ""
+        return str(self.preview_runner(dict(self.values)))
 
     def _surviving(self, key: str, value: OptionValue) -> OptionValue:
         """`value` with anything the option no longer offers taken out.

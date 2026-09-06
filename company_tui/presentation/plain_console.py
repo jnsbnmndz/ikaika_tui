@@ -178,6 +178,8 @@ class PlainConsole:
         options: Sequence[Option],
         trail: Sequence[str] = (),
         refresh: object = None,
+        preview: object = None,
+        subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
         # Accepted and ignored: an Update button needs a button. Asking the
         # question one prompt at a time, there is nothing to keep current.

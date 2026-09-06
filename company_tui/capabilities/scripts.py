@@ -40,7 +40,9 @@ which every action here is — skips the staging half and simply runs what the c
 named.
 """
 
+import asyncio
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from company_tui.domain import json_document
@@ -54,10 +56,13 @@ from company_tui.domain.script_config import (
     ScriptSection,
     action_options,
     actions_from,
+    command_preview,
     expand,
     sections_from,
     split_command,
 )
+
+FETCHING = "Reading what {name} can be given..."
 from company_tui.presentation.ui import Ui
 from company_tui.templates.scripts import run_action
 from company_tui.templates.services import PackServices
@@ -111,10 +116,15 @@ class ScriptsCapability(Capability):
                     section = None
                     continue
 
+            filled = await self._console.working(
+                FETCHING.format(name=action.name), self._with_choices(root, action)
+            )
             values = await self._console.open_run_panel(
-                action.name,
-                action_options(action, str(root)),
+                filled.name,
+                action_options(filled, str(root)),
                 refresh=lambda option, preview: self._refresh(root, option, preview),
+                preview=lambda values, chosen=filled: command_preview(chosen, values),
+                subtitle=filled.summary,
             )
             if values is None:
                 action = None
@@ -157,6 +167,17 @@ class ScriptsCapability(Capability):
         if option.refresh is None:
             return RefreshOutcome(ok=False)
 
+        if preview and not option.refresh.asks_first:
+            # Nothing this one does is worth a dialog, so there is nothing to ask.
+            return RefreshOutcome()
+
+        if option.refresh.lists_values and not preview:
+            # Its output IS the list, so there is no document to re-read.
+            values = await self._ask_for_choices(root, option.refresh.command)
+            if not values:
+                return RefreshOutcome(message="nothing came back", ok=False)
+            return RefreshOutcome(message=f"{len(values)} value(s)", choices=values)
+
         raw = option.refresh.preview if preview else option.refresh.command
         command = tuple(
             expand(token, {ROOT: str(root)}) for token in split_command(raw)
@@ -194,6 +215,57 @@ class ScriptsCapability(Capability):
                     if argument.flag == option.key and argument.allowed_values:
                         return argument.allowed_values
         return ()
+
+    async def _with_choices(self, root: Path, action: ScriptAction) -> ScriptAction:
+        """`action` with every fetched argument's real values filled in.
+
+        Asked when the form opens rather than read out of the document, because a
+        fetched list is local state and the document is committed. This is also
+        when the WPF dialog asks - it calls the provider as it builds the row - so
+        the two front ends offer the same values at the same moment.
+
+        Every argument is asked at once: each is a separate interpreter start, and
+        a form with five of them would otherwise open a second later than it needs
+        to. A fetch that answers nothing leaves the argument without a list, which
+        is a plain text box - exactly what the desktop form falls back to.
+        """
+        wanted = [a for a in action.arguments if a.choices_command and not a.allowed_values]
+        if not wanted:
+            return action
+
+        fetched = await asyncio.gather(
+            *(self._ask_for_choices(root, a.choices_command) for a in wanted)
+        )
+        answers = dict(zip((a.flag for a in wanted), fetched))
+        return replace(
+            action,
+            arguments=tuple(
+                replace(a, allowed_values=answers[a.flag])
+                if answers.get(a.flag)
+                else a
+                for a in action.arguments
+            ),
+        )
+
+    async def _ask_for_choices(self, root: Path, raw: str) -> tuple[str, ...]:
+        """One argument's values, or `()` if the command could not offer any.
+
+        Silence rather than an error: a list that cannot be fetched is a field
+        somebody types into, and a workflow that refused to open its own form over
+        an offline `git` would be worse than one that asks for the value.
+        """
+        command = tuple(expand(token, {ROOT: str(root)}) for token in split_command(raw))
+        if not command:
+            return ()
+        try:
+            result = await self._services.process_runner.capture(command, root)
+        except OSError:
+            return ()
+        if result.exit_code != 0:
+            return ()
+        return tuple(
+            line.strip() for line in (result.stdout or "").splitlines() if line.strip()
+        )
 
     def _read(self, root: Path) -> tuple[tuple[ScriptSection, ...], str]:
         """This project's declared actions, or why there are none.

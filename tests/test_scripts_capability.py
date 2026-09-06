@@ -103,6 +103,9 @@ class StubUi:
         self.closed = []
         self.lines = []
         self.refresh_runner = None
+        self.preview_runner = None
+        self.waited_for = []
+        self.subtitle = None
 
     def write(self, message=""):
         if message:
@@ -125,13 +128,21 @@ class StubUi:
         wanted = self._actions.pop(0)
         return next((a for a in actions if a.key == wanted), None)
 
-    async def open_run_panel(self, title, options, trail=(), refresh=None):
+    async def open_run_panel(
+        self, title, options, trail=(), refresh=None, preview=None, subtitle=""
+    ):
         self.refresh_runner = refresh
+        self.preview_runner = preview
+        self.subtitle = subtitle
         if self._answers is None:
             return None
         values = dict(defaults_for(tuple(options)))
         values.update(self._answers)
         return values
+
+    async def working(self, label, work):
+        self.waited_for.append(label)
+        return await work
 
     async def run_in_panel(self, work):
         return await work
