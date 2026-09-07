@@ -32,7 +32,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 
-from company_tui.domain import json_document
+from company_tui.domain import json_document, naming
 from company_tui.domain.config import ConfigScope, TemplateSource
 from company_tui.domain.identity import SCRIPT_MANIFEST, NotAnIkaikaProject
 from company_tui.domain.json_document import MalformedJson
@@ -479,7 +479,7 @@ def _clone_command(source: TemplateSource, root: Path) -> tuple[str, ...]:
 def _manifest_at(
     root: Path, services: PackServices
 ) -> tuple[dict | None, str]:
-    manifest = root / SCRIPT_MANIFEST
+    manifest = naming.manifest_path(root)
     if not services.file_system.exists(manifest):
         return None, (
             f"No {SCRIPT_MANIFEST} in {root} — a script repository is one that "

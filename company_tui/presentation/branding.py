@@ -2,9 +2,11 @@ from pathlib import Path
 
 from textual.theme import Theme
 
-APP_NAME = "IKAIKA"
-APP_TAGLINE = "Developer Toolbox"
-APP_SIGNATURE = "IKAIKA Engineering"
+from company_tui.domain import naming
+
+APP_NAME = naming.APP_NAME
+APP_TAGLINE = naming.APP_TAGLINE
+APP_SIGNATURE = naming.APP_SIGNATURE
 
 VERSION_FILE = Path(__file__).resolve().parents[2] / "VERSION"
 

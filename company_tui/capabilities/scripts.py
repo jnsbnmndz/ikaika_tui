@@ -47,6 +47,7 @@ from pathlib import Path
 
 from company_tui.domain import json_document
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
+from company_tui.domain import naming
 from company_tui.domain.identity import SCRIPT_MANIFEST
 from company_tui.domain.json_document import MalformedJson
 from company_tui.domain.options import Option, RefreshOutcome
@@ -67,15 +68,19 @@ from company_tui.presentation.ui import Ui
 from company_tui.templates.scripts import run_action
 from company_tui.templates.services import PackServices
 
-PROJECT_ROOT = "IKAIKA_PROJECT_ROOT"
-"""How a launcher says which project this session is being run for."""
+PROJECT_ROOT = naming.PROJECT_ROOT_VAR
+"""How a launcher says which project this session is being run for.
+
+Read through `naming.project_root_from_env`, which also accepts the variable's
+previous name - the launcher that sets it lives in another repository and moves
+on its own schedule."""
 
 STOPPED_MESSAGE = "Stopped before it finished."
 FAILED = 1
 
 
 def project_root() -> Path:
-    declared = os.environ.get(PROJECT_ROOT, "").strip()
+    declared = naming.project_root_from_env()
     return Path(declared).expanduser().resolve() if declared else Path.cwd().resolve()
 
 
@@ -98,7 +103,7 @@ class ScriptsCapability(Capability):
         # names one, so the common path opens straight on its commands; started on
         # its own, the toolbox is in whatever directory it happens to be in, and
         # that is a guess rather than an answer.
-        if not os.environ.get(PROJECT_ROOT, "").strip():
+        if not naming.project_root_from_env():
             root = await self._ask_where(root, "Which project's commands?")
             if root is None:
                 return CANCELLED
@@ -305,7 +310,9 @@ class ScriptsCapability(Capability):
         stays testable without a directory on disk — the same rule every other
         workflow here follows.
         """
-        manifest = root / SCRIPT_MANIFEST
+        # Either filename counts: a project written before the rename is still a
+        # project, and the toolkit on this machine may be a version behind.
+        manifest = naming.manifest_path(root)
         if not self._services.file_system.exists(manifest):
             return (), (
                 f"{root.name} does not declare any commands: there is no "

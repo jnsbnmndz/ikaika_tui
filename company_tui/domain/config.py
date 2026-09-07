@@ -13,9 +13,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-DEFAULT_BUNDLE_PREFIX = "com.ikaika"
+from company_tui.domain import naming
+
+DEFAULT_BUNDLE_PREFIX = naming.BUNDLE_PREFIX
 DEFAULT_WORKSPACE_ROOT = "."
-DEFAULT_SCRIPTS_ROOT = "~/.ikaika/scripts"
+DEFAULT_SCRIPTS_ROOT = f"~/{naming.STORE_DIR_NAME}/scripts"
 """Where cloned script repositories are kept, for every project on this machine.
 
 One copy per repository rather than one per project: a script repository is the

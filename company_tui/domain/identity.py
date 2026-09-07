@@ -1,9 +1,12 @@
 """What a project is called, and the one file that records it.
 
-Every project this toolbox produces carries `ikaika.script.json`, whether it was
+Every project this toolbox produces carries a script manifest, whether it was
 written file by file or cloned from a structure repository. It is what makes a
-directory an IKAIKA project rather than a directory: scaffolding refuses to
-finish without one, and the generators refuse to run outside one.
+directory a project of this toolbox's rather than a directory: scaffolding
+refuses to finish without one, and the generators refuse to run outside one.
+
+The filename lives in `domain/naming.py`, which also knows the one it used to
+have - a project written before the rename is still a project.
 
 Only the four keys below belong to the toolbox. A template is free to keep
 whatever else it needs in the same file, so the rest is read and written back
@@ -12,17 +15,17 @@ untouched, in the order it was found.
 
 from dataclasses import dataclass
 
-from company_tui.domain import json_document
+from company_tui.domain import json_document, naming
 from company_tui.domain.project_name import ProjectName
 
-SCRIPT_MANIFEST = "ikaika.script.json"
+SCRIPT_MANIFEST = naming.SCRIPT_MANIFEST
 MANIFEST_INDENT = "    "
 REQUIRED_KEYS = ("version", "name", "description", "title")
 DEFAULT_VERSION = "0.0.0+1"
 
 
 class NotAnIkaikaProject(Exception):
-    """No `ikaika.script.json` here, so nothing about this tree is safe to assume."""
+    """No script manifest here, so nothing about this tree is safe to assume."""
 
 
 class MalformedScriptManifest(Exception):

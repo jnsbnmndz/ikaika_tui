@@ -1,4 +1,4 @@
-"""Settings read from and written to `ikaika.toml`.
+"""Settings read from and written to the toolbox's own TOML file.
 
 Looked for beside the project first and in the user's home second, so a team can
 pin a template for one repository without changing what everyone else gets.
@@ -16,7 +16,9 @@ pin a template for one repository without changing what everyone else gets.
     url = "https://github.com/JDM-Github/react_native_scripts.git"
     ref = "v1.0.0"
 
-Nothing here is required. A malformed or unreadable file falls back to the
+Either filename is read - the one before the rename included - and a file that
+already exists keeps its name. Nothing here is required. A malformed or
+unreadable file falls back to the
 defaults rather than stopping the toolbox: settings that cannot be parsed are a
 reason to warn, not a reason to be unable to scaffold anything.
 
@@ -26,6 +28,8 @@ table per stack, and `tomllib` only reads.
 
 import tomllib
 from pathlib import Path
+
+from company_tui.domain import naming
 from typing import Any
 
 from company_tui.domain.config import (
@@ -38,13 +42,27 @@ from company_tui.domain.config import (
     TemplateSource,
 )
 
-CONFIG_NAME = "ikaika.toml"
-HOME_CONFIG = Path.home() / ".ikaika" / CONFIG_NAME
+CONFIG_NAME = naming.CONFIG_NAME
+HOME_CONFIG = naming.store_dir() / CONFIG_NAME
+
+
+def settings_file(directory: Path) -> Path:
+    """This directory's settings file, whichever name it already goes by.
+
+    A file somebody has edited keeps its name: preferring the new one would read
+    an empty default over a real configuration and then write the answer
+    somewhere the old file is still sitting, saying something else.
+    """
+    for name in naming.config_names():
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return directory / CONFIG_NAME
 
 TEMPLATES_SECTION = "templates"
 SCRIPTS_SECTION = "scripts"
 
-HEADER = "# IKAIKA developer toolbox settings."
+HEADER = f"# {naming.APP_TITLE} developer toolbox settings."
 
 
 def quote(value: str) -> str:
@@ -91,8 +109,10 @@ def render(settings: Settings) -> str:
 
 class FileConfig(ConfigPort):
     def __init__(self, project: Path | None = None, user: Path | None = None) -> None:
-        self._project = project if project is not None else Path.cwd() / CONFIG_NAME
-        self._user = user if user is not None else HOME_CONFIG
+        self._project = project if project is not None else settings_file(Path.cwd())
+        self._user = (
+            user if user is not None else settings_file(naming.store_dir())
+        )
         self._settings: dict[str, Any] | None = None
         self._source: Path | None = None
         self.problem = ""
