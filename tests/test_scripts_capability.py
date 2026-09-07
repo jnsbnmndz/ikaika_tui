@@ -21,8 +21,8 @@ from company_tui.capabilities.scripts import PROJECT_ROOT, ScriptsCapability
 from company_tui.domain.capability import CANCELLED
 from company_tui.domain.identity import SCRIPT_MANIFEST
 from company_tui.domain.options import defaults_for
-from company_tui.domain.script_config import action_options
 from company_tui.domain.ports import ProcessResult
+from company_tui.domain.script_config import action_options
 from company_tui.templates.services import PackServices
 
 ROOT = Path("/proj").resolve()

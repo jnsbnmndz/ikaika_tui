@@ -1,0 +1,219 @@
+# Cuts a release: bumps the version, tags it, builds and signs the installer, publishes it.
+#
+# Every step is a call into script.ps1, the same commands run by hand:
+#
+#     .\script.ps1 check-all
+#     .\script.ps1 setup-signing -FetchOnly
+#     .\script.ps1 bump-version -Bump patch [-Released] -Yes
+#     .\script.ps1 build-app -Sign [-Released]
+#     .\script.ps1 build-installer -Sign [-Released]
+#
+# so a release can be rehearsed locally in full. What this file adds is the two things
+# that are genuinely CI's job and which bump-version deliberately refuses to do: pushing,
+# and publishing.
+#
+#
+# fetch-depth: 0, AND THAT IS NOT OPTIONAL
+#
+# The build number rises globally and is read from the VERSION file AT each tag, with
+# `git show <tag>:VERSION`. A shallow clone has no tags and no history behind them, so
+# every tag contributes nothing and the next number comes out as "whatever VERSION says
+# plus one" - which is the reset the global numbering exists to prevent. An installer
+# compares that number, so a reset makes an upgrade look older than what is installed.
+#
+#
+# -released IS THE SUFFIX, AND IT IS WHAT MAKES A BUILD OFFICIAL
+#
+#     v1.2.0              a debug build
+#     v1.2.0-released     the official release, signed with the release certificate
+#
+# One version can carry both. The debug tags are what the source collected on its way
+# there; the suffixed one is what a release feed offers. `released: false` publishes as a
+# prerelease, so the "latest release" the updater asks for is only ever an official one.
+#
+#
+# SIGNING FETCHES, IT NEVER GENERATES
+#
+# setup-signing -FetchOnly. Without that switch, a runner that cannot reach the share
+# link would answer by minting a brand-new self-signed certificate, so every release would
+# be signed by a different identity that exists only inside that runner - and users would
+# see the publisher change on every update. -FetchOnly makes that case fail instead.
+#
+# The certificate comes from the link committed in .generic_configs/share.env; only the
+# password is a secret, and the checksum committed beside it is what proves the file that
+# arrived is the right one.
+#
+#
+# NOTHING HERE IS PROTECTED BY AN ENV VAR, BECAUSE NOTHING READS ONE
+#
+# The sibling project turns its front ends off on a runner with IE_SCRIPTS_NO_GUI and
+# friends, since a bare invocation there opens a terminal app and hangs. This repository's
+# script.ps1 prints its listing and exits, and the only two commands that ask a question
+# take -Yes, which is passed below. A GENERIC_NO_PROMPT here would be config that nothing
+# reads - which reads as protection and is not.
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Which part of the version to raise'
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major, same]
+      released:
+        description: 'Official release (adds -released, publishes as latest)'
+        type: boolean
+        required: true
+        default: false
+      sign:
+        description: 'Sign the artifacts (needs the share link and the password secret)'
+        type: boolean
+        required: true
+        default: true
+
+# Never two releases at once: both would read the same tags, hand out the same build
+# number, and the second push would be rejected after a full build had already run.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    permissions:
+      # To push the version commit and the tag, and to create the release.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # See the header. Tags and their history, or the build number resets.
+          fetch-depth: 0
+
+      - name: Identify the committer
+        shell: pwsh
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      # Chocolatey is already on windows-latest, so this is a shell command rather than a
+      # marketplace action. The Windows SDK - and signtool with it - is preinstalled.
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'choco install nsis failed' }
+
+      - name: Set up the environment
+        shell: pwsh
+        run: .\script.ps1 setup-dev-env -Build -Lint
+
+      # The gate, before anything is tagged. A release built from source that does not
+      # pass its own checks is the one thing tagging is supposed to make impossible.
+      - name: Check everything
+        shell: pwsh
+        run: .\script.ps1 check-all
+
+      - name: Fetch the signing certificates
+        if: ${{ inputs.sign }}
+        shell: pwsh
+        env:
+          GENERIC_CERT_PASSWORD: ${{ secrets.GENERIC_CERT_PASSWORD }}
+        run: |
+          if (-not $env:GENERIC_CERT_PASSWORD) {
+            Write-Host 'The GENERIC_CERT_PASSWORD secret is not set on this repository.' -ForegroundColor Red
+            Write-Host 'Set it, or run this workflow with sign = false.' -ForegroundColor Yellow
+            exit 1
+          }
+          .\script.ps1 setup-signing -FetchOnly -Yes
+
+      # Commits VERSION and pyproject.toml and tags them. Local only - it prints the push
+      # line rather than running it, so the push below is this file's decision.
+      - name: Bump the version and tag it
+        id: bump
+        shell: pwsh
+        run: |
+          $bumpArgs = @('-Bump', '${{ inputs.bump }}', '-Yes')
+          if ('${{ inputs.released }}' -eq 'true') { $bumpArgs += '-Released' }
+          .\script.ps1 bump-version @bumpArgs
+          if ($LASTEXITCODE -ne 0) { throw 'bump-version failed' }
+
+          # Read back what it actually wrote rather than recomputing it here. Two places
+          # deciding what the version is, is two versions.
+          . .\scripts\lib\app-version.ps1
+          $version = Get-AppVersion
+          $text = Format-AppVersion $version
+          $tag = Get-TagName $version.Name -Released:('${{ inputs.released }}' -eq 'true')
+          "version=$text"   | Out-File $env:GITHUB_OUTPUT -Append
+          "name=$($version.Name)" | Out-File $env:GITHUB_OUTPUT -Append
+          "tag=$tag"        | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Build the app
+        shell: pwsh
+        run: |
+          $buildArgs = @()
+          if ('${{ inputs.released }}' -eq 'true') { $buildArgs += '-Released' }
+          if ('${{ inputs.sign }}' -eq 'true') { $buildArgs += '-Sign' }
+          .\script.ps1 build-app @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw 'build-app failed' }
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $installerArgs = @()
+          if ('${{ inputs.released }}' -eq 'true') { $installerArgs += '-Released' }
+          if ('${{ inputs.sign }}' -eq 'true') { $installerArgs += '-Sign' }
+          .\script.ps1 build-installer @installerArgs
+          if ($LASTEXITCODE -ne 0) { throw 'build-installer failed' }
+
+      # AFTER the build. bump-version tags before building on purpose, so the number is
+      # claimed before anything is produced with it - but pushing a tag for a build that
+      # then failed publishes a version nobody can install.
+      - name: Push the commit and the tag
+        shell: pwsh
+        run: |
+          git push origin HEAD "${{ steps.bump.outputs.tag }}"
+          if ($LASTEXITCODE -ne 0) { throw 'the push failed' }
+
+      # gh is preinstalled on the runner, so this is the CLI rather than a marketplace
+      # release action - the same command anybody can run against this repository.
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.bump.outputs.tag }}'
+          $text = '${{ steps.bump.outputs.version }}'
+          $official = '${{ inputs.released }}' -eq 'true'
+          $asset = Get-ChildItem 'dist' -Filter '*-setup*.exe' |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $asset) { throw 'no installer in dist to publish' }
+
+          $signedNote = if ('${{ inputs.sign }}' -eq 'true') {
+              'Signed with the ' + $(if ($official) { 'release' } else { 'debug' }) + ' certificate.'
+          } else {
+              'Unsigned - Windows will report an unknown publisher.'
+          }
+
+          $notes = @(
+            "Version $text",
+            '',
+            $signedNote,
+            'Per-user install under %LOCALAPPDATA%\Programs - no administrator prompt.',
+            'Installing over an existing copy removes the old one first.'
+          ) -join "`n"
+
+          # --prerelease for a debug build, so "latest release" - which is what the
+          # updater asks GitHub for - is only ever an official one.
+          $releaseArgs = @('release', 'create', $tag, $asset.FullName,
+                           '--title', "$text", '--notes', $notes)
+          if (-not $official) { $releaseArgs += '--prerelease' }
+          & gh @releaseArgs
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
+
+          Write-Host "Published $tag with $($asset.Name)"

@@ -162,7 +162,7 @@ class GlyphTest(unittest.TestCase):
 
 class CardArtTest(unittest.TestCase):
     def test_every_card_art_entry_is_single_width(self):
-        from company_tui.presentation.icons import DEFAULT_ART, _ART
+        from company_tui.presentation.icons import _ART, DEFAULT_ART
 
         for key, art in list(_ART.items()) + [("__default__", DEFAULT_ART)]:
             for line in art.splitlines():

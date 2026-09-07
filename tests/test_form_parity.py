@@ -22,8 +22,8 @@ import unittest
 
 from company_tui.domain.options import OptionKind
 from company_tui.domain.script_config import (
-    actions_from,
     action_options,
+    actions_from,
     command_preview,
 )
 from company_tui.presentation.session import RunSession

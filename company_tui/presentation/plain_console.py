@@ -9,7 +9,11 @@ from company_tui.domain.script_config import (
     ScriptSection,
     ScriptUpdate,
 )
-from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
+from company_tui.domain.template_pack import (
+    ScaffoldTarget,
+    ScaffoldTargetOption,
+    TemplatePack,
+)
 
 T = TypeVar("T")
 

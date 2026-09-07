@@ -24,7 +24,7 @@ REQUIRED_KEYS = ("version", "name", "description", "title")
 DEFAULT_VERSION = "0.0.0+1"
 
 
-class NotAnIkaikaProject(Exception):
+class NotAProjectError(Exception):
     """No script manifest here, so nothing about this tree is safe to assume."""
 
 

@@ -70,6 +70,34 @@ _ART = {
             "       ╰○",
         )
     ),
+    # A document leaving a box and coming back: export and import as one picture.
+    "app_setup": "\n".join(
+        (
+            " ╭─────╮ ▸▸",
+            " │ ▤▤▤ │",
+            " │ ▤▤▤ │",
+            " ╰─────╯ ◂◂",
+        )
+    ),
+    # An arrow pointing into a tray - where every update check ends up.
+    "updates": "\n".join(
+        (
+            "    ▼",
+            "  ──┼──",
+            " ╰─────╯",
+            " ═══════",
+        )
+    ),
+    # Sliders pushed further than the ones on the Settings card, which is the
+    # whole distinction between the two screens.
+    "advanced": "\n".join(
+        (
+            " ╶───────●╴",
+            " ╶●───────╴",
+            " ╶─────●──╴",
+            " ╶──●─────╴",
+        )
+    ),
     "new_project": "\n".join(
         (
             " ╭──╮",

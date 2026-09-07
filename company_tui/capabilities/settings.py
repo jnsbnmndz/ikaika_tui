@@ -1,4 +1,4 @@
-"""Editing `ikaika.toml` from inside the toolbox.
+"""Editing the toolbox's own settings file from inside the toolbox.
 
 The settings are already a port, so the only thing missing was somewhere to
 change them. It reuses the run panel rather than inventing a screen: the same
@@ -13,6 +13,7 @@ from pathlib import Path
 from company_tui.application.template_registry import TemplatePackRegistry
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import (
+    DEFAULT_BUNDLE_PREFIX,
     DEFAULT_SCRIPTS_ROOT,
     DEFAULT_WORKSPACE_ROOT,
     ConfigPort,
@@ -242,7 +243,10 @@ class SettingsCapability(Capability):
             # Caught here rather than at the next scaffold, where it would have
             # already been written into an app's iOS and Android identifiers.
             return (
-                f"'{prefix}' is not a bundle prefix — use reverse-DNS, like com.ikaika.",
+                (
+                    f"'{prefix}' is not a bundle prefix — use reverse-DNS, "
+                    f"like {DEFAULT_BUNDLE_PREFIX}."
+                ),
                 False,
             )
 

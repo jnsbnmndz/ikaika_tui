@@ -14,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 
 from company_tui.domain import naming
+from company_tui.domain.updates import UpdateSource
 
 DEFAULT_BUNDLE_PREFIX = naming.BUNDLE_PREFIX
 DEFAULT_WORKSPACE_ROOT = "."
@@ -64,6 +65,15 @@ class Settings:
     against a project that already exists. Pinning one is not pinning the
     other."""
 
+    updates: UpdateSource = field(default_factory=UpdateSource)
+    """Where the toolbox looks for a newer build of itself.
+
+    Part of the settings rather than a constant, because the answer is a
+    property of the deployment and not of the code: a fork, an internal mirror,
+    or a GitHub Enterprise host are all the same program pointed somewhere else.
+    Edited in Advanced; empty by default, since this has no business guessing
+    which repository somebody is running a build of."""
+
     script_checks: Mapping[str, bool] = field(default_factory=dict)
     """Whether each stack's installed scripts are compared against the remote.
 
@@ -113,6 +123,11 @@ class ConfigPort(ABC):
         stale silently. The one who says otherwise is the person the question was
         put to, and the answer is a settings edit like every other.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_source(self) -> UpdateSource:
+        """Where to look for a newer build of the toolbox itself."""
         raise NotImplementedError
 
     @abstractmethod

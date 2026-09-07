@@ -44,15 +44,15 @@ from textual.widgets import Button, Checkbox, Input, RichLog, Select, Static
 from company_tui.domain.options import (
     Option,
     OptionKind,
-    RefreshOutcome,
     OptionValue,
+    RefreshOutcome,
     missing_required,
 )
 from company_tui.presentation.branding import TOGGLE_ON
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, KeyHint
 from company_tui.presentation.icons import TERMINAL_ART
-from company_tui.presentation.screens import ConfirmScreen
 from company_tui.presentation.path_screen import PathScreen
+from company_tui.presentation.screens import ConfirmScreen
 from company_tui.presentation.session import (
     MARKERS,
     TRAIL_SEPARATOR,
@@ -1768,11 +1768,11 @@ class RunScreen(Screen[None]):
 
 
 __all__ = [
-    "TRAIL_SEPARATOR",
+    "EMPTY_TITLE",
+    "REQUIRED_MARK",
     "STDIN_ACTIVE",
     "STDIN_IDLE",
-    "REQUIRED_MARK",
-    "EMPTY_TITLE",
-    "needed_text",
+    "TRAIL_SEPARATOR",
     "RunScreen",
+    "needed_text",
 ]

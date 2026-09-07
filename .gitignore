@@ -84,3 +84,15 @@ dist/
 
 test.*
 test/
+
+# Code signing. The private keys and the password never go in, the trust anchors always
+# do - a committed .sha256 is the only thing that can tell a fetched certificate from a
+# same-named different one, and `!` un-ignores it explicitly because git cannot un-ignore
+# a file inside a directory that has been excluded wholesale.
+certs/
+*.pfx
+*.p12
+.generic_configs/signing.env
+.generic_configs/logs/
+!.generic_configs/*.sha256
+!.generic_configs/share.env

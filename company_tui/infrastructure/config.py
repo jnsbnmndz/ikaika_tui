@@ -5,8 +5,8 @@ pin a template for one repository without changing what everyone else gets.
 
     [scaffold]
     workspace_root = "~/work"
-    bundle_prefix  = "com.ikaika"
-    scripts_root   = "~/.ikaika/scripts"
+    bundle_prefix  = "com.generic"
+    scripts_root   = "~/.generic/scripts"
 
     [templates.react_native]
     url = "https://github.com/JDM-Github/react_native_structure.git"
@@ -15,6 +15,9 @@ pin a template for one repository without changing what everyone else gets.
     [scripts.react_native]
     url = "https://github.com/JDM-Github/react_native_scripts.git"
     ref = "v1.0.0"
+
+    [updates]
+    repository = "owner/name"
 
 Either filename is read - the one before the rename included - and a file that
 already exists keeps its name. Nothing here is required. A malformed or
@@ -28,10 +31,9 @@ table per stack, and `tomllib` only reads.
 
 import tomllib
 from pathlib import Path
-
-from company_tui.domain import naming
 from typing import Any
 
+from company_tui.domain import naming
 from company_tui.domain.config import (
     DEFAULT_BUNDLE_PREFIX,
     DEFAULT_SCRIPTS_ROOT,
@@ -40,6 +42,11 @@ from company_tui.domain.config import (
     ConfigScope,
     Settings,
     TemplateSource,
+)
+from company_tui.domain.updates import (
+    DEFAULT_API_BASE,
+    DEFAULT_ASSET_PATTERN,
+    UpdateSource,
 )
 
 CONFIG_NAME = naming.CONFIG_NAME
@@ -61,6 +68,7 @@ def settings_file(directory: Path) -> Path:
 
 TEMPLATES_SECTION = "templates"
 SCRIPTS_SECTION = "scripts"
+UPDATES_SECTION = "updates"
 
 HEADER = f"# {naming.APP_TITLE} developer toolbox settings."
 
@@ -81,6 +89,23 @@ def render(settings: Settings) -> str:
         f"bundle_prefix = {quote(settings.bundle_prefix)}",
         f"scripts_root = {quote(settings.scripts_root)}",
     ]
+    # Only when it differs from the defaults. An [updates] table repeating the
+    # built-in values in every settings file is noise that reads as configuration,
+    # and the next person to change a default would leave every existing file
+    # pinned to the old one.
+    updates = settings.updates
+    update_lines = []
+    if updates.repository.strip():
+        update_lines.append(f"repository = {quote(updates.repository.strip())}")
+    if updates.api_base.strip() and updates.api_base.strip() != DEFAULT_API_BASE:
+        update_lines.append(f"api_base = {quote(updates.api_base.strip())}")
+    if updates.include_prereleases:
+        update_lines.append("include_prereleases = true")
+    if updates.asset_pattern.strip() and updates.asset_pattern.strip() != DEFAULT_ASSET_PATTERN:
+        update_lines.append(f"asset_pattern = {quote(updates.asset_pattern.strip())}")
+    if update_lines:
+        lines += ["", f"[{UPDATES_SECTION}]", *update_lines]
+
     for key in sorted(settings.templates):
         source = settings.templates[key]
         if not source.url:
@@ -146,6 +171,16 @@ class FileConfig(ConfigPort):
             return True
         return entry.get("check", True) is not False
 
+    def update_source(self) -> UpdateSource:
+        section = self._section(UPDATES_SECTION)
+        return UpdateSource(
+            repository=str(section.get("repository", "")).strip(),
+            api_base=str(section.get("api_base", "")).strip() or DEFAULT_API_BASE,
+            include_prereleases=section.get("include_prereleases", False) is True,
+            asset_pattern=str(section.get("asset_pattern", "")).strip()
+            or DEFAULT_ASSET_PATTERN,
+        )
+
     def settings(self) -> Settings:
         scaffold = self._section("scaffold")
         return Settings(
@@ -157,6 +192,7 @@ class FileConfig(ConfigPort):
             scripts_root=str(scaffold.get("scripts_root", "")).strip()
             or DEFAULT_SCRIPTS_ROOT,
             scripts=self._pinned_sources(SCRIPTS_SECTION),
+            updates=self.update_source(),
             script_checks={
                 key: entry.get("check", True) is not False
                 for key, entry in self._section(SCRIPTS_SECTION).items()

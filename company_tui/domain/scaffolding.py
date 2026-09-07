@@ -19,7 +19,7 @@ from company_tui.domain.config import TemplateSource
 from company_tui.domain.identity import (
     SCRIPT_MANIFEST,
     MalformedScriptManifest,
-    NotAnIkaikaProject,
+    NotAProjectError,
     ProjectIdentity,
     apply_identity,
     read_identity,
@@ -97,7 +97,7 @@ class ProjectFinalizer:
         """
         manifest = naming.manifest_path(root)
         if not self._file_system.exists(manifest):
-            raise NotAnIkaikaProject(
+            raise NotAProjectError(
                 f"No {SCRIPT_MANIFEST} in {display_path(root)} — "
                 "every IKAIKA project has one."
             )

@@ -41,13 +41,11 @@ named.
 """
 
 import asyncio
-import os
 from dataclasses import replace
 from pathlib import Path
 
-from company_tui.domain import json_document
+from company_tui.domain import json_document, naming
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
-from company_tui.domain import naming
 from company_tui.domain.identity import SCRIPT_MANIFEST
 from company_tui.domain.json_document import MalformedJson
 from company_tui.domain.options import Option, RefreshOutcome
@@ -62,11 +60,11 @@ from company_tui.domain.script_config import (
     sections_from,
     split_command,
 )
-
-FETCHING = "Reading what {name} can be given..."
 from company_tui.presentation.ui import Ui
 from company_tui.templates.scripts import run_action
 from company_tui.templates.services import PackServices
+
+FETCHING = "Reading what {name} can be given..."
 
 PROJECT_ROOT = naming.PROJECT_ROOT_VAR
 """How a launcher says which project this session is being run for.
@@ -265,7 +263,10 @@ class ScriptsCapability(Capability):
         fetched = await asyncio.gather(
             *(self._ask_for_choices(root, a.choices_command) for a in wanted)
         )
-        answers = dict(zip((a.flag for a in wanted), fetched))
+        # strict, because these two come from the same list: `fetched` is
+        # gather() over `wanted`. Silently truncating would drop an
+        # argument's fetched choices and leave the field empty.
+        answers = dict(zip((a.flag for a in wanted), fetched, strict=True))
         return replace(
             action,
             arguments=tuple(

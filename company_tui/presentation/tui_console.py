@@ -10,6 +10,7 @@ from textual.timer import Timer
 from textual.widgets import RichLog
 
 from company_tui.application.app import Application
+from company_tui.domain import naming
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
 from company_tui.domain.script_config import (
@@ -19,7 +20,11 @@ from company_tui.domain.script_config import (
     ScriptUpdate,
 )
 from company_tui.domain.session_memory import SessionMemory
-from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
+from company_tui.domain.template_pack import (
+    ScaffoldTarget,
+    ScaffoldTargetOption,
+    TemplatePack,
+)
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
 from company_tui.infrastructure.window_shape import (
     DEFAULT_PLAN,
@@ -30,7 +35,13 @@ from company_tui.infrastructure.window_shape import (
     current_window,
     window_plan,
 )
-from company_tui.presentation.branding import APP_NAME, APP_TAGLINE, APP_VERSION, IKAIKA_THEME, PEAK_ART
+from company_tui.presentation.branding import (
+    APP_NAME,
+    APP_TAGLINE,
+    APP_THEME,
+    APP_VERSION,
+    PEAK_ART,
+)
 from company_tui.presentation.card import MenuEntry
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, BusyLine
 from company_tui.presentation.path_screen import PathScreen
@@ -44,7 +55,6 @@ from company_tui.presentation.screens import (
     RunsScreen,
     SplashScreen,
 )
-from company_tui.presentation.ui import RefreshRunner
 from company_tui.presentation.session import (
     CURRENT_SESSION,
     RunSession,
@@ -52,6 +62,7 @@ from company_tui.presentation.session import (
     Workflow,
     current_session,
 )
+from company_tui.presentation.ui import RefreshRunner
 
 TRAIL_STEPS = (
     "capability",
@@ -257,8 +268,8 @@ class TuiConsole(App):
             yield AppFooter([("Ctrl+Q", "Quit")])
 
     def on_mount(self) -> None:
-        self.register_theme(IKAIKA_THEME)
-        self.theme = "ikaika"
+        self.register_theme(APP_THEME)
+        self.theme = naming.APP_SLUG
         output = self.query_one("#output", RichLog)
         output.border_title = "Activity"
         # The window is opened at a size, measured, and put back onto the floor
@@ -1395,4 +1406,4 @@ class TuiConsole(App):
 
 async def _nothing() -> None:
     """A session with no workflow of its own behind it."""
-    return None
+    return

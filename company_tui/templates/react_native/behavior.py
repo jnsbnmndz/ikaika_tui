@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from company_tui.domain.config import TemplateSource
-from company_tui.domain.identity import NotAnIkaikaProject
+from company_tui.domain.identity import NotAProjectError
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.project_name import ProjectName
 from company_tui.domain.scaffolding import (
@@ -86,7 +86,7 @@ def new_project_options(source: TemplateSource, parent: str = ".") -> tuple[Opti
     """The form for a new project, showing the template it will actually use.
 
     The source is a row rather than a constant in this file because it can be
-    repointed or pinned in `ikaika.toml`, and a form that still advertised the
+    repointed or pinned in the settings file, and a form that still advertised the
     default would be quietly lying about what is about to be cloned.
     """
     return (
@@ -154,7 +154,7 @@ async def scaffold_new_project(
                 ),
             ),
         )
-    except (NotAnIkaikaProject, CannotStampIdentity) as error:
+    except (NotAProjectError, CannotStampIdentity) as error:
         # The clone is not a template this toolbox can finish, and an unfinished
         # one still answers to the template's name in four places. Nothing is
         # kept rather than handing back a project that is subtly not one.
