@@ -140,7 +140,14 @@ if ($testExit -ne 0) {
     Add-Result 'tests' 'PASS' $ran
 }
 
-# --- the version, which lives in two files that have to agree ------------------------
+# --- the version, which lives in three files that have to agree ----------------------
+# uv.lock is the third and was the one nobody was watching: it records this project among
+# the locked packages, version and all, and a release rewrote only the first two - so it
+# sat a release behind saying 0.1.0+2 while VERSION said 0.0.1+1. Set-AppVersion writes
+# all three now; this is what would notice if that stopped being true.
+#
+# A missing or nameless lock is not a failure. Not every checkout uses uv, and a project
+# that has never been locked has nothing to disagree with.
 try {
     $version = Get-AppVersion
     $text = Format-AppVersion $version
@@ -148,8 +155,16 @@ try {
     foreach ($line in (Get-Content -LiteralPath (Get-PyProjectFile))) {
         if ($line -match '^\s*version\s*=\s*"([^"]+)"') { $pyprojectVersion = $Matches[1]; break }
     }
-    if ($pyprojectVersion -ne $text) {
-        Add-Result 'version' 'FAIL' "VERSION says $text, pyproject says $pyprojectVersion"
+    $lockVersion = Get-LockVersionText
+
+    $disagree = @()
+    if ($pyprojectVersion -ne $text) { $disagree += "pyproject says $pyprojectVersion" }
+    if ($lockVersion -and $lockVersion -ne $text) { $disagree += "uv.lock says $lockVersion" }
+
+    if ($disagree.Count) {
+        Add-Result 'version' 'FAIL' "VERSION says $text, $($disagree -join ', ')"
+    } elseif (-not $lockVersion) {
+        Add-Result 'version' 'PASS' "$text (no uv.lock entry to check)"
     } else {
         Add-Result 'version' 'PASS' $text
     }

@@ -98,6 +98,23 @@ still detected, and one that the walk still finds material at all.
 Narrow and is not. `U+274C CROSS MARK` is Wide and is. Width and emoji-ness are different
 questions; `tests/test_glyphs.py` bans the blocks and allows four text glyphs by name.
 
+### 3.4 `uv sync` deletes a linter that is not in the lock
+
+`setup-dev-env -Lint` installed ruff with `uv pip install`, which puts it in the venv and
+not in `uv.lock`. `uv sync` prunes anything not in the lock, so it removed ruff — and
+`check-all`, which reports a missing linter as SKIP because an incomplete machine is not a
+broken repository, went from `PASS ruff` to `SKIP ruff - not installed` and still finished
+with **"Passed"**. Nothing lied. The lint had simply stopped running, and the report said
+so in a line nobody reads next to a verdict everybody does.
+
+That is 3.1 again by another route: a check that stops checking, arrived at by a command
+whose whole job is to make the environment match the lock.
+
+**Rule.** A tool the gate runs is declared where the lock can see it — ruff is in
+`[dependency-groups] dev`, so `uv sync` installs it instead of removing it. The SKIP
+branch stays, for the machine that genuinely has no linter; what it must not be is the
+branch a routine sync puts you on.
+
 ---
 
 ## 4. Your verification harness is code, and it has bugs too

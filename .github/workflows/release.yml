@@ -193,7 +193,7 @@ jobs:
           Write-Host 'and with installer = false there would not be one.' -ForegroundColor Yellow
           exit 1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # See the header. Tags and their history, or the build number resets.
           fetch-depth: 0
@@ -340,7 +340,7 @@ jobs:
       # not worth the minutes.
       - name: Keep the build from a rehearsal
         if: ${{ !inputs.tag && inputs.installer }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rehearsal-${{ steps.bump.outputs.version }}
           path: dist/*-setup*.exe

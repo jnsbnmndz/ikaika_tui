@@ -236,6 +236,45 @@ through .NET, which has no such limit and broadcasts `WM_SETTINGCHANGE` itself. 
 reads and writes the **User** scope only — writing the merged `$env:Path` into
 user scope is the other classic bug, and it doubles the length every time.
 
+### Keeping the actions current, in two halves
+
+`.github/dependabot.yml` opens the pull requests. `.github/workflows/actions-audit.yml`
+runs `saadmk11/github-actions-version-updater` in check-only mode and **fails** when
+something is behind. Both, because they answer different questions: one proposes the
+bump, the other notices when the proposal was never merged — or when Dependabot itself
+has been switched off. A version check whose only output is a pull request has no way to
+say that it has stopped running.
+
+The split of labour follows the credential. GitHub forbids a workflow's own
+`GITHUB_TOKEN` from editing workflow files, so anything running *as* a workflow needs a
+PAT with `workflow` scope to change one — a long-lived secret able to rewrite
+`release.yml`, which is the file that signs and publishes. Dependabot is not a workflow
+and needs no token at all. So the half that writes is the half that needs no credential,
+and the third-party action never writes: `skip_pull_request: true`, which also stops the
+two of them opening competing pull requests for the same one-line bump.
+
+The audit needs `ACTIONS_AUDIT_TOKEN`: a fine-grained token, scoped to this repository
+only, with **Actions: Read-only** and nothing else. `Metadata: Read` is force-enabled
+alongside it and cannot be turned off.
+
+That is one permission, and it is what the action's own calls need rather than what its
+README asks for. It reads `GET /repos/<this repo>/actions/workflows` to discover workflow
+*paths* — hence Actions — and then reads the files off the disk `actions/checkout` already
+populated, which is why `Contents` is not needed. Its other calls (`/releases`,
+`/commits`) are public reads of the action repositories themselves, and a fine-grained
+token always has read access to public repositories. Everything that would write —
+branch, commit, pull request — sits behind `skip_pull_request` and never runs. The
+README's `repo` + `workflow` is what *pushing* needs.
+
+Without the secret the weekly run fails and names it; delete the `schedule:` block to
+make the audit manual instead.
+
+That action is pinned to a commit SHA rather than a tag, unlike `actions/checkout` and
+`actions/upload-artifact`. It is third-party and it is handed a token, and a tag is a
+moving pointer — those two together are where a pin earns its maintenance cost.
+Dependabot moves the pin and rewrites the version comment beside it, so it stays a pin
+rather than becoming a fossil.
+
 ## Template packs
 
 `react_native` scaffolds a new project by shallow-cloning `https://github.com/JDM-Github/react_native_structure.git` and then deleting the clone's `.git`, so what you get is the structure with no history and no remote pointing at the template. The clone runs through `ProcessRunner` as an argument array and the delete through `FileSystemPort.remove_tree`, both previewed and confirmed before anything touches disk.

@@ -57,6 +57,25 @@ function Get-RepoRoot {
 
 function Get-VersionFile { return Join-Path (Get-RepoRoot) 'VERSION' }
 function Get-PyProjectFile { return Join-Path (Get-RepoRoot) 'pyproject.toml' }
+function Get-LockFile { return Join-Path (Get-RepoRoot) 'uv.lock' }
+
+
+# The distribution's own name, read out of pyproject rather than written here as well.
+# It is what identifies this project's entry among the locked packages, and a second copy
+# of it here would be one more thing to remember on a rename.
+function Get-ProjectName {
+    $pyproject = Get-PyProjectFile
+    if (-not (Test-Path -LiteralPath $pyproject)) { return '' }
+    $inProject = $false
+    foreach ($line in (Get-Content -LiteralPath $pyproject)) {
+        if ($line -match '^\s*\[([^\]]+)\]') {
+            $inProject = ($Matches[1] -eq 'project')
+            continue
+        }
+        if ($inProject -and $line -match '^\s*name\s*=\s*"([^"]+)"') { return $Matches[1] }
+    }
+    return ''
+}
 
 
 # Parses `x.y.z+n` into its parts, or throws saying what it read.
@@ -177,7 +196,69 @@ function Resolve-NextVersion([string]$Bump) {
 }
 
 
-# Writes VERSION and pyproject.toml together, and reports what it touched.
+# The version inside uv.lock, or '' when there is nothing to write.
+#
+# THERE ARE THREE COPIES OF THE VERSION, NOT TWO. uv.lock records this project as one of
+# the locked packages, version and all, so a release that rewrote only VERSION and
+# pyproject left the lock a release behind - which is how it came to say 0.1.0+2 while
+# VERSION said 0.0.1+1, silently, because nothing compared them.
+#
+# Rewritten in place rather than by running `uv lock`, for the same reason pyproject is:
+# the rest of the file is a resolution this has no business redoing. It also means a
+# release does not need uv installed and does not need the network, and cannot turn a
+# version bump into a dependency change nobody asked for.
+#
+# Anchored on the [[package]] entry whose name is this project's. `version` appears once
+# per locked package, so an unanchored match would set textual's version to the app's.
+function Set-LockVersion([string]$Text) {
+    $lock = Get-LockFile
+    if (-not (Test-Path -LiteralPath $lock)) { return '' }
+    $name = Get-ProjectName
+    if (-not $name) { return '' }
+
+    $lines = @(Get-Content -LiteralPath $lock)
+    $found = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^\s*name\s*=\s*""$([regex]::Escape($name))""\s*$") {
+            $found = $true
+            continue
+        }
+        if (-not $found) { continue }
+        if ($lines[$i] -match '^\s*version\s*=') {
+            $lines[$i] = "version = `"$Text`""
+            [IO.File]::WriteAllLines($lock, $lines, (New-Object Text.UTF8Encoding $false))
+            return $lock
+        }
+        # Left the entry without finding a version line. Nothing to write, and guessing
+        # at another entry's would set some dependency's version to the app's.
+        if ($lines[$i] -match '^\s*\[') { break }
+    }
+    return ''
+}
+
+
+# Reads the version uv.lock records for this project, or '' if it records none.
+function Get-LockVersionText {
+    $lock = Get-LockFile
+    if (-not (Test-Path -LiteralPath $lock)) { return '' }
+    $name = Get-ProjectName
+    if (-not $name) { return '' }
+
+    $found = $false
+    foreach ($line in (Get-Content -LiteralPath $lock)) {
+        if ($line -match "^\s*name\s*=\s*""$([regex]::Escape($name))""\s*$") {
+            $found = $true
+            continue
+        }
+        if (-not $found) { continue }
+        if ($line -match '^\s*version\s*=\s*"([^"]+)"') { return $Matches[1] }
+        if ($line -match '^\s*\[') { break }
+    }
+    return ''
+}
+
+
+# Writes VERSION, pyproject.toml and uv.lock together, and reports what it touched.
 #
 # pyproject's line is rewritten in place rather than the file being regenerated: it holds
 # dependencies and an entry point this has no business rewriting. Anchored to the line
@@ -209,5 +290,9 @@ function Set-AppVersion($Version) {
         }
         [IO.File]::WriteAllLines($pyproject, $lines, (New-Object Text.UTF8Encoding $false))
     }
-    return @($versionFile, $pyproject)
+
+    $written = @($versionFile, $pyproject)
+    $lock = Set-LockVersion $text
+    if ($lock) { $written += $lock }
+    return $written
 }
