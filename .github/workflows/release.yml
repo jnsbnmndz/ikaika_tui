@@ -197,7 +197,7 @@ jobs:
           Write-Host 'and with installer = false there would not be one.' -ForegroundColor Yellow
           exit 1
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # See the header. Tags and their history, or the build number resets.
           fetch-depth: 0
@@ -216,6 +216,83 @@ jobs:
         run: |
           choco install nsis --no-progress -y
           if ($LASTEXITCODE -ne 0) { throw 'choco install nsis failed' }
+
+      # WHERE THE CACHES ARE, ASKED RATHER THAN ASSUMED
+      #
+      # `%LOCALAPPDATA%\pip\Cache` is where pip keeps its downloads today and is not a
+      # contract - `pip cache dir` is. Asked with the RUNNER's python, before the
+      # virtualenv exists, and that is not a problem: pip's download cache is per USER,
+      # not per environment, so the path the runner's pip reports is the one the venv's
+      # pip will use. That is the whole reason this works at all.
+      #
+      # PyInstaller has no equivalent question to ask, so its documented location is used
+      # with a fallback. A cache path that comes back empty is simply not cached: `if` on
+      # the cache step, rather than a step that fails over a directory that does not
+      # exist yet.
+      - name: Locate the caches
+        id: caches
+        shell: pwsh
+        run: |
+          # try/catch, because CACHING MUST NEVER BE WHY A RUN FAILS. A missing python
+          # is setup-dev-env's to report - it has a sentence for it - and a caching step
+          # that dies first replaces that sentence with a CommandNotFoundException.
+          $pip = ''
+          try {
+              $answer = & python -m pip cache dir 2>$null
+              if ($LASTEXITCODE -eq 0) { $pip = "$answer".Trim() }
+          } catch {
+              $pip = ''
+          }
+          "pip=$pip" | Out-File $env:GITHUB_OUTPUT -Append
+
+          # In the key, not the path: a runner image that moves to a new python patch
+          # release should start a new cache rather than accumulate wheels for two
+          # interpreters in one.
+          $python = 'unknown'
+          try {
+              $answer = & python -c "import sys; sys.stdout.write('.'.join(map(str, sys.version_info[:3])))"
+              if ($LASTEXITCODE -eq 0 -and $answer) { $python = "$answer".Trim() }
+          } catch {
+              $python = 'unknown'
+          }
+          "python=$python" | Out-File $env:GITHUB_OUTPUT -Append
+
+          $pyinstaller = Join-Path $env:LOCALAPPDATA 'pyinstaller'
+          "pyinstaller=$pyinstaller" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # The DOWNLOAD cache, and deliberately not the virtualenv.
+      #
+      # A restored pip cache cannot make a run wrong - worst case it is ignored and
+      # everything is fetched again. A restored `.venv` can: it carries an interpreter and
+      # an editable install, and one built against a python the runner has since upgraded
+      # is a venv whose python.exe will not start. `setup-dev-env` would then fail on a
+      # cache hit and pass on a miss, which is the worst failure shape CI has.
+      #
+      # `restore-keys` matters more than the key here. Without it, changing one line of
+      # `uv.lock` means a completely cold cache and every wheel downloaded again; with it,
+      # the newest cache for this python is used as a starting point and only what actually
+      # changed is fetched.
+      - name: Cache the downloads
+        if: ${{ steps.caches.outputs.pip != '' }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.caches.outputs.pip }}
+          key: pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-build-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-build-
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-
+
+      # PyInstaller's own cache: the bootloader it links and the analysis it did last
+      # time. Keyed loosely on purpose - it is keyed on what is INSTALLED rather than on
+      # the source, because a source change is exactly what it is meant to re-analyse.
+      # Nothing here is correctness-critical; a stale entry costs a re-analysis.
+      - name: Cache the PyInstaller build cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.caches.outputs.pyinstaller }}
+          key: pyinstaller-${{ runner.os }}-py${{ steps.caches.outputs.python }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            pyinstaller-${{ runner.os }}-py${{ steps.caches.outputs.python }}-
 
       - name: Set up the environment
         shell: pwsh
@@ -296,6 +373,20 @@ jobs:
 
       # gh is preinstalled on the runner, so this is the CLI rather than a marketplace
       # release action - the same command anybody can run against this repository.
+      #
+      # THE NOTES ARE GENERATED AND THEN PREFIXED, IN THAT ORDER
+      #
+      # `POST /releases/generate-notes` returns the changelog GitHub builds from the
+      # commits and pull requests since the previous release, and this composes the body
+      # itself: the four lines that matter for an installer first, then a rule, then the
+      # generated part. Ordering it here rather than passing `--generate-notes` to
+      # `gh release create`, because that flag generates the title and body and what
+      # happens to a `--notes` given alongside it is not written down anywhere - and a
+      # release path is not the place for a behaviour nobody documented.
+      #
+      # `.github/release.yml` groups what comes back. A failure to generate is not a
+      # failure to release: the body falls back to the four lines, which are the ones an
+      # installer actually needs.
       - name: Publish the release
         if: ${{ inputs.tag }}
         shell: pwsh
@@ -323,15 +414,47 @@ jobs:
             'Installing over an existing copy removes the old one first.'
           ) -join "`n"
 
+          $generated = ''
+          $answer = & gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" `
+              -f tag_name=$tag 2>$null
+          if ($LASTEXITCODE -eq 0 -and $answer) {
+              try { $generated = ($answer | ConvertFrom-Json).body } catch { $generated = '' }
+          }
+          if ($generated) {
+              $notes = "$notes`n`n---`n`n$generated"
+              Write-Host 'Release notes: generated changelog appended.'
+          } else {
+              Write-Host 'Release notes: nothing generated (first release, or the API declined).'
+          }
+
+          # Through a file rather than as an argument. The generated changelog carries
+          # newlines, backticks and whatever anybody wrote in a pull request title, and
+          # every one of those is something a command line can misread.
+          $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $notes | Out-File $notesFile -Encoding utf8
+
           # --prerelease for a debug build, so "latest release" - which is what the
           # updater asks GitHub for - is only ever an official one.
           $releaseArgs = @('release', 'create', $tag, $asset.FullName,
-                           '--title', "$text", '--notes', $notes)
+                           '--title', "$text", '--notes-file', $notesFile)
           if (-not $official) { $releaseArgs += '--prerelease' }
           & gh @releaseArgs
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
 
           Write-Host "Published $tag with $($asset.Name)"
+
+          @(
+            "## Published $tag",
+            '',
+            "| | |",
+            "|---|---|",
+            "| Version | ``$text`` |",
+            "| Tag | [``$tag``]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag) |",
+            "| Kind | $(if ($official) { 'official release' } else { 'prerelease (debug build)' }) |",
+            "| Signed | $(if ('${{ inputs.sign }}' -eq 'true') { 'yes' } else { 'no' }) |",
+            "| Installer | ``$($asset.Name)`` ($([math]::Round($asset.Length / 1MB, 1)) MB) |",
+            "| Notes | $(if ($generated) { 'custom + generated changelog' } else { 'custom only' }) |"
+          ) -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       # The other half of the same either/or: a run that publishes nothing still has to
       # leave the installer somewhere, or the rehearsal proved the build works and then
@@ -350,3 +473,28 @@ jobs:
           path: dist/*-setup*.exe
           if-no-files-found: error
           retention-days: 14
+
+      # A rehearsal publishes nothing, so the summary is the only thing it leaves in the
+      # browser. It says what it would have done, which is the point of rehearsing.
+      #
+      # if: always() with a guard, so a FAILED rehearsal still reports which version and
+      # which step - a red run whose summary is blank is a run somebody has to read the
+      # log to understand.
+      - name: Say what the rehearsal did
+        if: ${{ always() && !inputs.tag }}
+        shell: pwsh
+        run: |
+          $version = '${{ steps.bump.outputs.version }}'
+          $tag = '${{ steps.bump.outputs.tag }}'
+          @(
+            '## Rehearsal - nothing was published',
+            '',
+            "| | |",
+            "|---|---|",
+            "| Version built | ``$(if ($version) { $version } else { 'the bump did not get that far' })`` |",
+            "| Tag it would have cut | ``$(if ($tag) { $tag } else { '-' })`` |",
+            "| Signed | $(if ('${{ inputs.sign }}' -eq 'true') { 'yes' } else { 'no' }) |",
+            "| Installer | $(if ('${{ inputs.installer }}' -eq 'true') { 'built, kept as a run artifact for 14 days' } else { 'skipped' }) |",
+            '',
+            'Nothing was committed, tagged, pushed or published. Re-run with **tag** ticked to publish.'
+          ) -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

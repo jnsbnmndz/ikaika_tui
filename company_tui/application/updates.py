@@ -275,6 +275,14 @@ class UpdateWatch:
             return None
         return target if target.is_file() else None
 
+    def arm(self, installer: Path) -> str:
+        """Arm the installer for a path, without a report around it.
+
+        The card downloads to a folder somebody chose and has a path, not a report.
+        `hand_over` is this with the report's own check in front of it.
+        """
+        return self._handover.hand_over(installer)
+
     def hand_over(self, report: UpdateReport) -> str:
         """Arm the installer for after this process exits. Returns a problem, or "".
 
@@ -284,7 +292,7 @@ class UpdateWatch:
         """
         if not report.waiting:
             return "there is no installer to run"
-        return self._handover.hand_over(Path(report.installer))
+        return self.arm(Path(report.installer))
 
 
 def _safe_name(name: str) -> str:

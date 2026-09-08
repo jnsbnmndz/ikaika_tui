@@ -26,6 +26,9 @@ from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.updates import (
+    CHANNEL_LABELS,
+    CHANNEL_OFFICIAL,
+    CHANNELS,
     DEFAULT_API_BASE,
     DEFAULT_ASSET_PATTERN,
     UpdateSource,
@@ -38,7 +41,7 @@ FAILED = 1
 SCOPE_KEY = "scope"
 REPOSITORY_KEY = "repository"
 API_BASE_KEY = "api_base"
-PRERELEASES_KEY = "include_prereleases"
+CHANNEL_KEY = "channel"
 ASSET_KEY = "asset_pattern"
 RESET_KEY = "reset"
 
@@ -114,13 +117,16 @@ class AdvancedCapability(Capability):
                 help=f"The API root. {DEFAULT_API_BASE} unless this is Enterprise.",
             ),
             Option(
-                key=PRERELEASES_KEY,
-                label="Offer prereleases",
-                kind=OptionKind.BOOLEAN,
-                default=source.include_prereleases,
+                key=CHANNEL_KEY,
+                label="Channel",
+                kind=OptionKind.CHOICE,
+                choices=tuple(CHANNEL_LABELS[name] for name in CHANNELS),
+                default=CHANNEL_LABELS[source.channel],
                 help=(
-                    "Debug builds are published as prereleases. Off means only "
-                    "-released tags are offered."
+                    "Debug builds are published as prereleases. 'prereleases "
+                    "only' tracks them and never offers an official release, "
+                    "even a newer one - which is what testing a debug line "
+                    "means. 'whichever is newest' mixes the two."
                 ),
             ),
             Option(
@@ -145,6 +151,13 @@ class AdvancedCapability(Capability):
             ),
         )
 
+    @staticmethod
+    def _channel_named(label: str) -> str:
+        for name, shown in CHANNEL_LABELS.items():
+            if shown == label or name == label:
+                return name
+        return CHANNEL_OFFICIAL
+
     async def _save(self, values: OptionValues) -> tuple[str, bool]:
         current = self._config.settings()
 
@@ -155,7 +168,11 @@ class AdvancedCapability(Capability):
             source = UpdateSource(
                 repository=str(values.get(REPOSITORY_KEY, "")).strip(),
                 api_base=str(values.get(API_BASE_KEY, "")).strip() or DEFAULT_API_BASE,
-                include_prereleases=bool(values.get(PRERELEASES_KEY, False)),
+                # The form carries the labels, because a dropdown reading
+                # "official/prerelease/any" explains nothing. Mapped back by value, and
+                # an answer that matches no label falls to the default rather than
+                # raising - a form cannot offer one, but an imported document can.
+                channel=self._channel_named(str(values.get(CHANNEL_KEY, ""))),
                 asset_pattern=str(values.get(ASSET_KEY, "")).strip()
                 or DEFAULT_ASSET_PATTERN,
             )
@@ -184,7 +201,7 @@ class AdvancedCapability(Capability):
         self._console.write(f"Repository: {source.repository or 'not configured'}")
         self._console.write(f"API host: {source.api_base}")
         self._console.write(
-            f"Prereleases: {'offered' if source.include_prereleases else 'ignored'}"
+            f"Channel: {CHANNEL_LABELS.get(source.channel, source.channel)}"
         )
         self._console.write(f"Installer pattern: {source.asset_pattern}")
         if source.configured:

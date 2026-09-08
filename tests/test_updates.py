@@ -7,11 +7,19 @@ people are offered a downgrade, too shy and a real update is never mentioned.
 
 import asyncio
 import unittest
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from company_tui.capabilities.updates import UpdatesCapability
+from company_tui.domain import naming
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.updates import (
+    CHANNEL_ANY,
+    CHANNEL_OFFICIAL,
+    CHANNEL_PRERELEASE,
     DEFAULT_API_BASE,
+    DEFAULT_REPOSITORY,
     UNKNOWN_BUILD,
     AssetDownloadPort,
     Release,
@@ -21,6 +29,7 @@ from company_tui.domain.updates import (
     choose,
     parse_version,
 )
+from company_tui.infrastructure.config import FileConfig
 
 
 class ParsingVersions(unittest.TestCase):
@@ -151,7 +160,7 @@ class ChoosingARelease(unittest.TestCase):
 
     def test_prereleases_are_included_when_asked_for(self):
         chosen = choose(
-            self.RELEASES, UpdateSource(repository="a/b", include_prereleases=True)
+            self.RELEASES, UpdateSource(repository="a/b", channel=CHANNEL_ANY)
         )
         self.assertEqual("v3.0.0", chosen.tag)
 
@@ -171,7 +180,7 @@ class ChoosingARelease(unittest.TestCase):
 
     def test_an_unparseable_tag_is_a_last_resort_not_a_crash(self):
         odd = (Release(tag="nightly", prerelease=False),)
-        chosen = choose(odd, UpdateSource(repository="a/b", include_prereleases=True))
+        chosen = choose(odd, UpdateSource(repository="a/b", channel=CHANNEL_ANY))
         self.assertEqual("nightly", chosen.tag)
 
 
@@ -186,8 +195,15 @@ class ValidatingTheSource(unittest.TestCase):
         self.assertEqual("", UpdateSource(repository="owner/name").problem)
 
     def test_empty_is_reported_as_unconfigured(self):
-        self.assertIn("no repository", UpdateSource().problem)
-        self.assertFalse(UpdateSource().configured)
+        self.assertIn("no repository", UpdateSource(repository="").problem)
+        self.assertFalse(UpdateSource(repository="").configured)
+
+    def test_the_shipped_default_is_configured(self):
+        # The default is a real repository now, so a bare UpdateSource is usable -
+        # which is also what Advanced's "reset to defaults" writes.
+        self.assertEqual(DEFAULT_REPOSITORY, UpdateSource().repository)
+        self.assertTrue(UpdateSource().configured)
+        self.assertEqual("", UpdateSource().problem)
 
     def test_a_non_url_api_base_is_refused(self):
         source = UpdateSource(repository="owner/name", api_base="api.github.com")
@@ -273,13 +289,238 @@ class _Downloads(AssetDownloadPort):
 
 
 class _Console:
-    """Captures what the capability narrates, and nothing else."""
+    """Captures what the capability narrates, and whether it was asked to install."""
 
-    def __init__(self) -> None:
+    def __init__(self, install_problem: str = "") -> None:
         self.lines: list[str] = []
+        self.installed: list[tuple[str, str]] = []
+        self.install_problem = install_problem
 
     def write(self, line: str) -> None:
         self.lines.append(line)
+
+    async def install_update(self, installer: str, version: str) -> str:
+        self.installed.append((installer, version))
+        return self.install_problem
+
+
+class _RealDownloads(AssetDownloadPort):
+    """Writes a file, so the paths after a successful download are reachable."""
+
+    def __init__(self) -> None:
+        self.fetched: list[str] = []
+
+    async def fetch(self, url: str, target) -> int:
+        self.fetched.append(url)
+        target.write_bytes(b"installer")
+        return 9
+
+
+class Channels(unittest.TestCase):
+    """Three answers, and the middle one is the reason this is not a boolean.
+
+    `prerelease` has to keep offering the prerelease line even when an official release
+    is newer. That is the whole point for somebody testing debug builds, and it is the
+    case a boolean could not express: `include_prereleases = true` meant "either kind,
+    whichever is newest", which drifts onto the official line the moment one ships.
+    """
+
+    OFFICIAL = Release(tag="v2.0.0+9-released", prerelease=False)
+    DEBUG = Release(tag="v1.5.0+8", prerelease=True)
+    ODD = Release(tag="v3.0.0+7", prerelease=False)
+    """Published as a full release but tagged without -released, so `official` says no.
+    Something other than the workflow made it."""
+
+    def _chosen(self, channel, releases=None):
+        source = UpdateSource(repository="a/b", channel=channel)
+        return choose(releases or (self.OFFICIAL, self.DEBUG), source)
+
+    def test_official_ignores_a_newer_prerelease(self):
+        self.assertEqual(self.OFFICIAL.tag, self._chosen(CHANNEL_OFFICIAL).tag)
+
+    def test_prerelease_ignores_a_newer_official_release(self):
+        # THE POINT OF THE THIRD CHANNEL. 2.0.0+9 is newer than 1.5.0+8 and is not
+        # offered, because somebody on this channel is tracking debug builds.
+        self.assertEqual(self.DEBUG.tag, self._chosen(CHANNEL_PRERELEASE).tag)
+
+    def test_any_takes_whichever_is_newest(self):
+        self.assertEqual(self.OFFICIAL.tag, self._chosen(CHANNEL_ANY).tag)
+
+    def test_prerelease_offers_nothing_when_there_are_none(self):
+        self.assertIsNone(self._chosen(CHANNEL_PRERELEASE, (self.OFFICIAL,)))
+
+    def test_a_release_that_is_neither_belongs_to_any_alone(self):
+        # `official` wants "not prerelease AND tagged -released", `prerelease` asks how
+        # it was published. A release marked neither is nobody's channel but `any`.
+        self.assertIsNone(self._chosen(CHANNEL_OFFICIAL, (self.ODD,)))
+        self.assertIsNone(self._chosen(CHANNEL_PRERELEASE, (self.ODD,)))
+        self.assertEqual(self.ODD.tag, self._chosen(CHANNEL_ANY, (self.ODD,)).tag)
+
+    def test_include_prereleases_is_derived_from_the_channel(self):
+        self.assertFalse(UpdateSource(channel=CHANNEL_OFFICIAL).include_prereleases)
+        self.assertTrue(UpdateSource(channel=CHANNEL_PRERELEASE).include_prereleases)
+        self.assertTrue(UpdateSource(channel=CHANNEL_ANY).include_prereleases)
+
+
+class DownloadingAndInstalling(unittest.TestCase):
+    """The card's own install path, and the flag that ignores being up to date."""
+
+    def _run(self, values, *, version="0.1.0+2", latest="v0.2.0+3-released",
+             install_problem=""):
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        console = _Console(install_problem=install_problem)
+        downloads = _RealDownloads()
+        feed = _Feed((
+            Release(
+                tag=latest,
+                prerelease=False,
+                asset_name="dti-setup.exe",
+                asset_url="https://x/i.exe",
+                asset_size=1024,
+            ),
+        ))
+        capability = UpdatesCapability(
+            console=console,
+            config=_Config(UpdateSource(repository="a/b")),
+            feed=feed,
+            version=version,
+            downloads=downloads,
+        )
+        merged = {"folder": folder.name, **values}
+        message, ok = asyncio.run(capability._check(merged))
+        return message, ok, console, downloads
+
+    def test_up_to_date_stops_unless_asked_anyway(self):
+        message, ok, console, downloads = self._run(
+            {"download": True}, version="0.2.0+3", latest="v0.2.0+3-released"
+        )
+        self.assertTrue(ok)
+        self.assertIn("Up to date", message)
+        self.assertEqual([], downloads.fetched, "nothing to fetch")
+
+    def test_anyway_reinstalls_the_version_already_running(self):
+        # A repair. The installer removes the old copy first either way, so this
+        # rebuilds the install rather than layering on it.
+        message, ok, console, downloads = self._run(
+            {"anyway": True}, version="0.2.0+3", latest="v0.2.0+3-released"
+        )
+        self.assertEqual(1, len(downloads.fetched))
+        self.assertTrue(any("reinstalling it as asked" in line for line in console.lines))
+        self.assertEqual(1, len(console.installed), "anyway installs as well as fetches")
+
+    def test_anyway_downloads_without_the_download_box(self):
+        # Two boxes for one intent would be a trap: ticking "install anyway" and
+        # forgetting "download" would report success having fetched nothing.
+        _, _, _, downloads = self._run({"anyway": True})
+        self.assertEqual(1, len(downloads.fetched))
+
+    def test_install_hands_the_path_to_the_app(self):
+        message, ok, console, _ = self._run({"download": True, "install": True})
+        self.assertEqual(1, len(console.installed))
+        installer, version = console.installed[0]
+        self.assertTrue(installer.endswith("dti-setup.exe"))
+        self.assertEqual("0.2.0+3", version)
+
+    def test_download_alone_installs_nothing(self):
+        message, ok, console, _ = self._run({"download": True})
+        self.assertEqual([], console.installed)
+        self.assertIn("Downloaded", message)
+
+    def test_a_refused_install_reports_it_and_says_where_the_file_is(self):
+        # The app can decline - somebody answers no to the confirmation, or the
+        # handover cannot be armed. The download still happened and is still usable.
+        message, ok, console, _ = self._run(
+            {"download": True, "install": True}, install_problem="Left alone"
+        )
+        self.assertFalse(ok)
+        self.assertIn("Left alone", message)
+        self.assertTrue(any("Ctrl+U" in line for line in console.lines))
+
+
+class TheSettingsFileAndTheDefault(unittest.TestCase):
+    """Absent and empty are different answers, and the round trip has to keep them apart.
+
+    The default is a real repository, so a settings file that says nothing gets it. A file
+    that says `repository = ""` has said OFF, and must keep saying it - which means the
+    save path has to write that empty value down rather than omitting it the way it omits
+    every other default. Omit it and clearing the field in Advanced switches checking off
+    until the next read and then quietly back on.
+    """
+
+    def _config(self, body: str = "") -> FileConfig:
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        project = Path(folder.name) / naming.CONFIG_NAME
+        project.write_text(body, encoding="utf-8")
+        # A user file that does not exist, so only the project one is read.
+        return FileConfig(project=project, user=Path(folder.name) / "absent.toml")
+
+    def test_a_file_with_no_updates_section_gets_the_default(self):
+        source = self._config("").update_source()
+        self.assertEqual(DEFAULT_REPOSITORY, source.repository)
+        self.assertTrue(source.configured)
+
+    def test_a_file_with_an_empty_repository_stays_off(self):
+        source = self._config('[updates]\nrepository = ""\n').update_source()
+        self.assertEqual("", source.repository)
+        self.assertFalse(source.configured, "an empty repository is somebody saying off")
+
+    def test_a_file_naming_a_fork_gets_the_fork(self):
+        source = self._config('[updates]\nrepository = "someone/else"\n').update_source()
+        self.assertEqual("someone/else", source.repository)
+
+    def test_turning_it_off_survives_a_save_and_a_reload(self):
+        # THE REGRESSION THIS GUARDS. Saving an empty repository used to write no line
+        # at all, which reads back as "nothing said" and hands out the default.
+        config = self._config("")
+        settings = replace(config.settings(), updates=UpdateSource(repository=""))
+        written = config.save(settings, ConfigScope.PROJECT)
+        self.assertIn('repository = ""', written.read_text(encoding="utf-8"))
+        self.assertFalse(
+            FileConfig(project=written, user=written.parent / "absent.toml")
+            .update_source()
+            .configured
+        )
+
+    def test_the_channel_defaults_to_official(self):
+        self.assertEqual(CHANNEL_OFFICIAL, self._config("").update_source().channel)
+
+    def test_a_named_channel_is_read(self):
+        source = self._config('[updates]\nchannel = "prerelease"\n').update_source()
+        self.assertEqual(CHANNEL_PRERELEASE, source.channel)
+
+    def test_the_old_boolean_still_means_what_it_meant(self):
+        # `include_prereleases = true` said "either kind, whichever is newest" and said
+        # nothing about prereleases only. Reading it as prerelease-only would silently
+        # stop offering official releases to somebody who never asked for that.
+        source = self._config('[updates]\ninclude_prereleases = true\n').update_source()
+        self.assertEqual(CHANNEL_ANY, source.channel)
+
+    def test_a_typo_in_the_channel_falls_back_rather_than_failing(self):
+        source = self._config('[updates]\nchannel = "beta"\n').update_source()
+        self.assertEqual(CHANNEL_OFFICIAL, source.channel)
+
+    def test_a_channel_round_trips(self):
+        config = self._config("")
+        settings = replace(
+            config.settings(), updates=UpdateSource(repository="a/b", channel=CHANNEL_PRERELEASE)
+        )
+        written = config.save(settings, ConfigScope.PROJECT)
+        self.assertIn('channel = "prerelease"', written.read_text(encoding="utf-8"))
+        self.assertEqual(
+            CHANNEL_PRERELEASE,
+            FileConfig(project=written, user=written.parent / "absent.toml")
+            .update_source()
+            .channel,
+        )
+
+    def test_the_default_itself_is_not_written_back_as_configuration(self):
+        # The other half: a settings file repeating the built-in value is noise that
+        # reads as a decision, and it pins every existing file to today's default.
+        config = self._config("")
+        written = config.save(config.settings(), ConfigScope.PROJECT)
+        self.assertNotIn("repository =", written.read_text(encoding="utf-8"))
 
 
 class TheCheck(unittest.TestCase):
@@ -299,7 +540,7 @@ class TheCheck(unittest.TestCase):
 
     def test_an_unconfigured_source_is_reported_and_nothing_is_asked(self):
         feed = _Feed()
-        message, ok, lines = self._run(UpdateSource(), feed)
+        message, ok, lines = self._run(UpdateSource(repository=""), feed)
         self.assertFalse(ok)
         self.assertEqual(0, feed.asked, "it must not make a request it knows will fail")
         self.assertTrue(any("Advanced" in line for line in lines))
@@ -343,7 +584,8 @@ class TheCheck(unittest.TestCase):
         feed = _Feed((Release(tag="v9.9.9", prerelease=True),))
         message, ok, _ = self._run(UpdateSource(repository="a/b"), feed)
         self.assertTrue(ok)
-        self.assertIn("only prereleases", message)
+        self.assertIn("published nothing on the", message)
+        self.assertIn("Advanced", message)
 
     def test_a_release_with_no_matching_asset_still_reports_the_version(self):
         feed = _Feed((Release(tag="v0.2.0-released", prerelease=False),))

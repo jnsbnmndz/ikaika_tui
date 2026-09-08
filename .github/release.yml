@@ -1,0 +1,28 @@
+# How GitHub groups the changelog it generates for a release.
+#
+# `release.yml` at the root of .github, and NOT a workflow - it sits beside them and is
+# read by the release-notes API, which `.github/workflows/release.yml` calls before it
+# publishes. Two files a directory apart with nearly the same name, so: this one is
+# configuration, that one is the workflow.
+#
+# Categories are matched by pull request LABEL, in order, and the first match wins. A
+# commit pushed straight to a branch carries no labels and lands in the catch-all, which
+# is why the catch-all exists rather than being a sign of a missing category: much of this
+# repository arrives as direct commits, and a changelog that silently omitted those would
+# be worse than an ungrouped one.
+changelog:
+  categories:
+    - title: Features
+      labels: [feature, enhancement]
+    - title: Fixes
+      labels: [fix, bug]
+    - title: Build, release and signing
+      labels: [build, release, ci]
+    - title: Documentation and decisions
+      labels: [documentation, docs]
+    - title: Dependencies
+      labels: [dependencies]
+    # Everything else, including every unlabelled commit. `*` has to come last: the first
+    # matching category wins, and a catch-all placed earlier would swallow the lot.
+    - title: Other changes
+      labels: ["*"]

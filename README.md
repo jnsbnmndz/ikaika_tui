@@ -235,24 +235,56 @@ Everything that identifies an install derives from one define, so the two cannot
 | Directory | `%LOCALAPPDATA%\Programs\dti` | `…\Programs\dti-debug` |
 | Add/Remove entry | Developer Toolbox Inventory | Developer Toolbox Inventory **(debug)** |
 | Settings key | `…\dti` | `…\dti-debug` |
-| On PATH | yes, unless `/NOPATH` | **no**, unless `/PATH` |
+| Command | `dti` | `dti-debug` |
+| On PATH | yes, unless `/NOPATH` | yes, unless `/NOPATH` |
 
 That is not tidiness. `UNINSTALL_KEY` used to be shared, and the upgrade path reads it —
 so installing a debug build ran the *release* build's uninstaller, took its PATH entry
 with it, and installed the debug tree into the release's directory. One name, two
 products, and the second silently ate the first.
 
-The PATH default inverts because both builds install an executable of the same name. Two
-of them on PATH means `dti` is whichever directory comes first — an order that changes
-whenever anything else edits PATH, is invisible from the prompt, and whose wrong answer
-looks exactly like the right one. Worse than typing a path, so a debug build stays off it
-and its finish page gives you the full path instead. `/PATH` opts in if you want it
-anyway.
+**The debug build installs its executable under its own name**, `dti-debug.exe`, so both
+can be on PATH without a collision. It was kept off PATH entirely at first, because two
+executables called `dti.exe` means the command is whichever directory comes first — an
+order that changes whenever anything else edits PATH, is invisible from the prompt, and
+whose wrong answer looks exactly like the right one. Renaming removes the collision
+instead of avoiding it: `dti` is the release, `dti-debug` is the debug build.
+
+The rename happens after the files are copied, and is safe for a PyInstaller onedir build
+because the bootloader locates `_internal` by the executable's *directory* rather than by
+its name — checked by renaming a frozen build and starting it, not assumed.
+
+The installer also offers **components**: Start Menu shortcut (on), Desktop shortcut
+(off), and Add to PATH (on). The choices are recorded and restored, so an update skips the
+page and a silent in-app update keeps what you picked. `/NOSHORTCUTS`, `/NOPATH` and
+`/PATH` still override from the command line.
 
 The store under `~/.dti` is **shared** between them, because the app derives it from its
 own name rather than from which build it is. So settings, remembered tabs and cloned
 script repositories are common to both — which is also why neither uninstaller removes
 it, on top of it holding work nobody should delete to tidy up.
+
+### Release notes are generated, then prefixed
+
+`POST /releases/generate-notes` returns the changelog GitHub builds from the commits and
+pull requests since the previous release, and the workflow composes the body itself: the
+four lines that matter for an installer first — version, whether it is signed, where it
+installs — then a rule, then the generated part. `.github/release.yml` groups what comes
+back.
+
+Composed in that order here rather than by passing `--generate-notes` to
+`gh release create`, because that flag generates the title *and* body and what happens to
+a `--notes` given alongside it is not documented. A release path is not the place for a
+behaviour nobody wrote down. A failure to generate is not a failure to release: the body
+falls back to the four lines, which are the ones somebody installing actually needs.
+
+Every workflow also writes a **run summary**, so a run can be understood from the
+Actions tab without opening a log. `check-all` writes its own result table — in the
+script, where the results are, rather than in YAML that would re-derive them from parsed
+stdout and go stale. A release summarises the version, tag, kind, whether it was signed
+and which installer went up; a rehearsal says what it *would* have done, and says it even
+when the run failed, because a red run with a blank summary is one somebody has to read
+the log to understand.
 
 ### An update is not an install, and says so
 
@@ -312,49 +344,86 @@ and spending those on somebody restarting the app is how the manual check ends u
 rate-limited when they actually want it. A launch with an installer already downloaded
 makes no request at all.
 
-`[updates] check_on_launch = false` turns it off. It is already inert until a repository
-is set, so the shipped default checks nothing. **Check for Updates** is still the card
+It is **on out of the box**: `[updates] repository` defaults to `jnsbnmndz/ikaika_tui`,
+which is where this build's own releases are published. That was empty once, on the
+grounds that the code has no business guessing which fork somebody runs — and the thing
+that argument protected turned out to be worse, because a toolbox shipping with update
+checking switched off is one where the feature exists and does nothing until somebody
+finds the screen that turns it on. A fork changes one line in Advanced, which is a
+smaller cost than everybody else having to.
+
+Two switches turn it off, and both keep working: `[updates] check_on_launch = false`
+stops the launch check while leaving the card, and clearing the repository in Advanced
+stops both. **Absent and empty are different answers** in the settings file — a file with
+no `repository` line has said nothing and gets the default, one that says
+`repository = ""` has said *off*. Which is why saving an empty repository writes that
+empty value down rather than omitting it the way every other default is omitted;
+otherwise clearing the field would switch checking off until the next read and then
+quietly back on.
+
+**Check for Updates** is still the card
 that reports everything properly — asset size, release notes, why the check failed — and
 what it downloads is recorded in the same place, so `Ctrl+U` installs that too.
 
+### What CI caches, and what it deliberately does not
+
+The **download** caches: pip's, and PyInstaller's on the release workflow. Keyed on
+`uv.lock` + `pyproject.toml` and the runner's python version, with `restore-keys` — which
+matter more than the key, because without them a one-line change to the lock means a
+completely cold cache and every wheel fetched again.
+
+The paths are *asked for*, not written down. `%LOCALAPPDATA%\pip\Cache` is where pip keeps
+its downloads today and is not a contract; `pip cache dir` is. It is asked with the
+runner's python, before the virtualenv exists, and that works because pip's download cache
+is per **user** rather than per environment — the path the runner's pip reports is the one
+the venv's pip will use.
+
+**Not the virtualenv.** A restored pip cache cannot make a run wrong: worst case it is
+ignored and everything is fetched again. A restored `.venv` can — it carries an
+interpreter and an editable install, and one built against a python the runner has since
+upgraded is a venv whose `python.exe` will not start. That fails on a cache *hit* and
+passes on a miss, which is the worst failure shape CI has.
+
+And caching is never why a run fails. The discovery step catches its own errors and
+reports an empty path; the cache step is skipped when the path is empty. A missing python
+is `setup-dev-env`'s to report — it has a sentence for it — and a caching step that died
+first would replace that sentence with a stack trace.
+
 ### Keeping the actions current, in two halves
 
-`.github/dependabot.yml` opens the pull requests. `.github/workflows/actions-audit.yml`
-runs `saadmk11/github-actions-version-updater` in check-only mode and **fails** when
-something is behind. Both, because they answer different questions: one proposes the
-bump, the other notices when the proposal was never merged — or when Dependabot itself
-has been switched off. A version check whose only output is a pull request has no way to
-say that it has stopped running.
+`.github/dependabot.yml` opens the pull requests. `.\script.ps1 check-actions` — run
+weekly by `.github/workflows/actions-audit.yml` — reads every `uses:` off the checkout,
+asks GitHub for each action's latest release, and **fails** when one has moved on. Both,
+because they answer different questions: one proposes the bump, the other notices when
+the proposal was never merged, or when Dependabot itself has been switched off. A version
+check whose only output is a pull request has no way to say it has stopped running.
 
-The split of labour follows the credential. GitHub forbids a workflow's own
-`GITHUB_TOKEN` from editing workflow files, so anything running *as* a workflow needs a
-PAT with `workflow` scope to change one — a long-lived secret able to rewrite
-`release.yml`, which is the file that signs and publishes. Dependabot is not a workflow
-and needs no token at all. So the half that writes is the half that needs no credential,
-and the third-party action never writes: `skip_pull_request: true`, which also stops the
-two of them opening competing pull requests for the same one-line bump.
+The audit **was** a third-party action, `saadmk11/github-actions-version-updater`, and
+that is exactly how it failed. It is a Docker *container* action, so every run builds its
+image from the Dockerfile at the pinned SHA — and that Dockerfile says
+`FROM python:3.12-slim-bullseye`. Debian bullseye's repositories have since been
+archived, so `apt-get update` inside the build fails, so the image cannot be built, so
+the job failed before doing anything: *Docker build failed with exit code 1*, three
+attempts, two backoffs. Upstream's `main` carries the same line and v0.9.0 is still the
+newest tag, so there was nothing to bump to — and a container action pinned by SHA cannot
+be patched from outside. What it did was four API calls and a string comparison.
 
-The audit needs `ACTIONS_AUDIT_TOKEN`: a fine-grained token, scoped to this repository
-only, with **Actions: Read-only** and nothing else. `Metadata: Read` is force-enabled
-alongside it and cannot be turned off.
+Doing it here costs less than depending on somebody else's base image aging out, and it
+removed the credential with it. That action wanted a PAT with `workflow` scope, because
+it listed this repository's workflows through the API; the script reads them off the
+checkout, and every version lookup is a public read, so the default `GITHUB_TOKEN` is
+enough. **`ACTIONS_AUDIT_TOKEN` is no longer read by anything and can be deleted.**
 
-That is one permission, and it is what the action's own calls need rather than what its
-README asks for. It reads `GET /repos/<this repo>/actions/workflows` to discover workflow
-*paths* — hence Actions — and then reads the files off the disk `actions/checkout` already
-populated, which is why `Contents` is not needed. Its other calls (`/releases`,
-`/commits`) are public reads of the action repositories themselves, and a fine-grained
-token always has read access to public repositories. Everything that would write —
-branch, commit, pull request — sits behind `skip_pull_request` and never runs. The
-README's `repo` + `workflow` is what *pushing* needs.
+What counts as behind: a tag pin is current while the newest release shares its major, so
+`v7` covers `v7.0.1` and stops covering anything at `v8`. A SHA pin is read through the
+`# vX.Y.Z` comment beside it rather than by resolving the SHA — and a SHA pin with no
+comment is reported as `unknown`, because it is unauditable by anything, including a
+person. A lookup that fails is `unknown` too, and neither fails the job: a version check
+that guesses is worse than one that abstains.
 
-Without the secret the weekly run fails and names it; delete the `schedule:` block to
-make the audit manual instead.
-
-That action is pinned to a commit SHA rather than a tag, unlike `actions/checkout` and
-`actions/upload-artifact`. It is third-party and it is handed a token, and a tag is a
-moving pointer — those two together are where a pin earns its maintenance cost.
-Dependabot moves the pin and rewrites the version comment beside it, so it stays a pin
-rather than becoming a fossil.
+The same command runs on a laptop. It uses `gh` when it is there, so a run inside Actions
+is authenticated rather than spending the sixty-an-hour unauthenticated budget, and falls
+back to plain HTTPS otherwise.
 
 ## Template packs
 

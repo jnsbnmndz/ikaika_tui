@@ -44,8 +44,12 @@ from company_tui.domain.config import (
     TemplateSource,
 )
 from company_tui.domain.updates import (
+    CHANNEL_ANY,
+    CHANNEL_OFFICIAL,
+    CHANNELS,
     DEFAULT_API_BASE,
     DEFAULT_ASSET_PATTERN,
+    DEFAULT_REPOSITORY,
     UpdateSource,
 )
 
@@ -95,12 +99,22 @@ def render(settings: Settings) -> str:
     # pinned to the old one.
     updates = settings.updates
     update_lines = []
-    if updates.repository.strip():
-        update_lines.append(f"repository = {quote(updates.repository.strip())}")
+    # `repository` is the one field where an EMPTY value has to be WRITTEN DOWN, and
+    # it is the mirror of the absent/empty distinction in `update_source` above. Empty
+    # means off; the default is not empty; a file that merely omitted the line reads as
+    # "nothing said" and gets the default back. So clearing the field in Advanced would
+    # switch update checking off until the next read and then quietly on again.
+    #
+    # Omitted only when it IS the default, which is the noise this block exists to avoid.
+    repository = updates.repository.strip()
+    if not repository:
+        update_lines.append('repository = ""')
+    elif repository != DEFAULT_REPOSITORY:
+        update_lines.append(f"repository = {quote(repository)}")
     if updates.api_base.strip() and updates.api_base.strip() != DEFAULT_API_BASE:
         update_lines.append(f"api_base = {quote(updates.api_base.strip())}")
-    if updates.include_prereleases:
-        update_lines.append("include_prereleases = true")
+    if updates.channel != CHANNEL_OFFICIAL:
+        update_lines.append(f"channel = {quote(updates.channel)}")
     if updates.asset_pattern.strip() and updates.asset_pattern.strip() != DEFAULT_ASSET_PATTERN:
         update_lines.append(f"asset_pattern = {quote(updates.asset_pattern.strip())}")
     if update_lines:
@@ -173,10 +187,19 @@ class FileConfig(ConfigPort):
 
     def update_source(self) -> UpdateSource:
         section = self._section(UPDATES_SECTION)
+        # ABSENT AND EMPTY ARE DIFFERENT ANSWERS HERE, and this is the only field
+        # where that matters. A settings file with no `repository` line has not said
+        # anything, so it gets the default; one that says `repository = ""` has said
+        # "off", which is what clearing the field in Advanced writes. Collapsing the
+        # two - `.get("repository", "") or DEFAULT` - would turn update checking back
+        # on for the one person who deliberately turned it off.
+        configured = section.get("repository")
         return UpdateSource(
-            repository=str(section.get("repository", "")).strip(),
+            repository=(
+                DEFAULT_REPOSITORY if configured is None else str(configured).strip()
+            ),
             api_base=str(section.get("api_base", "")).strip() or DEFAULT_API_BASE,
-            include_prereleases=section.get("include_prereleases", False) is True,
+            channel=self._channel_of(section),
             asset_pattern=str(section.get("asset_pattern", "")).strip()
             or DEFAULT_ASSET_PATTERN,
             # `is not False`, so a missing key and a malformed one both leave the
@@ -184,6 +207,24 @@ class FileConfig(ConfigPort):
             # wrote is not a setting saying no.
             check_on_launch=section.get("check_on_launch", True) is not False,
         )
+
+    @staticmethod
+    def _channel_of(section: dict) -> str:
+        """The channel, falling back to the boolean this key replaced.
+
+        A settings file written before there were three channels says
+        `include_prereleases = true`, which meant "official or prereleases, whichever is
+        newest" - `any`, not `prerelease`. Reading it as prerelease-only would silently
+        stop offering official releases to somebody who never asked for that.
+
+        An unrecognised channel is the default rather than an error: this is one word in
+        a settings file, and refusing to start over a typo in it would be worse than
+        offering official releases to somebody who meant something else.
+        """
+        named = str(section.get("channel", "")).strip().lower()
+        if named in CHANNELS:
+            return named
+        return CHANNEL_ANY if section.get("include_prereleases") is True else CHANNEL_OFFICIAL
 
     def settings(self) -> Settings:
         scaffold = self._section("scaffold")

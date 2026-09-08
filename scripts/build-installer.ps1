@@ -108,11 +108,21 @@ Write-Host "[3/5] Source: dist\$sourceName"
 
 $suffix = if ($Released) { '-released' } else { '' }
 $outDir = Join-Path $root 'dist'
-$outFile = Join-Path $outDir "$AppName-$($version.Name)-setup$suffix.exe"
+# THE BUILD NUMBER IS IN THE FILENAME, and it has to be.
+#
+# This was `$($version.Name)`, so 0.1.1+4 and 0.1.1+5 both came out as
+# dti-0.1.1-setup.exe. Two GitHub releases then carried an asset with one name, a browser
+# saved the second as "dti-0.1.1-setup (1).exe", and the only way to tell which was which
+# was to install one and ask it. That is exactly the confusion the global build number
+# exists to prevent - a rebuild of the same source IS a different artifact - and the
+# filename was the one place it was left out.
+#
+# `+` rather than a dot, matching the tag (v0.1.1+5) and the dist folder. If a host
+# normalises it the two names still differ, which is the whole requirement.
+$outFile = Join-Path $outDir "$AppName-$text-setup$suffix.exe"
 
 # Four dot-separated numbers, which is the only shape VIProductVersion accepts. The build
-# number is the fourth part, so two installers of one version are still distinguishable
-# in the file's own properties.
+# number is the fourth part, so the file's own properties agree with its name.
 $viVersion = "$($version.Major).$($version.Minor).$($version.Patch).$($version.Build)"
 
 $defines = @(

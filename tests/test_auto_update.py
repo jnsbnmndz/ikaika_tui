@@ -38,7 +38,13 @@ from company_tui.domain.updates import (
     due,
     parse_version,
 )
-from company_tui.infrastructure.handover import WAITER, WindowsHandover, quote
+from company_tui.infrastructure.handover import (
+    RELAUNCH,
+    SILENT,
+    WAITER,
+    WindowsHandover,
+    quote,
+)
 from company_tui.infrastructure.update_state import FileUpdateState
 from company_tui.presentation.chrome import AppHeader
 
@@ -207,11 +213,22 @@ class Looking(unittest.TestCase):
         )
 
     def test_an_unconfigured_source_asks_nothing_and_says_nothing(self):
+        # Spelled out, because a bare UpdateSource is CONFIGURED now - it carries
+        # DEFAULT_REPOSITORY. Empty is somebody having turned checking off, and it is
+        # still the one thing that stops this asking.
         feed = _Feed()
-        report = asyncio.run(self._watch(UpdateSource(), feed).look())
+        report = asyncio.run(self._watch(UpdateSource(repository=""), feed).look())
         self.assertEqual(0, feed.asked)
         self.assertFalse(report.waiting)
         self.assertEqual("", report.notice("^"))
+
+    def test_the_shipped_default_does_get_asked(self):
+        # The other side of it: out of the box, with nothing configured, the check runs.
+        # That is what making the repository a default was for.
+        feed = _Feed()
+        report = asyncio.run(self._watch(UpdateSource(), feed).look())
+        self.assertEqual(1, feed.asked)
+        self.assertFalse(report.waiting, "the fake feed published nothing")
 
     def test_check_on_launch_off_asks_nothing(self):
         feed = _Feed((_release("v9.9.9+9-released"),))
@@ -417,8 +434,17 @@ class TheWaiterCommand(unittest.TestCase):
     command that starts it without waiting is the bug the whole file exists to avoid.
     """
 
+    def _command(self, relaunch: str = "") -> str:
+        return WAITER.format(
+            pid=4321,
+            timeout=120,
+            silent=SILENT,
+            installer="C:/x/setup.exe",
+            relaunch=relaunch,
+        )
+
     def test_it_waits_before_it_starts(self):
-        command = WAITER.format(pid=4321, timeout=120, installer="C:/x/setup.exe")
+        command = self._command()
         self.assertLess(
             command.index("Wait-Process"),
             command.index("Start-Process"),
@@ -426,6 +452,36 @@ class TheWaiterCommand(unittest.TestCase):
         )
         self.assertIn("-Id 4321", command)
         self.assertIn("-Timeout 120", command)
+
+    def test_it_installs_silently_and_waits_for_the_installer(self):
+        # The whole point of an in-app update: no wizard, and -Wait so what follows
+        # happens after the install rather than alongside it.
+        command = self._command()
+        self.assertIn(f"-ArgumentList '{SILENT}'", command)
+        self.assertIn("-Wait", command)
+
+    def test_a_silent_failure_reruns_the_installer_visibly(self):
+        # A SILENT FAILURE IS WORSE THAN A WIZARD: the user sees the app close and
+        # nothing come back. A non-zero exit runs it again without /S so its own error
+        # dialog explains itself.
+        command = self._command()
+        self.assertIn("$done.ExitCode -ne 0", command)
+        visible = command.rindex("Start-Process -FilePath 'C:/x/setup.exe' }")
+        self.assertGreater(visible, command.index(SILENT), "the retry must drop /S")
+
+    def test_a_frozen_build_is_restarted_afterwards(self):
+        command = self._command(RELAUNCH.format(exe="C:/Programs/dti/dti.exe"))
+        self.assertIn("C:/Programs/dti/dti.exe", command)
+        self.assertGreater(
+            command.index("dti.exe"),
+            command.index("setup.exe"),
+            "the new build starts after the installer, not before",
+        )
+
+    def test_running_from_source_restarts_nothing(self):
+        # sys.executable is the interpreter there, and relaunching it would open a bare
+        # Python prompt over somebody's terminal.
+        self.assertNotIn("elseif", self._command())
 
     def test_a_quote_in_the_path_cannot_end_the_string(self):
         # Doubling is how a literal quote survives a PowerShell single-quoted string.

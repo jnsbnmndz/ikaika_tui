@@ -23,13 +23,18 @@ workflow doing the asking. See
 `docs/decisions/0004-the-toolbox-can-install-its-own-update.md`.
 
 
-WHERE IT LOOKS IS A SETTING, NOT A CONSTANT
+WHERE IT LOOKS IS A SETTING, AND IT HAS A DEFAULT
 
-`UpdateSource` comes from the settings file and is edited in Advanced. Empty by
-default - a fork, an internal mirror and a GitHub Enterprise host are the same
-program pointed somewhere else, and this code should not guess which one it is a
-build of. An unconfigured source is reported as unconfigured, with the name of
-the screen that configures it.
+`UpdateSource` comes from the settings file and is edited in Advanced. A fork, an
+internal mirror and a GitHub Enterprise host are the same program pointed
+somewhere else, which is why it is a setting at all - but it defaults to this
+build's own repository rather than to nothing, because a check that is off until
+somebody finds the screen that turns it on is a feature that does not exist. See
+`DEFAULT_REPOSITORY`.
+
+Empty is still off, and an unconfigured source is still reported as unconfigured,
+with the name of the screen that configures it - which is now the state somebody
+chose rather than the state it shipped in.
 """
 
 from datetime import UTC, datetime
@@ -39,6 +44,7 @@ from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.updates import (
+    CHANNEL_LABELS,
     AssetDownloadPort,
     Release,
     ReleaseFeedError,
@@ -56,6 +62,8 @@ FAILED = 1
 
 DOWNLOAD_KEY = "download"
 FOLDER_KEY = "folder"
+INSTALL_KEY = "install"
+ANYWAY_KEY = "anyway"
 
 NOT_CONFIGURED = "not configured - set it in Advanced"
 
@@ -140,10 +148,29 @@ class UpdatesCapability(Capability):
                 key="channel",
                 label="Channel",
                 kind=OptionKind.INFO,
-                default=(
-                    "official releases and prereleases"
-                    if source.include_prereleases
-                    else "official releases only"
+                default=CHANNEL_LABELS.get(source.channel, source.channel),
+            ),
+            Option(
+                key=ANYWAY_KEY,
+                label="Download and install anyway",
+                kind=OptionKind.BOOLEAN,
+                default=False,
+                help=(
+                    "Fetch and run the latest release even when it is the "
+                    "version already running. A repair: the installer removes "
+                    "the old copy first either way, so this rebuilds the "
+                    "install rather than layering on it."
+                ),
+            ),
+            Option(
+                key=INSTALL_KEY,
+                label="Install it when the download finishes",
+                kind=OptionKind.BOOLEAN,
+                default=False,
+                help=(
+                    "Asks first, then closes the toolbox, installs, and "
+                    "reopens on the new build. Leave it off to be told where "
+                    "the installer was saved instead."
                 ),
             ),
             Option(
@@ -193,8 +220,9 @@ class UpdatesCapability(Capability):
             # saying which switch would change that is more use than an error.
             return (
                 (
-                    f"{source.repository} has only prereleases, and this is "
-                    "set to official releases only."
+                    f"{source.repository} has published nothing on the "
+                    f"{CHANNEL_LABELS.get(source.channel, source.channel)} "
+                    "channel. Advanced is where that is changed."
                 ),
                 True,
             )
@@ -216,13 +244,20 @@ class UpdatesCapability(Capability):
                 f"{latest.tag} does not parse as a version, so it cannot be compared.",
                 False,
             )
-        if not available.newer_than(installed):
+        if not available.newer_than(installed) and not values.get(ANYWAY_KEY):
             return (f"Up to date - {self._version} is current.", True)
+        if not available.newer_than(installed):
+            # Asked for explicitly. Said out loud, because "installing an update" and
+            # "reinstalling the version you are running" are different acts and only
+            # one of them was ticked.
+            self._console.write(
+                f"{self._version} is already current - reinstalling it as asked."
+            )
 
         for line in latest.notes.splitlines()[:20]:
             self._console.write(line)
 
-        if not values.get(DOWNLOAD_KEY):
+        if not values.get(DOWNLOAD_KEY) and not values.get(ANYWAY_KEY):
             return (
                 (
                     f"{latest.tag} is newer than {self._version}. "
@@ -253,8 +288,32 @@ class UpdatesCapability(Capability):
         megabytes = written / (1024 * 1024)
         self._console.write(f"Saved {written} bytes.")
         self._remember(release, target)
+
+        if values.get(INSTALL_KEY) or values.get(ANYWAY_KEY):
+            return await self._install(release, target, megabytes)
+
         self._console.write(INSTALL_HINT)
         return (f"Downloaded {target.name} ({megabytes:.1f} MB) to {folder}", True)
+
+    async def _install(
+        self, release: Release, target: Path, megabytes: float
+    ) -> tuple[str, bool]:
+        """Hand the installer to the app, which is the only thing that can run it.
+
+        On success this does not come back: the app confirms, arms the handover and
+        starts shutting down, and this workflow is one of the runs that shutting down
+        cancels. So the line before it is the last thing written - said in the past
+        tense on purpose, because by the time anybody reads it, it has happened.
+        """
+        version = release.version.text or release.tag
+        self._console.write(f"Installing {version} - the toolbox will reopen.")
+        problem = await self._console.install_update(str(target), version)
+        if problem:
+            self._console.write(INSTALL_HINT)
+            return (f"Downloaded {target.name} ({megabytes:.1f} MB), but {problem}", False)
+        # Reached only if the app declined to leave after all; the shutdown above does
+        # not return.
+        return (f"Installing {version}.", True)
 
     def _remember(self, release: Release, target: Path) -> None:
         """Record the download where the chrome looks for one.

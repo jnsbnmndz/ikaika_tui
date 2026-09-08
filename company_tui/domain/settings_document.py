@@ -42,6 +42,9 @@ from company_tui.domain.config import (
     TemplateSource,
 )
 from company_tui.domain.updates import (
+    CHANNEL_ANY,
+    CHANNEL_OFFICIAL,
+    CHANNELS,
     DEFAULT_API_BASE,
     DEFAULT_ASSET_PATTERN,
     UpdateSource,
@@ -92,7 +95,7 @@ def write_document(settings: Settings) -> dict[str, Any]:
         "updates": {
             "repository": settings.updates.repository,
             "api_base": settings.updates.api_base,
-            "include_prereleases": settings.updates.include_prereleases,
+            "channel": settings.updates.channel,
             "asset_pattern": settings.updates.asset_pattern,
         },
     }
@@ -215,15 +218,26 @@ def _updates(
         problems.append("'updates' is not an object, so it was ignored")
         return fallback
 
-    prereleases = section.get("include_prereleases", fallback.include_prereleases)
-    if not isinstance(prereleases, bool):
-        problems.append("updates.include_prereleases is not true or false, so it was ignored")
-        prereleases = fallback.include_prereleases
+    # `channel` first, then the boolean it replaced. A document written before there
+    # were three channels says include_prereleases, which meant "either kind, whichever
+    # is newest" - CHANNEL_ANY, and never prerelease-only.
+    channel = fallback.channel
+    named = _text(section, "channel", "").strip().lower()
+    if named and named in CHANNELS:
+        channel = named
+    elif named:
+        problems.append(f"updates.channel is not one of {', '.join(CHANNELS)}, so it was ignored")
+    elif "include_prereleases" in section:
+        legacy = section.get("include_prereleases")
+        if isinstance(legacy, bool):
+            channel = CHANNEL_ANY if legacy else CHANNEL_OFFICIAL
+        else:
+            problems.append("updates.include_prereleases is not true or false, so it was ignored")
 
     return UpdateSource(
         repository=_text(section, "repository", fallback.repository),
         api_base=_text(section, "api_base", fallback.api_base) or DEFAULT_API_BASE,
-        include_prereleases=prereleases,
+        channel=channel,
         asset_pattern=_text(section, "asset_pattern", fallback.asset_pattern)
         or DEFAULT_ASSET_PATTERN,
     )

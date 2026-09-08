@@ -60,6 +60,23 @@ class Ui(Protocol):
         """
         ...
 
+    async def install_update(self, installer: str, version: str) -> str:
+        """Install `installer` and leave, or say why not.
+
+        Returns a problem to report, or `""` - and on `""` the app is already on its
+        way out, so the caller should stop narrating rather than carry on.
+
+        HERE RATHER THAN IN THE CAPABILITY, because installing means shutting the app
+        down, and shutting it down cancels every run - including the one that asked.
+        A capability doing this directly would be a worker cancelling itself and then
+        awaiting its own completion. So the capability asks, and the thing that owns
+        the screen does it from a worker of its own.
+
+        A presentation with no app to close returns a problem. `list` and `doctor`
+        print and exit; neither is somewhere to replace the program from.
+        """
+        ...
+
     async def working(self, label: str, work: Awaitable[T]) -> T:
         """Do `work` while saying what is being waited for.
 

@@ -21,6 +21,7 @@ from company_tui.domain.settings_document import (
     write_document,
 )
 from company_tui.domain.updates import (
+    CHANNEL_ANY,
     DEFAULT_API_BASE,
     DEFAULT_ASSET_PATTERN,
     UpdateSource,
@@ -36,7 +37,7 @@ FULL = Settings(
     updates=UpdateSource(
         repository="owner/name",
         api_base="https://host/api/v3",
-        include_prereleases=True,
+        channel=CHANNEL_ANY,
         asset_pattern="*.msi",
     ),
 )
@@ -139,6 +140,7 @@ class ReadingSomethingOdd(unittest.TestCase):
 
     def test_a_non_boolean_prerelease_flag_falls_back_and_reports(self):
         document = write_document(FULL)
+        document["updates"].pop("channel", None)
         document["updates"]["include_prereleases"] = "yes"
         settings, problems = read_document(document, Settings())
         self.assertFalse(settings.updates.include_prereleases)

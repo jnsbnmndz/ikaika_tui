@@ -292,6 +292,33 @@ if ($Build) {
 $failed = @($results.Keys | Where-Object { $results[$_].State -eq 'FAIL' })
 $skipped = @($results.Keys | Where-Object { $results[$_].State -eq 'SKIP' })
 
+# The same table again, in the run summary, when there is one to write to.
+#
+# HERE RATHER THAN IN THE YAML, because this is where the results are. A workflow that
+# rebuilt this table out of parsed stdout would be a second answer to what passed, and it
+# would be the one that goes stale - which is the same argument that puts every step of
+# every workflow behind script.ps1 in the first place.
+#
+# The skips are listed, not counted. "Passed" over three checks that never ran is the
+# report that gets believed and should not be, and that is as true in a browser as in a
+# terminal.
+if ($env:GITHUB_STEP_SUMMARY) {
+    $summary = @()
+    $summary += if ($failed.Count) { "## Gate failed: $($failed -join ', ')" } else { '## Gate passed' }
+    $summary += ''
+    $summary += '| | Check | Note |'
+    $summary += '|---|---|---|'
+    foreach ($name in $results.Keys) {
+        $note = "$($results[$name].Note)".Replace('|', '\|')
+        $summary += "| $($results[$name].State) | $name | $note |"
+    }
+    if ($skipped.Count) {
+        $summary += ''
+        $summary += "Skipped: $($skipped -join ', ')."
+    }
+    $summary -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+}
+
 Write-Host ''
 if ($failed.Count) {
     Write-Host "  FAILED: $($failed -join ', ')" -ForegroundColor Red

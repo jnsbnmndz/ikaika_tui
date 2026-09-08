@@ -208,6 +208,15 @@ class PlainConsole:
                 values[option.key] = answer or str(option.default)
         return values
 
+    async def install_update(self, installer: str, version: str) -> str:
+        """Refused, and named as a refusal rather than as a failure.
+
+        There is no app here to close and reopen - this console prints and exits. The
+        installer is on disk with its path already reported, so saying so is the whole
+        answer.
+        """
+        return "installing needs the interactive app; run the installer yourself"
+
     async def working(self, label: str, work: Awaitable[T]) -> T:
         """Said once and then waited for: a script's log is the whole record."""
         self.write(label)
