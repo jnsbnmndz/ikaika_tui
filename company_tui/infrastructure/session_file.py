@@ -17,9 +17,10 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from company_tui.domain import naming
 from company_tui.domain.session_memory import RememberedSession
 
-MEMORY_PATH = Path.home() / ".ikaika" / "sessions.json"
+MEMORY_PATH = naming.store_dir() / "sessions.json"
 
 VERSION = 1
 """Written into the file, read back before anything else.

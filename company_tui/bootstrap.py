@@ -3,18 +3,23 @@ from pathlib import Path
 from company_tui.application.app import Application
 from company_tui.application.registry import CapabilityRegistry
 from company_tui.application.template_registry import TemplatePackRegistry
+from company_tui.capabilities.advanced import AdvancedCapability
+from company_tui.capabilities.app_setup import AppSetupCapability
 from company_tui.capabilities.build import BuildCapability
 from company_tui.capabilities.deploy import DeployCapability
 from company_tui.capabilities.doctor import DoctorCapability
 from company_tui.capabilities.scaffold import ScaffoldCapability
 from company_tui.capabilities.scripts import ScriptsCapability
 from company_tui.capabilities.settings import SettingsCapability
+from company_tui.capabilities.updates import UpdatesCapability
 from company_tui.domain.destinations import DestinationLocks
 from company_tui.domain.scaffolding import ProjectFinalizer
 from company_tui.infrastructure.config import FileConfig
 from company_tui.infrastructure.filesystem import LocalFileSystem
 from company_tui.infrastructure.processes import LocalProcessRunner
+from company_tui.infrastructure.release_feed import HttpReleaseFeed
 from company_tui.infrastructure.session_file import FileSessionMemory
+from company_tui.presentation.branding import APP_VERSION
 from company_tui.presentation.plain_console import PlainConsole
 from company_tui.presentation.tui_console import TuiConsole
 from company_tui.presentation.ui import Ui
@@ -53,7 +58,7 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
             ),
             BuildCapability(console=console, pack_registry=pack_registry),
             DeployCapability(console=console),
-            ScriptsCapability(console=console),
+            ScriptsCapability(console=console, services=services),
             SettingsCapability(
                 console=console, config=config, pack_registry=pack_registry
             ),
@@ -63,6 +68,20 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
                 process_runner=process_runner,
                 config=config,
             ),
+            # The toolbox's own three, after the six about projects. Order is
+            # what the menu numbers, so appending is what keeps 01-06 where
+            # people have learned them.
+            AppSetupCapability(console=console, config=config),
+            UpdatesCapability(
+                console=console,
+                config=config,
+                feed=HttpReleaseFeed(),
+                # The running version, read once from the one file that holds
+                # it. Passed in so the comparison has a single source and can be
+                # tested against a version this process is not.
+                version=APP_VERSION,
+            ),
+            AdvancedCapability(console=console, config=config),
         )
     )
 
@@ -71,7 +90,7 @@ def create_application(console: PlainConsole) -> Application:
     return Application(console=console, registry=_build_capability_registry(console))
 
 
-def create_tui_console() -> TuiConsole:
+def create_tui_console(start: str = "") -> TuiConsole:
     # Keyed by the directory the toolbox was started in, which is the project
     # whose tabs these are. The store itself lives under the user's home, so one
     # person's open forms never arrive in somebody else's checkout.
@@ -83,4 +102,5 @@ def create_tui_console() -> TuiConsole:
     console.application = Application(
         console=console, registry=_build_capability_registry(console)
     )
+    console.start_capability = start
     return console

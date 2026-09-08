@@ -1,0 +1,43 @@
+# Runs the same checks a laptop runs, by running the same file.
+#
+# Every step below is one call into script.ps1. Nothing about what "passing" means is
+# written in this file, because a workflow that lists its own steps is a second answer to
+# that question - and it is the answer nobody can reproduce locally. Add a check by
+# editing scripts/check-all.ps1; this file does not change.
+#
+# Marketplace actions: actions/checkout only. Everything else is the runner's own
+# chocolatey, its Windows SDK, and pwsh - which is what "the actions just read the pwsh
+# scripts" means.
+
+name: check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first: the older run is answering a
+# question nobody is asking any more.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No setup-python and no setup-uv. setup-dev-env creates the virtualenv with
+      # whichever of uv or python is present, and the runner has python - so the fallback
+      # path is the one CI exercises, which is worth knowing works.
+      - name: Set up the environment
+        shell: pwsh
+        run: .\script.ps1 setup-dev-env -Lint
+
+      - name: Check everything
+        shell: pwsh
+        run: .\script.ps1 check-all

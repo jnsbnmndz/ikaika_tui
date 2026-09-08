@@ -2,15 +2,15 @@
 
 Guidance for working in this repository.
 
-This is the IKAIKA developer toolbox (v0.0.0+1) — a Python company developer toolbox for repeatable scaffolding and automation. It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
+This is Developer Toolbox Inventory (DTI) — a Python developer toolbox for repeatable scaffolding and automation. Every name it answers to is in `domain/naming.py`, derived from `APP_SLUG`; four of them are a wire format something else on the machine already speaks, so the new name is written and either is accepted. Its version lives in `VERSION` at the repository root, one line, `x.y.z+n`; `presentation/branding.py` reads it, so a release rewrites one file and nothing restates it (`docs/decisions/0002-the-version-is-one-file.md`). It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
 
-The interactive UI is branded: `presentation/branding.py` defines `IKAIKA_THEME` (colors drawn from the company logo) plus the name/tagline/version, registered and activated by `TuiConsole` on mount. New CSS should reference theme tokens (`$primary`, `$accent`, `$surface`, `$panel`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand and adapts if the theme changes.
+The interactive UI is themed: `presentation/branding.py` defines `APP_THEME` plus the tagline and version, registered and activated by `TuiConsole` on mount. The theme's own name is `naming.APP_SLUG`, so what is registered and what `TuiConsole` activates cannot drift — a mismatch there is an unstyled app. The wordmark is built from `APP_NAME` rather than written out, and `SPLASH_MARK` is a deliberately abstract placeholder rather than any company's logo. New CSS should reference theme tokens (`$primary`, `$accent`, `$surface`, `$panel`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand and adapts if the theme changes.
 
 Every screen sits inside the same chrome from `presentation/chrome.py`: an `AppFrame` border, an `AppHeader` (logo mark, name, tagline, version, workspace status, and a count of runs still going) and an `AppFooter` (key hints on the left, signature on the right). Compose new screens inside `AppFrame` so the app reads as one surface. Menus are responsive — `CardMenuScreen` lays its cards out in a grid at most `CARDS_PER_ROW` wide and swaps full tiles for single-row entries when there isn't room for them, and the accent color is reserved for whatever currently has focus.
 
 Every key hint is also a button. A `KeyHint` reads its own label back into the key it names (`key_for`) and clicking it presses that key, so the mouse reaches everywhere the keyboard does without a second set of controls to keep in step with the first — and so a hint cannot drift from what it does. A hint naming a range rather than a key stays inert instead of lighting up for a press it could never send, and so does one whose key is dead at the time. Add a hint by putting it in a footer's tuples; do not wire a handler to it.
 
-Nothing the interface draws may be an emoji, and `tests/test_glyphs.py` checks rather than trusts. A codepoint with Unicode `Emoji=Yes` is rendered from an emoji font instead of a text one: double width, so every column after it is wrong, in a colour that ignores the theme and at a weight nothing like the box-drawing art beside it. This is easy to get wrong because these codepoints read fine in an editor — a stop mark on the Run button and a stopwatch on each run's timestamp both got in that way. Draw from the geometric shapes, dingbat and box-drawing blocks (`◆ ✓ ▲ ✗ ● ○ ✕ ❯ ▸ ■`); if nothing legible is available, use no glyph and let colour do the work.
+Nothing the interface draws may be an emoji, and `tests/test_glyphs.py` checks rather than trusts — reading every string literal in the package with `ast`, so an escape like `"😀"` is caught however innocent it looks in the file. The check bans the emoji Unicode blocks outright and allows four text glyphs (`✓ ✕ ✗ ❯`) by name, because width does not separate them: `U+23F1 STOPWATCH` is narrow and is an emoji, `U+2715 MULTIPLICATION X` is narrow and is not. A codepoint a terminal treats as emoji is rendered from an emoji font instead of a text one: double width, so every column after it is wrong, in a colour that ignores the theme and at a weight nothing like the box-drawing art beside it. This is easy to get wrong because these codepoints read fine in an editor — a stop mark on the Run button and a stopwatch on each run's timestamp both got in that way. Draw from the geometric shapes, dingbat and box-drawing blocks (`◆ ✓ ▲ ✗ ● ○ ✕ ❯ ▸ ■`); if nothing legible is available, use no glyph and let colour do the work.
 
 A button is an outline, and focus **doubles** its border — never fills it. Colour says which answer is which (`$warning` for the way back, `$error` for the step there is no way back from) and is the same colour focused or not, border and label alike; the doubled line says which one Enter would take. A filled answer reads as an answer already chosen, and every question `ConfirmScreen` asks — quit with runs going, overwrite a tree, close a live tab — is about something that cannot be undone, so neither answer may look pre-selected. Focus doubles the line rather than recolouring it because a recoloured border would be the answer's own colour arguing with the focus colour. A confirmation is a title, an optional `detail` saying what saying yes costs, and two answers; a dialog reached by a chord puts that chord under the affirmative's label (`key`), so someone who pressed `Ctrl+Q` to get there can see that pressing it again is the same answer. A checkbox follows the same rule and is *only the box* (`FieldToggle`): Textual's ships as a mark and its label in one widget, so the words of a question are part of the control that answers it — a stray click on the text answers it, and focus paints a reversed block behind it. The label is a `Static` beside the box instead, so a click has to land on the box, hover lights what the pointer is actually over, and the label never changes. The box says everything: doubled while it is on, orange when on (`TOGGLE_ON` in `branding.py`, interpolated rather than a theme variable — a widget's `DEFAULT_CSS` is parsed before any theme is active, so `$toggle-on` would be an undefined reference), blue under the pointer, gold under the keyboard, with focus beating hover because that is the one a key press is about to act on.
 
@@ -21,11 +21,43 @@ Anything clickable made of more than one widget mixes in `HoverLight` (`presenta
 ## Commands
 
 ```sh
-python -m company_tui        # interactive Textual UI
-python -m company_tui list   # plain stdout, scriptable
-python -m company_tui doctor # plain stdout, scriptable
+python -m company_tui                  # interactive Textual UI
+python -m company_tui --start scripts  # open straight on a capability
+python -m company_tui list             # plain stdout, scriptable
+python -m company_tui doctor           # plain stdout, scriptable
+python -m company_tui check            # everything the definition of done asks for
 python -m unittest discover
 ```
+
+Building, releasing and signing go through one PowerShell entry point, and the
+GitHub Actions workflows call that same file rather than restating the steps in
+YAML — a workflow with its own list of steps is a second, silently diverging
+answer to what a release is, and it is the one nobody can run locally.
+
+```powershell
+.\script.ps1                              # commands are discovered from scripts\
+.\script.ps1 setup-dev-env -Build -Lint   # make a machine able to build
+.\script.ps1 check-all                    # the gate; -InstallHook for pre-push
+.\script.ps1 setup-signing                # release and debug certificates
+.\script.ps1 bump-version -Bump patch     # rewrite VERSION, commit, tag
+.\script.ps1 build-app -Sign              # freeze with PyInstaller
+.\script.ps1 build-installer -Sign        # wrap it in NSIS
+```
+
+The installer is per-user, adds its directory to the user PATH so the app starts by
+typing `dti` (`/NOPATH` opts out), and installs `dti.exe` rather than a version-named
+exe — the folder under `dist/` carries the version, the command does not. **The
+PATH edit goes through `scripts/lib/path-entry.ps1` and .NET, never NSIS**:
+`NSIS_MAX_STRLEN` is 1024, `ReadRegStr` truncates silently at it, and writing that
+back is how an installer eats somebody's PATH. That file carries the numbers that
+make it a real risk on this machine rather than a theoretical one.
+
+The build number rises **globally** and comes from the **tags**, not from
+`VERSION`: an installer compares it, so a reset makes an upgrade look older than
+what is installed. `-Released` tags `v<x.y.z>-released` and is what makes a build
+official; debug builds are published as prereleases so `Check for Updates`, which
+asks for the latest official release, cannot offer one. `bump-version` commits and
+tags but never pushes.
 
 ## Dependency direction
 
@@ -79,23 +111,23 @@ Two things follow from runs happening side by side. Log buffers are capped (`LOG
 
 ## Scaffolding
 
-Every project the toolbox produces carries `ikaika.script.json` — `version`, `name`, `description`, `title` — whether it was cloned or written file by file. It is what makes a directory an IKAIKA project: `ProjectFinalizer.require_project` refuses to finish a scaffold without one, and the generators refuse to run outside one. Only those four keys belong to the toolbox; a template's other keys are read and written back untouched, in order and at the template's own indent (`domain/json_document.py`).
+Every project the toolbox produces carries `dti.script.json` — `version`, `name`, `description`, `title` — whether it was cloned or written file by file. A project carrying the older `ikaika.script.json` is still recognised, and a file that already exists keeps its name (`naming.manifest_path`) rather than being left behind holding a stale copy of the same four keys. It is what makes a directory one of these projects: `ProjectFinalizer.require_project` refuses to finish a scaffold without one, and the generators refuse to run outside one. Only those four keys belong to the toolbox; a template's other keys are read and written back untouched, in order and at the template's own indent (`domain/json_document.py`).
 
 A pack decides only how the tree appears. What happens next is `ProjectFinalizer` (`domain/scaffolding.py`), the same for every stack: stamp the identity, seed `.env` from `.env.example`, drop the template's `.git` and start a repository with a first commit. Files besides the manifest that also carry the project's name are stack-specific and declared as `IdentityRewrite`s — for React Native that is Expo's `app.json` (`templates/react_native/expo.py`), which spells the name four ways and inherits the template's EAS project id unless it is dropped.
 
 A name is parsed once, in `context_from`, into a `ProjectName` (`domain/project_name.py`) that hands each stack its own spelling — `slug`, `snake`, `compact`, `pascal`, `camel`, `title`. Parsing is also the guard: `.`, `..`, and absolute paths are refused before a pack turns the name into a directory it will delete and recreate. Use `ProjectName.existing` to read a name back out of a manifest, where validation does not apply.
 
-Where a stack clones from, which ref of it is current, the organisation's bundle prefix and the workspace root come from `ConfigPort` (`ikaika.toml`), not from constants — pinning a template should be a settings edit. The Settings capability is that edit: the same run panel, writing either the project file or the user one, and `FileConfig` forgets what it read on save so the change applies without a restart. Packs declare the executables they need as `ToolRequirement`s so a run fails fast with a sentence and Doctor can report the same facts. A script repository declares nothing of the sort and does not have to: what it needs is *derived* from the commands it writes — token zero of each, skipping a name written as a reference (nothing can resolve it before a form exists) and one with a path in it (`node` is a tool, `scripts/build.mjs` is an argument to it). Derived rather than declared because it cannot then drift: it is the command that is actually going to run, and a repository that starts calling `pnpm` says so by calling it. Checked before the setup commands run and before an action stages its template — a tool that is not on this machine will not be on it a moment later, and the alternative is writing a file only to take it back out. Doctor reads the same list off the store, without fetching, so its one line per tool says which stacks and which stacks' scripts want it.
+Where a stack clones from, which ref of it is current, the organisation's bundle prefix and the workspace root come from `ConfigPort` (`dti.toml`, or an existing `ikaika.toml`), not from constants — pinning a template should be a settings edit. The Settings capability is that edit: the same run panel, writing either the project file or the user one, and `FileConfig` forgets what it read on save so the change applies without a restart. Packs declare the executables they need as `ToolRequirement`s so a run fails fast with a sentence and Doctor can report the same facts. A script repository declares nothing of the sort and does not have to: what it needs is *derived* from the commands it writes — token zero of each, skipping a name written as a reference (nothing can resolve it before a form exists) and one with a path in it (`node` is a tool, `scripts/build.mjs` is an argument to it). Derived rather than declared because it cannot then drift: it is the command that is actually going to run, and a repository that starts calling `pnpm` says so by calling it. Checked before the setup commands run and before an action stages its template — a tool that is not on this machine will not be on it a moment later, and the alternative is writing a file only to take it back out. Doctor reads the same list off the store, without fetching, so its one line per tool says which stacks and which stacks' scripts want it.
 
 ## Build scripts
 
-A stack's build workflows are not in this repository. They are a repository of their own — templates, the program that finishes them, and an `ikaika.script.json` saying how the two go together — cloned once into `scripts_root` (`~/.ikaika/scripts` by default) under `<owner>/<repo>`, and shared by every project on the machine. React Native's is `JDM-Github/react_native_scripts`. Adding a generator is an edit to *that* repository rather than a release of the toolbox: `domain/script_config.py` reads whatever `config` declares and Build is a menu of it, which is why the actions are asked for between the stack menu and the panel — the first moment there is a stack to ask, and the last before the user is looking at a form.
+A stack's build workflows are not in this repository. They are a repository of their own — templates, the program that finishes them, and a `dti.script.json` saying how the two go together — cloned once into `scripts_root` (`~/.dti/scripts` by default, or an existing `~/.ikaika`, which is used where it is rather than left behind holding every cloned repository) under `<owner>/<repo>`, and shared by every project on the machine. React Native's is `JDM-Github/react_native_scripts`. Adding a generator is an edit to *that* repository rather than a release of the toolbox: `domain/script_config.py` reads whatever `config` declares and Build is a menu of it, which is why the actions are asked for between the stack menu and the panel — the first moment there is a stack to ask, and the last before the user is looking at a form.
 
-A repository already in the store is left exactly as it is: never pulled, never checked out over. That directory is the copy the user edits, which is the whole point of keeping one, and a toolbox that quietly reset it would be taking that back. Which revision arrives is settled at the clone, from `[scripts.<pack>] ref` in `ikaika.toml`, and the clone is a whole one rather than a shallow one because this history is worked in rather than thrown away a moment later — and because a clone with a remote can be asked what it has published since.
+A repository already in the store is left exactly as it is: never pulled, never checked out over. That directory is the copy the user edits, which is the whole point of keeping one, and a toolbox that quietly reset it would be taking that back. Which revision arrives is settled at the clone, from `[scripts.<pack>] ref` in `dti.toml`, and the clone is a whole one rather than a shallow one because this history is worked in rather than thrown away a moment later — and because a clone with a remote can be asked what it has published since.
 
 A clone is not an install. A repository that carries a program of its own declares `after-clone-command`, and it runs once, in the store, as part of arriving — before anything is read out of that directory and before any menu is built from it. A store whose setup failed is **thrown away**, the same as a clone that failed: half an install is the same hazard as half a clone, only quieter, because everything is present, nothing says so, and what fails is a build three menus later with an error from inside somebody else's tool. Nothing can answer a `${...}` at clone time — there is no project yet — so a setup command carrying one is refused rather than run with the reference passed through as an argument. Its output is streamed but written *down* rather than *out*: there is no panel here, so a line would land in the activity log in the header's margin, and `npm install` writes tens of thousands of them, most a progress bar redrawing itself. They go into a bounded tail that is read out only if the command fails — `working` is already holding a mark up for the wait. Streamed rather than captured because `capture` is a thread, and cancelling a thread cancels the waiting and not the work; `stream` kills its child. A stopped fetch throws the store away too, which matters more with setup to run than it did for the clone alone: a complete clone whose install was stopped half way is a directory that passes every test the next run makes of it.
 
-That is the one question the toolbox does ask: opening Build fetches the configured ref and reads `ikaika.script.json` **out of the fetched objects** (`git show FETCH_HEAD:...`), never out of the working tree, so finding out what the remote has cannot disturb the copy being run. *Different* rather than *older*: these are the manifest's own words and nothing here knows how a repository counts, so ordering two strings nobody defined an order for is not attempted. Every failure — offline, no such ref, unparseable — is silence, because a version check is a courtesy and a courtesy that reports its own plumbing is noise.
+That is the one question the toolbox does ask: opening Build fetches the configured ref and reads the manifest **out of the fetched objects** (`git show FETCH_HEAD:...`), never out of the working tree, so finding out what the remote has cannot disturb the copy being run. *Different* rather than *older*: these are the manifest's own words and nothing here knows how a repository counts, so ordering two strings nobody defined an order for is not attempted. Every failure — offline, no such ref, unparseable — is silence, because a version check is a courtesy and a courtesy that reports its own plumbing is noise.
 
 Being behind is a menu, not a dialog, because there are three answers and `ConfirmScreen` offers exactly two: re-clone, keep this copy, or stop asking. It comes up *before* the workflow menu, since that menu is built out of the copy in question and replacing it underneath would mean the user chose from a list they did not get — and before the walk decides there is no such menu, since *that* is read out of the same copy. A store one version back declaring no workflow is a store that may have grown one, and asking after the fall-back had already been chosen is how Build came to report that a stack has no build workflow on the strength of a manifest it had just been told was stale. What the question was answered with then has nowhere to be a notice — the fall-back is not a menu — so it is written where the fall-back's own message goes, ahead of it. Keeping it is settled for that walk through Build and asked again next time; re-cloning is the only step that throws away work, and the card says so rather than the aftermath. "Stop asking" writes `check = false` — into whichever file is actually being read, not always the user's, because settings are one file winning outright rather than two merged and a preference written where nothing reads it is a question that keeps being asked. Settings holds the same controls permanently: a row per stack saying what is in the store and at which version, a toggle that installs it or replaces it, and the watch toggle. Drawing that form fetches nothing — a form has to be on screen before anyone can ask for anything, and opening Settings must never be what clones a repository.
 
@@ -114,6 +146,18 @@ The directories on a path are made on the way; a config naming a folder this pro
 One store, two menus. An action carrying a template and a filename puts a file into a project that already exists, and that is **Scaffold → Components**; everything else is **Build**. Split by what an action carries rather than by which section it sits in, for the same reason a section is told from a group of them — a repository gets to call its sections whatever it likes, and one that renamed `config.scaffold` would otherwise find its generators had left the menu. Neither menu lists the other's half: one action reachable two ways is one action with two breadcrumbs, two tabs and two places to look for the run you started. The walk itself — read the store, ask about a version that has moved, choose, fill in, run, offer another — is written once in `capabilities/script_actions.py` and handed a filter.
 
 A stack whose store offers nothing of the kind asked for falls back rather than reporting anything — once the version question above has been settled — because nothing to choose between is not a problem: Build runs the build the pack ships with (`TemplatePack.build`), and Components offers the generators the pack ships with (`TemplatePack.generators`), which is the only thing Components could mean for a stack that has never had scripts.
+
+## A project's own commands
+
+Build runs the workflows a *stack's* script repository declares. **Scripts** runs the ones the project in front of you declares, out of the `dti.script.json` in its own root (either spelling — see `domain/naming.py`) — the case above already allows for when it says a command runs where its config lives, so a project carrying a `config` of its own runs in the project. `docs/decisions/0001-a-project-declares-its-own-commands.md` is why.
+
+Nothing in `capabilities/scripts.py` knows what wrote that file. A sibling PowerShell toolkit emits one describing every command it can dispatch, and that is what this was built for and deliberately not what it depends on: a project whose commands are npm scripts, a Makefile, or a shell script per task declares them the same way and arrives at the same menus. The document is the contract; the program that produced it is not.
+
+The walk is section, then action, then the run panel. Sections come from `config`'s own grouping rather than one invented here — a repository that declares fifty actions has already said how it thinks about them, and fifty cards in one grid is a list to scroll rather than a choice to make. The run itself is `templates/scripts.py: run_action`, the same function Build and Components go through: an action with no template and no path skips the staging half and runs what the config named, which keeps the parts that are easy to leave out — answers checked against the document's own rules, tools looked for on the machine before anything runs, and a stopped run unwinding to the subprocess.
+
+Which project it is comes from `DTI_PROJECT_ROOT` — or the older `IKAIKA_PROJECT_ROOT`, which is still read, the new name winning where both are set — then the working directory. The toolbox may be started from its own checkout while driving another tree, so the directory it happens to be in is not always the answer.
+
+A launcher can open straight on a capability — `python -m company_tui --start scripts`, which is what a bare `script.ps1` does. It is answered through the same `_enter_step`/`_record` a real menu choice makes, so the breadcrumb, the session's scope and the tab it lands in are identical either way; only the first call honours it, so backing out reaches the menu and nothing becomes unreachable. **A new menu step must go in `TRAIL_STEPS`** — one that is missing raises inside the run supervisor, which reports a failed workflow into a log nobody is reading and puts the previous menu back. See `docs/pitfalls.md` 1.1.
 
 ## Transitions
 
@@ -151,6 +195,27 @@ The *window's pixel rectangle* is not the terminal's cell grid, and `terminal_wi
 
 `python -m unittest` cannot cover any of this — a pilot has no window at all — which is why the guard against running headless matters and why `tools/window_trace.py` exists: it prints every candidate handle with its class, its measurement and whether that reads as cramped, plus the plan — the screen it measured, the square the app would open at and the floor it would hold. Run it *in the terminal that misbehaves*, because the answer differs per host. It has no `--resize`, and must not grow one: a resize belongs to `SizeGuard` and to the two moments it is allowed.
 
+## graphify
+
+There is a knowledge graph at `graphify-out/` — god nodes, community structure, cross-file
+relationships. It is **gitignored on purpose**: every file in it is regenerated from source
+by an AST pass that costs nothing, and `graph.json` churns on every edit.
+
+Build it on first use. This machine has no LLM API key set, so the `claude-cli` backend is
+the one that works — it drives the locally installed `claude` CLI instead:
+
+```sh
+graphify extract . --backend claude-cli   # first build
+graphify extract . --code-only            # structure only, no backend needed
+graphify update .                         # after any code change (AST only, no cost)
+```
+
+- Codebase questions: `graphify query "<question>"` before reading source. `graphify path
+  "<A>" "<B>"` for relationships, `graphify explain "<concept>"` for one concept. Each
+  returns a scoped subgraph, usually much smaller than the report or raw search.
+- `graphify-out/GRAPH_REPORT.md` is for broad architecture review only.
+- Run `graphify update .` after any code change, so the graph is not quietly a version behind.
+
 ## Working agreement
 
 - Prefer the smallest complete vertical slice.
@@ -176,7 +241,9 @@ The *window's pixel rectangle* is not the terminal's cell grid, and `terminal_wi
 7. Run all commands in the definition of done.
 8. Run `graphify update .`.
 
-The menu grid wraps at three cards per row (`CARDS_PER_ROW`), so registering a fourth capability starts a second row rather than squeezing the first — no layout change is needed per capability.
+The menu grid wraps at three cards per row (`CARDS_PER_ROW`), so registering a fourth capability starts a second row rather than squeezing the first — no layout change is needed per capability. There are nine, in three rows; the menu numbers them in registration order, so a new one is **appended** rather than inserted, or every number people have learned moves.
+
+The last three are about the toolbox rather than about projects: **App Setup** carries the whole configuration out as one JSON document and reads one back (`domain/settings_document.py`), **Check for Updates** asks a release feed whether there is a newer build (`domain/updates.py`, `infrastructure/release_feed.py`), and **Advanced** is where the feed is configured. Importing is deliberately forgiving — an unreadable field keeps the value already in place — which is only defensible because every gap it fell back on is printed; "imported" over a document half of which was skipped is the outcome that shape exists to prevent.
 
 ## Adding a template pack (stack)
 
@@ -192,9 +259,18 @@ The menu grid wraps at three cards per row (`CARDS_PER_ROW`), so registering a f
 
 ## Definition of done
 
+- `python -m company_tui check` passes — it runs the three below and reports a skip
+  rather than omitting it. An empty test discovery is a FAIL, not a pass: this
+  repository shipped with `tests/` gitignored and `discover` answering OK over nothing.
 - `python -m unittest discover` passes.
 - `python -m company_tui list` succeeds.
 - `python -m company_tui doctor` succeeds.
+- `.\script.ps1 check-all` passes. It is the same gate CI runs, and it reports a
+  missing linter as SKIP rather than FAIL — an incomplete machine is not a broken
+  repository — while listing every skip, because "everything passed" when three
+  checks never ran is the report that gets believed and should not be.
+- New decisions go in `docs/decisions/`; anything that failed silently goes in
+  `docs/pitfalls.md`.
 - New decisions and failure paths are tested.
 - Domain boundaries remain independent of concrete tools.
 - Graphify reflects the current source tree.

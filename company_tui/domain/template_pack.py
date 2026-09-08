@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
+from company_tui.domain import naming
 from company_tui.domain.config import TemplateSource
 from company_tui.domain.identity import ProjectIdentity
 from company_tui.domain.options import Option, OptionKind, OptionValue, OptionValues
@@ -95,7 +96,7 @@ DESCRIPTION_OPTION = Option(
     key="description",
     label="Description",
     kind=OptionKind.TEXT,
-    help="Recorded in ikaika.script.json. Defaults to 'A <title> project'.",
+    help=f"Recorded in {naming.SCRIPT_MANIFEST}. Defaults to 'A <title> project'.",
 )
 
 PARENT_OPTION = Option(
@@ -117,7 +118,7 @@ def project_options(parent: str = ".") -> tuple[Option, ...]:
     """The form every new project starts from, rooted where the company keeps them.
 
     The parent is a default rather than a constant because `workspace_root` in
-    `ikaika.toml` is where a team says "projects live here", and a form that
+    The settings file is where a team says "projects live here", and a form that
     ignored it would make everyone retype the same path.
     """
     return (

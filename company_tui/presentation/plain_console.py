@@ -3,8 +3,17 @@ from typing import TypeVar
 
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionKind, OptionValue
-from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
-from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptSection,
+    ScriptUpdate,
+)
+from company_tui.domain.template_pack import (
+    ScaffoldTarget,
+    ScaffoldTargetOption,
+    TemplatePack,
+)
 
 T = TypeVar("T")
 
@@ -41,7 +50,11 @@ class PlainConsole:
     async def choose_capability(
         self,
         capabilities: Sequence[Capability],
+        preselect: str = "",
     ) -> Capability | None:
+        chosen = next((c for c in capabilities if c.info.key == preselect), None)
+        if chosen is not None:
+            return chosen
         self._result_acknowledged = False
         index = await self._select(
             "Company Developer Toolbox",
@@ -81,6 +94,28 @@ class PlainConsole:
         if index is None:
             return None
         return packs[index]
+
+    async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
+        # No tree to draw, so it is asked for. An empty answer keeps what there was,
+        # which is the only sensible reading of pressing Enter on a prompt like this.
+        self.write(prompt or "Choose a project")
+        typed = (await self.ask(f"Folder [{start}]")).strip()
+        return typed or start or None
+
+    async def choose_script_section(
+        self,
+        sections: Sequence[ScriptSection],
+        notice: str = "",
+    ) -> ScriptSection | None:
+        if notice:
+            self.error(notice)
+        index = await self._select(
+            "Choose a group",
+            [(section.name, section.summary) for section in sections],
+        )
+        if index is None:
+            return None
+        return sections[index]
 
     async def choose_script_action(
         self,
@@ -153,7 +188,12 @@ class PlainConsole:
         title: str,
         options: Sequence[Option],
         trail: Sequence[str] = (),
+        refresh: object = None,
+        preview: object = None,
+        subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
+        # Accepted and ignored: an Update button needs a button. Asking the
+        # question one prompt at a time, there is nothing to keep current.
         """No two panes here — the same flags, asked one at a time."""
         self.write()
         self.write(" › ".join([*trail, title]) if trail else title)

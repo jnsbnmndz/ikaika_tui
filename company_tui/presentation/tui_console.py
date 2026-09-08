@@ -10,11 +10,21 @@ from textual.timer import Timer
 from textual.widgets import RichLog
 
 from company_tui.application.app import Application
+from company_tui.domain import naming
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
-from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptSection,
+    ScriptUpdate,
+)
 from company_tui.domain.session_memory import SessionMemory
-from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
+from company_tui.domain.template_pack import (
+    ScaffoldTarget,
+    ScaffoldTargetOption,
+    TemplatePack,
+)
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
 from company_tui.infrastructure.window_shape import (
     DEFAULT_PLAN,
@@ -25,9 +35,16 @@ from company_tui.infrastructure.window_shape import (
     current_window,
     window_plan,
 )
-from company_tui.presentation.branding import APP_NAME, APP_TAGLINE, APP_VERSION, IKAIKA_THEME, PEAK_ART
+from company_tui.presentation.branding import (
+    APP_NAME,
+    APP_TAGLINE,
+    APP_THEME,
+    APP_VERSION,
+    PEAK_ART,
+)
 from company_tui.presentation.card import MenuEntry
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, BusyLine
+from company_tui.presentation.path_screen import PathScreen
 from company_tui.presentation.run_screen import RunScreen
 from company_tui.presentation.screens import (
     TRAIL_SEPARATOR,
@@ -45,8 +62,24 @@ from company_tui.presentation.session import (
     Workflow,
     current_session,
 )
+from company_tui.presentation.ui import RefreshRunner
 
-TRAIL_STEPS = ("capability", "scaffold_target", "template_pack", "script_action")
+TRAIL_STEPS = (
+    "capability",
+    "scaffold_target",
+    "template_pack",
+    "script_section",
+    "script_action",
+)
+"""Every menu a workflow can walk, in the order it walks them.
+
+ORDER IS LOAD-BEARING: `_enter_step` forgets a step and everything AFTER it in
+this tuple, so a step listed too late leaves its own successors standing when the
+user goes back. And a step MISSING from here is worse than misplaced -
+`TRAIL_STEPS.index` raises, the exception is caught as a failed run, and the
+workflow dies into the session log while the menu loop calmly puts the top menu
+back. Which is what "script_section" did: Scripts opened, vanished, and left a
+card menu that looked like nothing had been asked for."""
 
 SCRIPT_UPDATE_ANSWERS: tuple[tuple[str, str, str, str], ...] = (
     (
@@ -195,6 +228,8 @@ class TuiConsole(App):
     ) -> None:
         super().__init__()
         self.application: Application | None = None
+        self.start_capability = ""
+        """A capability to open on instead of the menu. See Ui.choose_capability."""
         self.workspace_label = workspace_label
         self._memory = memory
         self._workspace = workspace
@@ -233,8 +268,8 @@ class TuiConsole(App):
             yield AppFooter([("Ctrl+Q", "Quit")])
 
     def on_mount(self) -> None:
-        self.register_theme(IKAIKA_THEME)
-        self.theme = "ikaika"
+        self.register_theme(APP_THEME)
+        self.theme = naming.APP_SLUG
         output = self.query_one("#output", RichLog)
         output.border_title = "Activity"
         # The window is opened at a size, measured, and put back onto the floor
@@ -412,7 +447,7 @@ class TuiConsole(App):
     async def _start(self) -> None:
         await self.push_screen_wait(SplashScreen())
         assert self.application is not None
-        self.result_code = await self.application.run()
+        self.result_code = await self.application.run(self.start_capability)
         await self._shut_down()
         self.exit()
 
@@ -585,6 +620,9 @@ class TuiConsole(App):
         title: str,
         options: Sequence[Option],
         trail: Sequence[str] = (),
+        refresh: RefreshRunner | None = None,
+        preview: object = None,
+        subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
         session = current_session()
         if session is None:
@@ -604,7 +642,14 @@ class TuiConsole(App):
         # A panel already open is one the user asked to keep for another run, so
         # it collects the next set of values rather than being replaced.
         if not session.panel_open:
-            session.load(title, options, trail or tuple(session.steps.values()))
+            session.load(
+                title,
+                options,
+                trail or tuple(session.steps.values()),
+                refresh,
+                preview,
+                subtitle,
+            )
         self._attach(session)
 
         values = await session.wait_for_values()
@@ -1110,7 +1155,17 @@ class TuiConsole(App):
     async def choose_capability(
         self,
         capabilities: Sequence[Capability],
+        preselect: str = "",
     ) -> Capability | None:
+        chosen = next((c for c in capabilities if c.info.key == preselect), None)
+        if chosen is not None:
+            # Recorded exactly as a real choice is, so the breadcrumb, the session's
+            # scope and the tab this lands in are the same either way. No screen is
+            # claimed because nothing has taken one yet - this only ever answers the
+            # first call.
+            self._enter_step("capability")
+            self._record("capability", chosen.info.name, chosen)
+            return chosen
         if self._leaving:
             # Nothing left to choose: the loop asking is on its way out, and a
             # menu pushed now would be mounted into a screen stack being torn
@@ -1220,6 +1275,53 @@ class TuiConsole(App):
         self._record("template_pack", packs[index].info.name, packs[index])
         return packs[index]
 
+    async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
+        # No step recorded: a folder is not one of the menus a run's breadcrumb is
+        # made of, and putting it in TRAIL_STEPS would make going back to a menu
+        # forget it.
+        await self._claim_screen(current_session())
+        return await self.push_screen_wait(
+            PathScreen(start, prompt or "Choose a project")
+        )
+
+    async def choose_script_section(
+        self,
+        sections: Sequence[ScriptSection],
+        notice: str = "",
+    ) -> ScriptSection | None:
+        inherited = self._replay("script_section")
+        if isinstance(inherited, ScriptSection):
+            # Matched by key rather than by identity: the document is read off the
+            # disk again on the way back in, so a sibling tab repeating this step is
+            # holding an equal section, not the same one.
+            match = next((s for s in sections if s.key == inherited.key), None)
+            if match is not None:
+                self._record("script_section", match.name, match)
+                return match
+
+        await self._claim_screen(current_session())
+        trail = self._enter_step("script_section")
+        index = await self.push_screen_wait(
+            CardMenuScreen(
+                "Choose a group",
+                [
+                    # No detail passed: CardMenuScreen falls through to hints.py for a
+                    # key it knows, which is every domain this toolkit ships, and to the
+                    # card's own description for one it does not.
+                    self._entry(trail, section.key, section.name, section.summary)
+                    for section in sections
+                ],
+                subtitle="Read from this project's own script config.",
+                trail=trail,
+                notice=notice,
+                runs=self._sessions.summary(),
+            )
+        )
+        if index is None:
+            return None
+        self._record("script_section", sections[index].name, sections[index])
+        return sections[index]
+
     async def choose_script_action(
         self,
         actions: Sequence[ScriptAction],
@@ -1304,4 +1406,4 @@ class TuiConsole(App):
 
 async def _nothing() -> None:
     """A session with no workflow of its own behind it."""
-    return None
+    return

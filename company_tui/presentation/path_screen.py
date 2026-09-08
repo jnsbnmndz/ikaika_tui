@@ -22,17 +22,25 @@ from company_tui.presentation.screens import DialogScreen
 
 
 class DirectoryOnlyTree(DirectoryTree):
-    """Directories only, and none of the ones tooling leaves lying around.
+    """What can be chosen, and none of what tooling leaves lying around.
 
-    A parent directory is never a file, and a listing that includes `.git` and
-    every other dot-directory buries the handful of entries worth choosing.
+    Directories always; files only when the field is asking for one, because
+    browsing for a file in a tree that hides files means never finding it. A
+    listing that includes `.git` and every other dot-entry buries the handful
+    worth choosing either way.
     """
+
+    def __init__(self, *args, show_files: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.show_files = show_files
 
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         keep = []
         for path in paths:
             try:
-                if path.is_dir() and not path.name.startswith("."):
+                if path.name.startswith("."):
+                    continue
+                if path.is_dir() or self.show_files:
                     keep.append(path)
             except OSError:
                 # A directory that cannot be stat'ed — a disconnected network
@@ -75,10 +83,16 @@ class PathScreen(DialogScreen[str | None]):
     }
     """
 
-    def __init__(self, start: str = "", trail: str = "Choose a directory") -> None:
+    def __init__(
+        self,
+        start: str = "",
+        trail: str = "Choose a directory",
+        files: bool = False,
+    ) -> None:
         super().__init__()
         self._start = self._resolve(start)
         self._trail = trail
+        self._files = files
         self._current = self._start
 
     @staticmethod
@@ -100,7 +114,7 @@ class PathScreen(DialogScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Container() as dialog:
             dialog.border_title = self._trail
-            yield DirectoryOnlyTree(str(self._start), id="tree")
+            yield DirectoryOnlyTree(str(self._start), id="tree", show_files=self._files)
             yield Static(self._display(self._start), id="chosen-path")
             with Horizontal(classes="dialog--actions"):
                 with Horizontal(classes="dialog--escape"):

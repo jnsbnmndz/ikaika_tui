@@ -131,12 +131,24 @@ Textual sets instance attributes on every widget, and shadowing one fails withou
 - A destination can only be written by one run at a time (`domain/destinations.py`), claimed by `ScaffoldCapability` *before* the work is handed to the panel rather than inside a pack — so every stack is covered by the same rule and none has to remember it. Two runs aimed at one directory is not a race either can win: one removes the tree the other is halfway through cloning into. Refused rather than queued, because a second run silently waiting looks exactly like one that has hung.
 - `FileSystemPort.remove_tree` is the only destructive filesystem operation. Confirm with the user first, and only ever pass it a path the same run created. It is `async` and runs the delete off the event loop: a project directory with dependencies installed is tens of thousands of files, and deleting them inline freezes the interface for the whole of it, Stop included. Two Windows failures are handled and they are different — read-only files (git leaves its pack files that way) need the bit cleared first, while a sharing violation needs a retry, because something is holding the file open for a moment and each attempt deletes what it can.
 
+## A project's own commands
+
+Build runs the workflows a *stack's* script repository declares. **Scripts** runs the ones the project in front of you declares, out of the `dti.script.json` in its own root (either spelling — see `domain/naming.py`) — the case above already allows for when it says a command runs where its config lives, so a project carrying a `config` of its own runs in the project. `docs/decisions/0001-a-project-declares-its-own-commands.md` is why.
+
+Nothing in `capabilities/scripts.py` knows what wrote that file. A sibling PowerShell toolkit emits one describing every command it can dispatch, and that is what this was built for and deliberately not what it depends on: a project whose commands are npm scripts, a Makefile, or a shell script per task declares them the same way and arrives at the same menus. The document is the contract; the program that produced it is not.
+
+The walk is section, then action, then the run panel. Sections come from `config`'s own grouping rather than one invented here — a repository that declares fifty actions has already said how it thinks about them, and fifty cards in one grid is a list to scroll rather than a choice to make. The run itself is `templates/scripts.py: run_action`, the same function Build and Components go through: an action with no template and no path skips the staging half and runs what the config named, which keeps the parts that are easy to leave out — answers checked against the document's own rules, tools looked for on the machine before anything runs, and a stopped run unwinding to the subprocess.
+
+Which project it is comes from `DTI_PROJECT_ROOT` — or the older `IKAIKA_PROJECT_ROOT`, which is still read, the new name winning where both are set — then the working directory. The toolbox may be started from its own checkout while driving another tree, so the directory it happens to be in is not always the answer.
+
+A launcher can open straight on a capability — `python -m company_tui --start scripts`, which is what a bare `script.ps1` does. It is answered through the same `_enter_step`/`_record` a real menu choice makes, so the breadcrumb, the session's scope and the tab it lands in are identical either way; only the first call honours it, so backing out reaches the menu and nothing becomes unreachable. **A new menu step must go in `TRAIL_STEPS`** — one that is missing raises inside the run supervisor, which reports a failed workflow into a log nobody is reading and puts the previous menu back. See `docs/pitfalls.md` 1.1.
+
 ## Branding and theme
 
 - Artwork is **text**, never an image handed to the terminal. `tools/blockify.py` converts a one-colour PNG to half-block art at authoring time and the *output* is pasted into the source, so Pillow is never a runtime dependency. Half blocks rather than quadrants because a cell is about twice as tall as it is wide: splitting top/bottom gives square pixels, and `▀▄█` plus a space covers every state a two-pixel cell can be in — full fidelity for a one-colour image. Being text is the whole point: it takes the theme colour, costs nothing to repaint, and survives a resize. An image drawn through a terminal graphics protocol does none of those — the terminal composites it outside Textual's diffing renderer, so it flickers on every repaint and re-scales wrongly on resize.
 - Block art only survives at size. The full company logo needs about 13 rows to read; below that its strokes are thinner than a pixel and it turns to mud, which is why the header mark and the card icons stay hand-drawn line art. Check a new piece of art at the size it will actually be drawn before committing it.
 - Art lines are ragged, so whatever shows them must size to the art and centre it as one block (`width: auto`), never `text-align: center`, which centres each line separately and slides them out of register.
-- `presentation/branding.py` holds `APP_NAME`/`APP_TAGLINE`/`APP_VERSION`/`APP_SIGNATURE`, the logo marks, and `IKAIKA_THEME` (a Textual `Theme`, colors drawn from the company logo). `TuiConsole.on_mount` registers and activates it — CSS elsewhere should keep using theme tokens (`$primary`, `$accent`, `$surface`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand automatically.
+- `presentation/branding.py` reads `APP_NAME`/`APP_TAGLINE`/`APP_SIGNATURE` from `domain/naming.py` and `APP_VERSION` out of `VERSION` at the repository root, the logo marks (`WORDMARK` built from `APP_NAME`, `SPLASH_MARK` an abstract placeholder), and `APP_THEME` (a Textual `Theme`, named `naming.APP_SLUG` so what is registered and what is activated cannot drift). `TuiConsole.on_mount` registers and activates it — CSS elsewhere should keep using theme tokens (`$primary`, `$accent`, `$surface`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand automatically.
 - Theme tokens come in two kinds and only one is safe outside CSS: `$primary`, `$accent`, `$success` and the `-darken-`/`-lighten-` variants resolve to a literal color, while every `$text-*` token is an `auto` color that picks itself from the background it is painted on. Assembled `Content` has no such background, so an `auto` token there comes out pure black and the line is invisible. Use `$foreground-darken-3` where CSS would have used `$text-muted`.
 - `presentation/chrome.py` holds the shared frame: `AppFrame` (outer border), `AppHeader` (logo mark, name, tagline, version, workspace status) and `AppFooter` (`KeyHint`s left, signature right). Compose new screens inside `AppFrame` so every screen reads as the same surface; the footer drops its signature below 78 columns.
 - A `KeyHint` is a button. It reads its own label back into the key press it stands for (`key_for`), so `Esc`, `Ctrl+R` and `Ctrl+PgUp` are clickable without anything being declared twice, and a hint naming a range (`↑↓/←→`, `1–6`) resolves to nothing and stays inert rather than offering a press it cannot make. Whether a click does anything is the `-pressable` class alone, so a key that is dead right now — `Enter Send` while nothing is asking for input — can stop offering itself. Show a new hint by adding it to a footer's tuples, not by wiring up a handler.
@@ -152,6 +164,27 @@ Textual sets instance attributes on every widget, and shadowing one fails withou
 - Cards have exactly two looks: idle (round border) and focused (double accent border). They carry no fill at all — `background: transparent` in every state — so only the border says where you are. Hovering calls `focus()` rather than adding a third style, so the mouse and the arrow keys move the same highlight and the hint line follows either. Never reintroduce a card background or a hover style.
 - `Card` and the card row are both height-capped (`max-height`) so a maximised terminal does not stretch the tiles; the leftover space falls below the hint line rather than between it and the cards.
 - The accent color means "this has focus" and nothing else — do not spend it on decoration.
+
+## graphify
+
+There is a knowledge graph at `graphify-out/` — god nodes, community structure, cross-file
+relationships. It is **gitignored on purpose**: every file in it is regenerated from source
+by an AST pass that costs nothing, and `graph.json` churns on every edit.
+
+Build it on first use. This machine has no LLM API key set, so the `claude-cli` backend is
+the one that works — it drives the locally installed `claude` CLI instead:
+
+```sh
+graphify extract . --backend claude-cli   # first build
+graphify extract . --code-only            # structure only, no backend needed
+graphify update .                         # after any code change (AST only, no cost)
+```
+
+- Codebase questions: `graphify query "<question>"` before reading source. `graphify path
+  "<A>" "<B>"` for relationships, `graphify explain "<concept>"` for one concept. Each
+  returns a scoped subgraph, usually much smaller than the report or raw search.
+- `graphify-out/GRAPH_REPORT.md` is for broad architecture review only.
+- Run `graphify update .` after any code change, so the graph is not quietly a version behind.
 
 ## Rules
 

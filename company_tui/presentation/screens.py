@@ -213,10 +213,9 @@ class CardMenuScreen(Screen[int | None]):
                 # binds the arrow keys to scrolling and would swallow them before
                 # the grid could move the focus. The focused card scrolls itself
                 # into view anyway.
-                with Container(id="cards-scroll"):
-                    with Grid(id="cards"):
-                        for index, entry in enumerate(self._entries):
-                            yield Card(entry, index)
+                with Container(id="cards-scroll"), Grid(id="cards"):
+                    for index, entry in enumerate(self._entries):
+                        yield Card(entry, index)
                 with Horizontal(id="menu-hint"):
                     yield Static(id="hint-key")
                     yield Static(id="hint-text")

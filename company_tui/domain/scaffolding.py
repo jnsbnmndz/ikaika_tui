@@ -14,11 +14,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from company_tui.domain import naming
 from company_tui.domain.config import TemplateSource
 from company_tui.domain.identity import (
     SCRIPT_MANIFEST,
     MalformedScriptManifest,
-    NotAnIkaikaProject,
+    NotAProjectError,
     ProjectIdentity,
     apply_identity,
     read_identity,
@@ -30,7 +31,7 @@ GIT = "git"
 GIT_DIRECTORY = ".git"
 ENVIRONMENT_EXAMPLE = ".env.example"
 ENVIRONMENT = ".env"
-TEMPLATE_RECORD = Path(".ikaika") / "template.json"
+TEMPLATE_RECORD = Path(naming.STORE_DIR_NAME) / "template.json"
 
 FIRST_COMMIT = "Initial commit"
 
@@ -94,9 +95,9 @@ class ProjectFinalizer:
         to add a file to the current directory has no business writing into a
         tree it cannot identify.
         """
-        manifest = root / SCRIPT_MANIFEST
+        manifest = naming.manifest_path(root)
         if not self._file_system.exists(manifest):
-            raise NotAnIkaikaProject(
+            raise NotAProjectError(
                 f"No {SCRIPT_MANIFEST} in {display_path(root)} — "
                 "every IKAIKA project has one."
             )
@@ -150,8 +151,11 @@ class ProjectFinalizer:
         rewrites: Sequence[IdentityRewrite],
     ) -> tuple[str, ...]:
         self.require_project(root)
-        stamped = [SCRIPT_MANIFEST]
-        self._rewrite(root / SCRIPT_MANIFEST, apply_identity, identity)
+        # Stamped where it already is: renaming the file while rewriting what is
+        # inside it would leave the old one holding a stale copy of the same keys.
+        existing = naming.manifest_path(root)
+        stamped = [existing.name]
+        self._rewrite(existing, apply_identity, identity)
 
         for entry in rewrites:
             target = root / entry.relative_path

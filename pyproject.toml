@@ -4,14 +4,73 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "company-tui"
-version = "0.0.0+1"
+version = "0.1.0+2"
 description = "Company developer toolbox for project scaffolding and automation"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["textual>=0.60"]
 
+# TWO NAMES, ONE ENTRY POINT. `dti` is what the product is called and what the
+# installer puts on PATH; `company` was the only name for a long time and is kept
+# so anything already invoking it keeps working. `generic` existed for one
+# afternoon and was never released, so it is not kept.
+#
+# Neither is the package name - renaming company_tui itself would churn every
+# import in the repository to no one's benefit.
 [project.scripts]
+dti = "company_tui.cli:main"
 company = "company_tui.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["company_tui*"]
+
+# Ruff's rule set, written down rather than inherited.
+#
+# Left implicit, the selection is whatever the installed ruff happens to default
+# to - which changed under this project once already and turned a passing lint
+# into 91 findings without a line of code changing. `check-all` treats a lint
+# failure as FAIL, so the rules it enforces have to be a decision.
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Correctness first: pyflakes, the pycodestyle errors, import order, and bugbear.
+#
+# The style families - SIM, RET, RUF, PLW, DTZ, BLE, FURB - are deliberately NOT
+# here yet. Turning them on surfaced seventeen findings across code this change
+# does not touch, and a lint that fails on unrelated files is one that gets run
+# with a flag to shut it up. They are worth adopting; adopting them is its own
+# change, with the findings actually read rather than blanket-suppressed.
+select = ["E", "F", "I", "B", "ISC"]
+
+ignore = [
+    # Line length is left to the formatter. Several files here hold block art and
+    # ASCII tables whose columns are the point, and a wrapped one is wrong.
+    "E501",
+
+    # "Use an f-string instead of str.join". Wrong here, and it accounted for 48 of
+    # those 91: `"\n".join((...))` is how every piece of card art and every splash
+    # mark is written, one line of the picture per line of source. As an f-string
+    # the art becomes a single unreadable line with escapes in it - the exact thing
+    # that makes a drawing impossible to edit.
+    "FLY002",
+
+    # "String contains ambiguous unicode character". The interface is DRAWN with
+    # box-drawing and block characters, so 37 of these were the card art, the
+    # splash mark and the frame - the glyphs the app exists to put on screen. The
+    # real constraint on them is enforced properly by tests/test_glyphs.py: no
+    # emoji, and nothing double-width. That is a test, not a lint suppression.
+    "RUF001",
+    "RUF002",
+
+    # "Mutable class attribute should be annotated with ClassVar". This is how
+    # Textual declares BINDINGS, DEFAULT_CSS and CSS_PATH - the framework reads
+    # them off the class - so the annotation the rule asks for is noise on every
+    # screen and widget in the package.
+    "RUF012",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests unpack tuples to name what they are asserting about, and a name that
+# documents the shape of a return value is worth more than the warning.
+"tests/*" = ["RUF059"]

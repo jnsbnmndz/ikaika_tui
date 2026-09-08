@@ -12,15 +12,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("tui", "list", "doctor"),
+        choices=("tui", "list", "doctor", "check"),
         default="tui",
         nargs="?",
+    )
+    parser.add_argument(
+        "--install-hook",
+        action="store_true",
+        help="with `check`, install it as this repository's pre-push hook",
+    )
+    parser.add_argument(
+        "--start",
+        default="",
+        metavar="CAPABILITY",
+        help=(
+            "open on this capability instead of the menu, e.g. --start scripts. "
+            "Backing out of it lands on the menu."
+        ),
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "check":
+        from company_tui.check import main as run_checks
+
+        return run_checks(install=args.install_hook)
 
     if args.command == "list":
         application = create_application(PlainConsole())
@@ -31,6 +50,6 @@ def main(argv: list[str] | None = None) -> int:
         application = create_application(PlainConsole())
         return asyncio.run(application.run_capability("doctor"))
 
-    console = create_tui_console()
+    console = create_tui_console(args.start)
     console.run()
     return console.result_code

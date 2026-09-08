@@ -1,0 +1,138 @@
+# Pitfalls
+
+Things that have actually gone wrong in this repository, what they looked like, and the
+rule that follows. Every one of them was **silent**: a menu that came back, a test that
+passed over nothing, a documented rule nothing enforced. None was caught by reading the
+code afterwards.
+
+`CLAUDE.md` and `AGENT.md` hold the rules. `docs/decisions/` holds why the architecture is
+what it is. This file holds the failures, because a rule with the wreck behind it is
+easier to keep than a rule on its own.
+
+---
+
+## 1. A workflow can die where nobody is looking
+
+### 1.1 A step name missing from `TRAIL_STEPS`
+
+`_enter_step` indexes into that tuple to forget a step and everything after it:
+
+```python
+for later in TRAIL_STEPS[TRAIL_STEPS.index(step):]:
+```
+
+A name that is not in the tuple raises `ValueError`. That exception is caught by the run
+supervisor as a failed workflow, written to the session's log, and answered by putting the
+previous menu back. So a new `script_section` step made Scripts **open, die and vanish**,
+leaving a card menu that looked exactly like nothing had been asked for. No error reached
+the screen, because the screen the error would have gone to was never pushed.
+
+**Rule.** A new menu step goes in `TRAIL_STEPS`, in walk order, in the same change that
+introduces it. `tests/test_navigation_steps.py` reads the step names back out of the source
+with `ast` rather than restating them, so the next one cannot repeat this.
+
+### 1.2 The order in `TRAIL_STEPS` is behaviour, not tidiness
+
+The tuple decides what going back clears. A step listed **after** the steps that come below
+it in the walk leaves those standing when the user changes it, so a stale action survives a
+change of section.
+
+---
+
+## 2. Output that never reaches the terminal
+
+### 2.1 Parentheses capture a subprocess's stdout
+
+This is a PowerShell trap on the calling side, and it broke the front end of this app:
+
+```powershell
+exit (Start-Tui ...)     # WRONG - captures the whole output pipeline
+Start-Tui ...            # correct - a statement
+exit $LASTEXITCODE
+```
+
+A native command's stdout goes into the pipeline. Wrapped in parentheses, the app started,
+took the terminal, drew its **entire interface into a value nobody read**, and sat waiting
+for a key over a blank screen. `Write-Host` bypasses the pipeline, so the "Starting..."
+line still appeared - which made it read as a hang rather than as output being swallowed.
+
+**Rule.** Anything that hands the terminal to this app is called as a statement.
+
+### 2.2 The app must run in the project, not in its own checkout
+
+`Path.cwd()` is what names the workspace in the header and resolves anything relative.
+Launching the app from `tui.root` so `python -m company_tui` could find the package made it
+report **that checkout** as the project. The venv's own interpreter imports the package from
+anywhere, so the working directory bought nothing and cost the project's identity.
+
+---
+
+## 3. A test can pass over nothing at all
+
+### 3.1 `unittest discover` exits 0 when it finds no tests
+
+`tests/` was in `.gitignore`, beside `test/` and `tools/`. So the definition of done asked
+for `python -m unittest discover` to pass and for focused tests under `tests/` - and both
+were satisfied by a directory that could not be committed to. `discover` printed
+`NO TESTS RAN` and exited 0 for as long as that was true.
+
+Two consequences that outlived it: `tests/test_glyphs.py` and `tests/test_window_shape.py`
+were **cited in CLAUDE.md and AGENT.md as enforcing rules** while not existing.
+
+**Rule.** `python -m company_tui check` reports an empty discovery as `FAIL`, not `PASS`. A
+gate over nothing is not a gate. And a rule the documentation says is enforced has a test
+with that name, or the documentation is corrected.
+
+### 3.2 A detector that finds nothing passes forever
+
+The first version of the emoji check missed `U+23F1 STOPWATCH` - the exact glyph the docs
+name as one that got in. Both "no emoji found" assertions passed, because the detector
+found nothing anywhere.
+
+**Rule.** Every check of the form "nothing in the source does X" carries a test that X is
+still detected, and one that the walk still finds material at all.
+
+### 3.3 A width test does not find emoji
+
+`U+23F1 STOPWATCH` is East Asian Narrow and is an emoji. `U+2715 MULTIPLICATION X` is
+Narrow and is not. `U+274C CROSS MARK` is Wide and is. Width and emoji-ness are different
+questions; `tests/test_glyphs.py` bans the blocks and allows four text glyphs by name.
+
+---
+
+## 4. Your verification harness is code, and it has bugs too
+
+### 4.1 A full-screen app cannot be judged through a pipe
+
+Redirected to a file the app emitted 93 bytes of terminal-init escapes and exited; through
+a pipe to `head` it rendered a splash; through the dispatcher it hung. Three different
+answers to the same question, none of them about the bug.
+
+**Rule.** Reproduce in a real PTY (`winpty` will do), and inspect with Textual's own
+`App.run_test()` pilot, which drives the real app deterministically and can be asked what
+is on screen. `winpty` itself asserts and dies mid-capture when the pty closes - a
+truncated capture is not a finding.
+
+### 4.2 A source assertion matches the comment explaining the rule
+
+A guard written as "the dispatcher must not contain `exit (Start-Tui`" failed the moment
+the comment saying **why that form is forbidden** was written beside the fix.
+
+**Rule.** Negative source assertions read a comment-stripped copy, stripped with the
+language's own tokenizer - a `#` inside a string is not a comment, and only the parser
+knows which is which.
+
+---
+
+## 5. Reading the source
+
+### 5.1 `ast` over regex, always
+
+String literals carry escapes: `"\U0001F600"` is an emoji in the running program and eight
+innocent characters in the file. `ast` resolves them, tells a docstring from a value, and
+survives reformatting.
+
+### 5.2 Textual widget internals move
+
+`Static.renderable` does not exist on this version; `App.run_test()` and the screen's
+compositor do. Ask the object, do not assume the attribute.

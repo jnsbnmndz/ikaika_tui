@@ -2,13 +2,29 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol, TypeVar
 
 from company_tui.domain.capability import Capability
-from company_tui.domain.options import Option, OptionValue
-from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
-from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
+from company_tui.domain.options import Option, OptionValue, RefreshOutcome
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptSection,
+    ScriptUpdate,
+)
+from company_tui.domain.template_pack import (
+    ScaffoldTarget,
+    ScaffoldTargetOption,
+    TemplatePack,
+)
 
 T = TypeVar("T")
 
 Workflow = Callable[[], Awaitable[None]]
+
+RefreshRunner = Callable[[Option, bool], Awaitable[RefreshOutcome]]
+"""Runs one option's refresh, previewing when the second argument is True.
+
+Supplied by whoever opened the panel rather than owned by it: acting means
+running a subprocess and re-reading a document, and a screen has neither. The
+preview/act split is what lets the panel ask before something is deleted."""
 
 
 class Ui(Protocol):
@@ -28,7 +44,13 @@ class Ui(Protocol):
         ...
 
     async def open_run_panel(
-        self, title: str, options: Sequence[Option], trail: Sequence[str] = ()
+        self,
+        title: str,
+        options: Sequence[Option],
+        trail: Sequence[str] = (),
+        refresh: "RefreshRunner | None" = None,
+        preview: "Callable[[dict[str, OptionValue]], str] | None" = None,
+        subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
         """Collect every flag up front, then stay open while the work runs.
 
@@ -83,8 +105,20 @@ class Ui(Protocol):
     async def confirm(self, prompt: str) -> bool: ...
 
     async def choose_capability(
-        self, capabilities: Sequence[Capability]
-    ) -> Capability | None: ...
+        self, capabilities: Sequence[Capability], preselect: str = ""
+    ) -> Capability | None:
+        """Choose what to do, or take `preselect` as already chosen.
+
+        A launcher that exists to run one kind of work opens on it rather than on a
+        menu whose first job is to be dismissed. It is answered through the same
+        recording a real choice makes, so the breadcrumb, the session's scope and
+        the tab it lands in are identical either way - the alternative was starting
+        a run with no step behind it, which is a tab belonging to nowhere.
+
+        Only the first call honours it. Backing out of that capability then lands on
+        the menu, so nothing is unreachable.
+        """
+        ...
 
     async def choose_scaffold_target(
         self, options: Sequence[ScaffoldTargetOption], notice: str = ""
@@ -98,6 +132,28 @@ class Ui(Protocol):
         A workflow that sends the user back has something to tell them, and the
         place to tell them is the menu they land on. Writing it to the console
         instead would put it behind whatever screen comes next.
+        """
+        ...
+
+    async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
+        """Ask which directory to work in, or `None` if the user backed out.
+
+        A workflow that can only ever act on the directory it was started in is
+        one somebody has to restart in the right place. Separate from the PATH
+        field on a form, which asks where a single run should point: this asks
+        which project the workflow is about at all.
+        """
+        ...
+
+    async def choose_script_section(
+        self, sections: Sequence[ScriptSection], notice: str = ""
+    ) -> ScriptSection | None:
+        """Pick which group of a document's actions to look at.
+
+        A menu above the workflow menu, for a repository that declares more than
+        one section. It is the document's own grouping rather than one invented
+        here: the sections were named by whoever wrote the config, and a card per
+        section is the only arrangement that cannot disagree with them.
         """
         ...
 

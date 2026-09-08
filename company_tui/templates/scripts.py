@@ -32,9 +32,9 @@ from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 
-from company_tui.domain import json_document
+from company_tui.domain import json_document, naming
 from company_tui.domain.config import ConfigScope, TemplateSource
-from company_tui.domain.identity import SCRIPT_MANIFEST, NotAnIkaikaProject
+from company_tui.domain.identity import SCRIPT_MANIFEST, NotAProjectError
 from company_tui.domain.json_document import MalformedJson
 from company_tui.domain.options import OptionValue
 from company_tui.domain.scaffolding import CannotStampIdentity, display_path
@@ -79,8 +79,7 @@ def repository_folder(url: str) -> str:
     somebody can find without asking the toolbox where it put things.
     """
     trimmed = url.strip().rstrip("/")
-    if trimmed.endswith(".git"):
-        trimmed = trimmed[: -len(".git")]
+    trimmed = trimmed.removesuffix(".git")
     if _SCP_FORM in trimmed and "//" not in trimmed:
         # git@github.com:owner/repo — the host is before the colon, not a path.
         trimmed = trimmed.split(":", 1)[-1]
@@ -223,7 +222,7 @@ async def run_action(
 
     try:
         identity = services.finalizer.require_project(root)
-    except (NotAnIkaikaProject, CannotStampIdentity) as error:
+    except (NotAProjectError, CannotStampIdentity) as error:
         return _refused(f"{error}")
 
     reason = action.reason_to_refuse(values)
@@ -479,11 +478,11 @@ def _clone_command(source: TemplateSource, root: Path) -> tuple[str, ...]:
 def _manifest_at(
     root: Path, services: PackServices
 ) -> tuple[dict | None, str]:
-    manifest = root / SCRIPT_MANIFEST
+    manifest = naming.manifest_path(root)
     if not services.file_system.exists(manifest):
         return None, (
             f"No {SCRIPT_MANIFEST} in {root} — a script repository is one that "
-            "carries the same manifest every IKAIKA project does."
+            "carries the same manifest every project of this kind does."
         )
     try:
         return json_document.load(services.file_system.read_text(manifest)), ""
