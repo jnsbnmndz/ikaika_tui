@@ -47,10 +47,15 @@ answer to what a release is, and it is the one nobody can run locally.
 A debug build is a **separate install**, not a replacement: directory, Add/Remove entry,
 settings key and Start Menu folder all derive from `INSTALL_SLUG` (`dti` or `dti-debug`),
 because `UNINSTALL_KEY` was shared and the upgrade path reads it — so installing a debug
-build ran the release build's uninstaller and then installed over its directory. The PATH
-default inverts with it: a release goes on unless `/NOPATH`, a debug build stays off
-unless `/PATH`, since two copies of the same exe name on PATH means the command is
-whichever directory comes first. The store under `~/.dti` is shared between them, which is
+build ran the release build's uninstaller and then installed over its directory. The debug build also installs
+its executable under its own name (`dti-debug.exe`, from `COMMAND`), so both can be on
+PATH without a collision — two copies of one exe name would make the command whichever
+directory comes first, invisibly. The rename is safe for a onedir freeze because the
+bootloader finds `_internal` by directory rather than by exe name. Shortcuts and PATH are
+components, recorded and restored so an update skips the page; **labels, never relative
+jumps, in that script** — `!insertmacro UnselectSection` is nine instructions and a `+2`
+over it produced a Components page with the required component unchecked
+(`docs/pitfalls.md` 7.2). The store under `~/.dti` is shared between them, which is
 a second reason no uninstaller removes it. An update skips the directory page — the
 location is already settled and browsing elsewhere would leave the old copy installed and
 first on PATH — and says *Updating* in the header, the caption and the log.

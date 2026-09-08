@@ -235,19 +235,29 @@ Everything that identifies an install derives from one define, so the two cannot
 | Directory | `%LOCALAPPDATA%\Programs\dti` | `…\Programs\dti-debug` |
 | Add/Remove entry | Developer Toolbox Inventory | Developer Toolbox Inventory **(debug)** |
 | Settings key | `…\dti` | `…\dti-debug` |
-| On PATH | yes, unless `/NOPATH` | **no**, unless `/PATH` |
+| Command | `dti` | `dti-debug` |
+| On PATH | yes, unless `/NOPATH` | yes, unless `/NOPATH` |
 
 That is not tidiness. `UNINSTALL_KEY` used to be shared, and the upgrade path reads it —
 so installing a debug build ran the *release* build's uninstaller, took its PATH entry
 with it, and installed the debug tree into the release's directory. One name, two
 products, and the second silently ate the first.
 
-The PATH default inverts because both builds install an executable of the same name. Two
-of them on PATH means `dti` is whichever directory comes first — an order that changes
-whenever anything else edits PATH, is invisible from the prompt, and whose wrong answer
-looks exactly like the right one. Worse than typing a path, so a debug build stays off it
-and its finish page gives you the full path instead. `/PATH` opts in if you want it
-anyway.
+**The debug build installs its executable under its own name**, `dti-debug.exe`, so both
+can be on PATH without a collision. It was kept off PATH entirely at first, because two
+executables called `dti.exe` means the command is whichever directory comes first — an
+order that changes whenever anything else edits PATH, is invisible from the prompt, and
+whose wrong answer looks exactly like the right one. Renaming removes the collision
+instead of avoiding it: `dti` is the release, `dti-debug` is the debug build.
+
+The rename happens after the files are copied, and is safe for a PyInstaller onedir build
+because the bootloader locates `_internal` by the executable's *directory* rather than by
+its name — checked by renaming a frozen build and starting it, not assumed.
+
+The installer also offers **components**: Start Menu shortcut (on), Desktop shortcut
+(off), and Add to PATH (on). The choices are recorded and restored, so an update skips the
+page and a silent in-app update keeps what you picked. `/NOSHORTCUTS`, `/NOPATH` and
+`/PATH` still override from the command line.
 
 The store under `~/.dti` is **shared** between them, because the app derives it from its
 own name rather than from which build it is. So settings, remembered tabs and cloned

@@ -130,6 +130,26 @@
   !define DISPLAY_NAME "${APP_TITLE} (debug)"
 !endif
 
+; THE COMMAND, AND WHY THE DEBUG BUILD IS INSTALLED UNDER A DIFFERENT ONE
+;
+; A debug build used to be kept off PATH entirely, because both builds installed an
+; executable called dti.exe and two of those on PATH means `dti` is whichever directory
+; comes first - invisible from the prompt, and wrong in a way that looks right.
+;
+; Giving it its own name removes the collision instead of avoiding it: `dti` is the
+; release and `dti-debug` is the debug build, both on PATH, both unambiguous. So the PATH
+; option below is no longer off by default for a debug install.
+;
+; The rename happens after the files are copied. It is safe for a PyInstaller onedir
+; build because the bootloader locates `_internal` by the executable's DIRECTORY and not
+; by its name - checked by renaming a frozen build and starting it, rather than assumed.
+!ifdef RELEASED
+  !define COMMAND "${APP_NAME}"
+!else
+  !define COMMAND "${APP_NAME}-debug"
+!endif
+!define INSTALLED_EXE "${COMMAND}.exe"
+
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALL_SLUG}"
 !define SETTINGS_KEY "Software\${PUBLISHER}\${INSTALL_SLUG}"
 
@@ -164,18 +184,18 @@ VIAddVersionKey "Comments" "${BUILD_KIND} build"
 !define MUI_ABORTWARNING
 ; Turns the highlighted component's description into the box on the components page.
 !define MUI_COMPONENTSPAGE_SMALLDESC
-!define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE_NAME}"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${INSTALLED_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "Open ${DISPLAY_NAME}"
 !ifdef RELEASED
 !define MUI_FINISHPAGE_TEXT "${DISPLAY_NAME} ${VERSION} is installed.$\r$\n$\r$\n\
-Open a new terminal and type  ${APP_NAME}  to start it.$\r$\n\
+Open a new terminal and type  ${COMMAND}  to start it.$\r$\n\
 An already-open terminal will not have picked up the change yet."
 !else
-; No command to promise: see the PATH block below for why a debug build stays off it.
 !define MUI_FINISHPAGE_TEXT "${DISPLAY_NAME} ${VERSION} is installed, beside your \
 release build rather than over it.$\r$\n$\r$\n\
-Start it from the Start Menu, or run it directly:$\r$\n\
-$INSTDIR\${EXE_NAME}"
+Open a new terminal and type  ${COMMAND}  to start it - your release build keeps \
+answering to ${APP_NAME}.$\r$\n\
+An already-open terminal will not have picked up the change yet."
 !endif
 
 ; Both pages ask whether this is an update before they draw, which is why the value is
@@ -229,20 +249,36 @@ Function .onInit
   ; The command line wins over both, so an unattended install can still say. Applied
   ; last for that reason. ${GetOptions} sets the error flag when a switch is absent, so
   ; each is cleared first.
+  ;
+  ; LABELS, NEVER RELATIVE JUMPS, BECAUSE THESE ARE MACROS
+  ;
+  ; `!insertmacro SelectSection` expands to FIVE instructions - a push, a get, an IntOp,
+  ; a set and a pop. The first version of this jumped `+2` over it, which landed in the
+  ; middle of the expansion and left the flags whatever that arithmetic produced. The
+  ; visible result was a Components page with the required component UNCHECKED and
+  ; "Space required: 0.0 KB": an installer that would have installed nothing.
+  ;
+  ; docs/pitfalls.md 7.2. The same lesson as the DetailPrint block further down, except
+  ; there the instruction count was right and here it could never have been.
   ClearErrors
   ${GetParameters} $R0
   ${GetOptions} $R0 "/NOPATH" $R1
-  IfErrors +2 0
+  IfErrors noPathAbsent
     !insertmacro UnselectSection ${SecPath}
+  noPathAbsent:
+
   ClearErrors
   ${GetOptions} $R0 "/PATH" $R1
-  IfErrors +2 0
+  IfErrors pathAbsent
     !insertmacro SelectSection ${SecPath}
+  pathAbsent:
+
   ClearErrors
   ${GetOptions} $R0 "/NOSHORTCUTS" $R1
-  IfErrors +3 0
+  IfErrors shortcutsAbsent
     !insertmacro UnselectSection ${SecStartMenu}
     !insertmacro UnselectSection ${SecDesktop}
+  shortcutsAbsent:
 FunctionEnd
 
 ; Put a recorded choice back onto its section. A value that was never written leaves the
@@ -250,10 +286,11 @@ FunctionEnd
 ; not record anything looks like.
 !macro RestoreOne KEY SECTION
   ReadRegStr $R0 HKCU "${SETTINGS_KEY}" "${KEY}"
-  StrCmp $R0 "1" 0 +3
+  StrCmp $R0 "1" 0 notOn_${KEY}
     !insertmacro SelectSection ${SECTION}
     Goto done_${KEY}
-  StrCmp $R0 "0" 0 +2
+  notOn_${KEY}:
+  StrCmp $R0 "0" 0 done_${KEY}
     !insertmacro UnselectSection ${SECTION}
   done_${KEY}:
 !macroend
@@ -358,6 +395,12 @@ Section "!${DISPLAY_NAME}" SecCore
   SetOutPath "$INSTDIR"
   File /r "${SOURCE_DIR}\*.*"
 
+  ; See COMMAND above. Only when the two differ, so a release build copies and stops.
+!if "${INSTALLED_EXE}" != "${EXE_NAME}"
+  Rename "$INSTDIR\${EXE_NAME}" "$INSTDIR\${INSTALLED_EXE}"
+  DetailPrint "Installed as ${INSTALLED_EXE}, so it does not answer to ${APP_NAME}."
+!endif
+
   WriteRegStr HKCU "${SETTINGS_KEY}" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${SETTINGS_KEY}" "Version" "${VERSION}"
   WriteRegStr HKCU "${SETTINGS_KEY}" "BuildKind" "${BUILD_KIND}"
@@ -367,7 +410,7 @@ Section "!${DISPLAY_NAME}" SecCore
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${DISPLAY_NAME}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "${PUBLISHER}"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${EXE_NAME}"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${INSTALLED_EXE}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "QuietUninstallString" "$INSTDIR\Uninstall.exe /S"
@@ -387,30 +430,22 @@ SectionEnd
 
 Section "Start Menu shortcut" SecStartMenu
   CreateDirectory "$SMPROGRAMS\${DISPLAY_NAME}"
-  CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}\${DISPLAY_NAME}.lnk" "$INSTDIR\${EXE_NAME}"
+  CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}\${DISPLAY_NAME}.lnk" "$INSTDIR\${INSTALLED_EXE}"
   CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}\Uninstall ${DISPLAY_NAME}.lnk" "$INSTDIR\Uninstall.exe"
 SectionEnd
 
 ; Unselected by default - see the note above .onInit.
 Section /o "Desktop shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\${DISPLAY_NAME}.lnk" "$INSTDIR\${EXE_NAME}"
+  CreateShortcut "$DESKTOP\${DISPLAY_NAME}.lnk" "$INSTDIR\${INSTALLED_EXE}"
 SectionEnd
 
 ; AFTER the files, so a failure here leaves a working install rather than a PATH entry
 ; pointing at a directory that was never populated. Section order is execution order,
 ; which is what puts it here rather than a comment asking for it.
 ;
-; A RELEASE IS SELECTED BY DEFAULT AND A DEBUG BUILD IS NOT
-;
-; Both install an executable of the same name, so two of them on PATH means the command
-; means whichever directory comes first. That order changes when anything else edits
-; PATH, it is invisible from the prompt, and the wrong answer looks exactly like the
-; right one - which is worse than having to type a path.
-!ifdef RELEASED
-Section "Add to PATH" SecPath
-!else
-Section /o "Add to PATH (release build already owns this name)" SecPath
-!endif
+; Selected by default for BOTH builds now. They install different command names - see
+; COMMAND at the top - so there is no longer a collision to avoid by staying off PATH.
+Section "Add to PATH (run it by typing  ${COMMAND}  )" SecPath
   InitPluginsDir
   File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
   !insertmacro EditPath add
@@ -420,10 +455,14 @@ SectionEnd
 !macro RecordOne KEY SECTION
   SectionGetFlags ${SECTION} $R0
   IntOp $R0 $R0 & ${SF_SELECTED}
-  IntCmp $R0 ${SF_SELECTED} 0 +3 0
+  ; IntCmp jumps: equal, less, greater. All three named, so nothing falls through into
+  ; the branch below it.
+  IntCmp $R0 ${SF_SELECTED} selected_${KEY} notSelected_${KEY} notSelected_${KEY}
+  selected_${KEY}:
     WriteRegStr HKCU "${SETTINGS_KEY}" "${KEY}" "1"
     Goto recorded_${KEY}
-  WriteRegStr HKCU "${SETTINGS_KEY}" "${KEY}" "0"
+  notSelected_${KEY}:
+    WriteRegStr HKCU "${SETTINGS_KEY}" "${KEY}" "0"
   recorded_${KEY}:
 !macroend
 
@@ -438,7 +477,7 @@ FunctionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "The application itself. Required."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "A Start Menu entry, with an uninstall shortcut beside it."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "An icon on your desktop."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Add the install folder to your user PATH, so  ${APP_NAME}  starts it from any new terminal."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Add the install folder to your user PATH, so  ${COMMAND}  starts it from any new terminal."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"

@@ -260,6 +260,33 @@ leaves a token behind, never in PowerShell, where it leaves a string in an array
 `workflow calls` check in `check-all` reads the workflows for both wrong spellings, because
 a rule the gate cannot see is a rule that only CI can break.
 
+### 7.2 A relative jump over an NSIS macro lands inside it
+
+The same lesson as 7.1, in a language where the count could never have been right.
+
+`.onInit` applied the command-line switches to the components page:
+
+```nsis
+${GetOptions} $R0 "/NOPATH" $R1
+IfErrors +2 0
+  !insertmacro UnselectSection ${SecPath}
+```
+
+One line, so `+2` skips it. Except `!insertmacro UnselectSection` expands to **nine**
+instructions — two pushes, a `StrCpy`, `SectionGetFlags`, an `IntOp`, `SectionSetFlags`
+and two pops. `+2` landed on the second `Push`, and the flag arithmetic then ran
+unconditionally against a corrupted stack.
+
+What it looked like: a Components page with the **required** component unchecked and
+*"Space required: 0.0 KB"*. An installer that would have installed nothing, from a script
+that compiled without a warning and whose logic reads correctly line by line.
+
+**Rule.** Labels, always, in NSIS. `+N` counts *instructions*, and nothing that starts
+with `!insertmacro` or `${...}` is one instruction — `${GetOptions}` alone expands to
+about eighty. `makensis /PPO` prints the expansion and is how this was confirmed rather
+than reasoned about; the only surviving relative jumps in this repository's script are
+inside NSIS's own libraries and one `+2` over a single `StrCpy`.
+
 ---
 
 ## 8. A dependency you cannot patch
