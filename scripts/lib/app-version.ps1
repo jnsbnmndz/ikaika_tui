@@ -175,9 +175,15 @@ function Get-TagName($Version, [switch]$Released) {
 
 # What `-Bump` means, as the version it produces.
 #
-# 'same' keeps the name and still takes a new build number: a rebuild of the same source
+# 'keep' keeps the NAME and still takes a new build number: a rebuild of the same source
 # is a different artifact, and an installer that cannot tell them apart will not replace
-# one with the other.
+# one with the other. So it is the one option that raises nothing and still produces a
+# version - which is why the release form spells out what it does rather than trusting the
+# word to carry it.
+#
+# 'same' is the older spelling and still accepted. An empty string is too, because a
+# caller that passes through an unset input should get the harmless branch rather than a
+# throw.
 function Resolve-NextVersion([string]$Bump) {
     $current = Get-AppVersion
     $build = Get-NextBuildNumber
@@ -189,7 +195,7 @@ function Resolve-NextVersion([string]$Bump) {
         { $_ -in @('same', 'keep', '') } { $name = $current.Name }
         default {
             if ("$Bump" -match '^\d+\.\d+\.\d+$') { $name = "$Bump" }
-            else { throw "'$Bump' is not major, minor, patch, same, or an x.y.z version." }
+            else { throw "'$Bump' is not major, minor, patch, keep, or an x.y.z version." }
         }
     }
     return Split-AppVersion "$name+$build"

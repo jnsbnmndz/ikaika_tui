@@ -128,11 +128,15 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Which part of the version to raise'
+        # The description carries what `keep` means, because a dropdown option is one word
+        # and this one is the only entry that does not raise anything. It is the same
+        # branch Resolve-NextVersion has always had, which accepts `same` as well - the
+        # form offers one spelling of it rather than two identical choices.
+        description: 'Which part of the version to raise. keep = a new build number, same version name'
         type: choice
         required: true
         default: patch
-        options: [patch, minor, major, same]
+        options: [patch, minor, major, keep]
       released:
         description: 'Official release (adds -released, publishes as latest)'
         type: boolean

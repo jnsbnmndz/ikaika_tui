@@ -2,7 +2,7 @@
 #
 #     .\script.ps1 bump-version -Bump patch                 a debug build's tag
 #     .\script.ps1 bump-version -Bump minor -Released       an official release
-#     .\script.ps1 bump-version -Bump same                  rebuild, new build number
+#     .\script.ps1 bump-version -Bump keep                  rebuild, new build number
 #     .\script.ps1 bump-version -Bump patch -WhatIf         say what it would do
 #
 # ONE COMMAND, RUN THE SAME WAY EVERYWHERE. GitHub Actions calls this file rather than
@@ -22,7 +22,7 @@
 
 [CmdletBinding()]
 param(
-    # major, minor, patch, same, or an explicit x.y.z.
+    # major, minor, patch, keep (or its older spelling, same), or an explicit x.y.z.
     [string]$Bump = 'patch',
     # Tag it as an official release rather than a debug build.
     [switch]$Released,
@@ -43,7 +43,7 @@ if ($Help) {
     Write-Host '  bump-version - rewrite the version, commit it, and tag it.'
     Write-Host ''
     Write-Host '  Usage'
-    Write-Host '    .\script.ps1 bump-version [-Bump major|minor|patch|same|x.y.z]'
+    Write-Host '    .\script.ps1 bump-version [-Bump major|minor|patch|keep|x.y.z]'
     Write-Host '                              [-Released] [-WhatIf] [-Yes]'
     Write-Host ''
     Write-Host '  VERSION holds x.y.z+n and is the single source; pyproject.toml is'

@@ -120,7 +120,7 @@ whether anything leaves the runner — is **off**:
 
 | Input | Default | What it does |
 |---|---|---|
-| `bump` | `patch` | which part of the version to raise |
+| `bump` | `patch` | which part of the version to raise; `keep` takes a new build number and leaves the name alone |
 | `released` | off | adds `-released` to the tag and publishes as latest rather than as a prerelease |
 | `sign` | on | sign the artifacts; needs the three signing secrets |
 | `tag` | **off** | commit, tag, push, publish. Off runs `bump-version -WhatIf` and skips the push and the publish |
