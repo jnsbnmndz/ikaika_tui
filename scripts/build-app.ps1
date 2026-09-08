@@ -43,7 +43,7 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\app-version.ps1')
 
-$AppName = 'generic-toolbox'
+$AppName = 'dti'
 # A SCRIPT, because that is what PyInstaller freezes. Its -m is --manifest, so naming
 # the module made it demand a scriptname it never got - and pointing it at the package's
 # own __main__.py is how a package gets imported twice under two names.
@@ -90,9 +90,20 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[2/5] PyInstaller $probe"
 
+# THE EXE IS NAMED FOR THE APP, THE FOLDER FOR THE VERSION.
+#
+# PyInstaller takes one --name and uses it for both, which gave a
+# `dti-0.1.0+2.exe` - a command whose name changes every release. That is no use
+# on PATH, which the installer now adds the install directory to, and it makes a
+# Start Menu shortcut that breaks on every upgrade.
+#
+# So it freezes as `dti` into a scratch directory and the whole folder is moved to
+# the versioned name. Moving the FOLDER rather than renaming the exe inside it:
+# `_internal` is resolved relative to the executable, so the two travel together.
 $outName = "$AppName-$text"
 $dist = Join-Path $root 'dist'
 $work = Join-Path $root 'build'
+$staging = Join-Path $work 'frozen'
 $target = Join-Path $dist $outName
 
 if ($Clean -and (Test-Path -LiteralPath $target)) {
@@ -106,8 +117,8 @@ $arguments = @(
     '--noconfirm',
     '--onedir',
     '--console',
-    '--name', $outName,
-    '--distpath', $dist,
+    '--name', $AppName,
+    '--distpath', $staging,
     '--workpath', $work,
     '--specpath', $work,
     '--add-data', "$(Join-Path $root 'VERSION');.",
@@ -124,6 +135,18 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# Into place: the versioned folder is what the installer packages and what a second
+# build of another version sits beside. Removed first, because Move-Item onto an
+# existing directory nests the source inside it rather than replacing it.
+$frozen = Join-Path $staging $AppName
+if (-not (Test-Path -LiteralPath $frozen)) {
+    Write-Host "  PyInstaller reported success but $frozen is not there." -ForegroundColor Red
+    exit 1
+}
+if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+Move-Item -LiteralPath $frozen -Destination $target
+
 # Asserted, not assumed. --add-data reports nothing when a source path is wrong, and the
 # runtime fallback for a missing VERSION is a plausible-looking version number.
 $bundled = @(Get-ChildItem -LiteralPath $target -Recurse -Filter 'VERSION' -File -ErrorAction SilentlyContinue)
@@ -134,9 +157,9 @@ if (-not $bundled.Count) {
 }
 Write-Host "[4/5] VERSION bundled at $($bundled[0].FullName.Substring($target.Length + 1))"
 
-$exe = Join-Path $target "$outName.exe"
+$exe = Join-Path $target "$AppName.exe"
 if (-not (Test-Path -LiteralPath $exe)) {
-    Write-Host "  No $outName.exe in $target." -ForegroundColor Red
+    Write-Host "  No $AppName.exe in $target." -ForegroundColor Red
     exit 1
 }
 # Signed here rather than only in build-installer: the exe inside the package is what
@@ -144,7 +167,7 @@ if (-not (Test-Path -LiteralPath $exe)) {
 if ($Sign) {
     . (Join-Path $PSScriptRoot 'lib\signing.ps1')
     $signed = Invoke-SignFile -Path $exe -Released:$Released -Description $AppName
-    Write-SigningOutcome $signed "$outName.exe"
+    Write-SigningOutcome $signed "$AppName.exe"
 }
 
 $size = [math]::Round(((Get-ChildItem -LiteralPath $target -Recurse -File |

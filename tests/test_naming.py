@@ -27,7 +27,10 @@ class NamesDeriveFromOneSlug(unittest.TestCase):
         self.assertEqual(f"com.{slug}", naming.BUNDLE_PREFIX)
         self.assertEqual(f"{naming.APP_NAME}_PROJECT_ROOT", naming.PROJECT_ROOT_VAR)
 
-    def test_no_name_still_carries_the_old_brand(self):
+    def test_no_name_still_carries_a_former_brand(self):
+        # Both of them. There have been two renames, and the second was undone in
+        # one place at a time - a check for only the oldest would have passed while
+        # `generic` was still written into a filename, a hint and a document kind.
         for value in (
             naming.APP_SLUG,
             naming.APP_NAME,
@@ -38,7 +41,8 @@ class NamesDeriveFromOneSlug(unittest.TestCase):
             naming.BUNDLE_PREFIX,
             naming.PROJECT_ROOT_VAR,
         ):
-            self.assertNotIn("ikaika", value.lower(), value)
+            for former in ("ikaika", "generic"):
+                self.assertNotIn(former, value.lower(), f"{value} still says {former}")
 
 
 class TheOldNamesAreStillRead(unittest.TestCase):

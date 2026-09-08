@@ -23,9 +23,9 @@
 # WHAT ENDS UP WHERE
 #
 #   certs/release.pfx, certs/debug.pfx        gitignored - the private keys
-#   .generic_configs/signing.env             gitignored - the password
-#   .generic_configs/*.pfx.sha256            COMMITTED - the trust anchors
-#   .generic_configs/share.env               COMMITTED - the links
+#   .dti_configs/signing.env                  gitignored - the password
+#   .dti_configs/*.pfx.sha256                 COMMITTED - the trust anchors
+#   .dti_configs/share.env                    COMMITTED - the links
 #
 # A new machine needs the password out of band. The link alone will not open the files,
 # which is what makes committing it safe.
@@ -95,7 +95,7 @@ if ($Help) {
     Write-Host '  fetches the shared link, else generates. Generating is last: it is a'
     Write-Host '  new identity, and old installers stop matching it.'
     Write-Host ''
-    Write-Host '  Config (.generic_configs/share.env, committed)'
+    Write-Host '  Config (.dti_configs/share.env, committed)'
     Write-Host '    share.cert           link the release .pfx is fetched from'
     Write-Host '    share.debugCert      link the debug .pfx is fetched from'
     Write-Host '    publisher            certificate subject, e.g. CN=Name, O=Org'

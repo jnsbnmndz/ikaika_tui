@@ -29,6 +29,25 @@
 ; old one leaves whatever the new one no longer ships. Those stale files are on the import
 ; path, so the app keeps loading them - which is a version somebody is running that was
 ; never built. The old uninstaller is run silently before anything is written.
+;
+;
+; IT PUTS THE INSTALL DIRECTORY ON THE USER'S PATH
+;
+; So the app can be started by typing its name. The install directory is stable
+; across versions - the FOLDER under dist carries the version, the installed one
+; does not - so the entry is added once and survives every upgrade. `/NOPATH`
+; skips it.
+;
+; THE EDIT IS NOT DONE IN NSIS, AND THAT IS NOT A STYLE CHOICE. This build reports
+; NSIS_MAX_STRLEN=1024 and `ReadRegStr` truncates SILENTLY at it; writing the
+; truncated value back is the well-known way an installer destroys somebody's
+; PATH. On the machine this was written for, the user PATH was already 723
+; characters and the merged machine+user value 1117 - past the limit before this
+; installer adds anything. The EnVar plugin would solve it and is not installed.
+;
+; So scripts\path-entry.ps1 does it through .NET, which has no length limit and
+; broadcasts WM_SETTINGCHANGE itself. It is invoked by FULL PATH out of $SYSDIR:
+; the one thing that must not be assumed working while repairing PATH is PATH.
 
 !ifndef APP_NAME
   !error "APP_NAME is required - build-installer.ps1 passes it."
@@ -48,11 +67,16 @@
 !ifndef OUT_FILE
   !error "OUT_FILE is required."
 !endif
+!ifndef PATH_SCRIPT
+  !error "PATH_SCRIPT is required - the path-entry.ps1 that edits PATH."
+!endif
 !ifndef APP_TITLE
   !define APP_TITLE "${APP_NAME}"
 !endif
+; No default. The publisher names the product in Add/Remove Programs and in the
+; settings key path, and a stale default there is a wrong name nothing reports.
 !ifndef PUBLISHER
-  !define PUBLISHER "Generic"
+  !error "PUBLISHER is required."
 !endif
 
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
@@ -90,6 +114,9 @@ VIAddVersionKey "Comments" "${BUILD_KIND} build"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE_NAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "Open ${APP_TITLE}"
+!define MUI_FINISHPAGE_TEXT "${APP_TITLE} ${VERSION} is installed.$\r$\n$\r$\n\
+Open a new terminal and type  ${APP_NAME}  to start it.$\r$\n\
+An already-open terminal will not have picked up the change yet."
 
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -116,6 +143,26 @@ Function UninstallPrevious
   RMDir /r "$R1"
   done:
 FunctionEnd
+
+; Runs path-entry.ps1, which adds or removes $INSTDIR from the user's PATH.
+;
+; ExecToStack rather than Exec so the script's one line of output can be put in
+; the details log: this edits something outside the install directory, and an
+; installer that changes a person's PATH without saying so is one they cannot
+; undo by hand. A failure is REPORTED, not fatal - the app is installed and
+; runnable by full path either way, so refusing the whole install over a PATH
+; entry would be the wrong trade.
+!macro EditPath ACTION
+  DetailPrint "PATH: ${ACTION} $INSTDIR"
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" \
+    -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$PLUGINSDIR\path-entry.ps1" -Directory "$INSTDIR" -Action ${ACTION}'
+  Pop $0
+  Pop $1
+  DetailPrint "  $1"
+  StrCmp $0 "0" +2 0
+    DetailPrint "  PATH was not changed (exit $0). The app still runs from $INSTDIR."
+!macroend
 
 Section "Install"
   Call UninstallPrevious
@@ -146,10 +193,37 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk" "$INSTDIR\${EXE_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_TITLE}\Uninstall ${APP_TITLE}.lnk" "$INSTDIR\Uninstall.exe"
 
+  ; After the files, so a failure here leaves a working install rather than a
+  ; PATH entry pointing at a directory that was never populated.
+  ;
+  ; ${GetOptions} sets the error flag when the switch is absent, so the flag is
+  ; cleared first - a stale one from any earlier call would read as /NOPATH.
+  ClearErrors
+  ${GetParameters} $R0
+  ${GetOptions} $R0 "/NOPATH" $R1
+  IfErrors 0 pathSkipped
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
+    !insertmacro EditPath add
+    WriteRegStr HKCU "${SETTINGS_KEY}" "OnPath" "1"
+    Goto pathDone
+  pathSkipped:
+    DetailPrint "PATH: skipped, /NOPATH was given"
+    WriteRegStr HKCU "${SETTINGS_KEY}" "OnPath" "0"
+  pathDone:
+
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
 
 Section "Uninstall"
+  ; BEFORE the tree is deleted, while $INSTDIR is still the thing being removed.
+  ; Unconditional: the entry is removed whether or not this install put it there,
+  ; because path-entry.ps1 is a no-op when the directory is not on PATH, and the
+  ; alternative is trusting a registry value an upgrade may have rewritten.
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
+  !insertmacro EditPath remove
+
   Delete "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk"
   Delete "$SMPROGRAMS\${APP_TITLE}\Uninstall ${APP_TITLE}.lnk"
   RMDir "$SMPROGRAMS\${APP_TITLE}"

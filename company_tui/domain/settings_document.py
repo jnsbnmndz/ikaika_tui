@@ -33,6 +33,7 @@ a slightly different build.
 from collections.abc import Mapping
 from typing import Any
 
+from company_tui.domain import naming
 from company_tui.domain.config import (
     DEFAULT_BUNDLE_PREFIX,
     DEFAULT_SCRIPTS_ROOT,
@@ -49,7 +50,17 @@ from company_tui.domain.updates import (
 SCHEMA = 1
 SCHEMA_KEY = "schema"
 KIND_KEY = "kind"
-KIND = "generic-toolbox-settings"
+
+KIND = f"{naming.APP_SLUG}-settings"
+"""What an exported document calls itself.
+
+Derived, because it is a name and every name here comes from one place. It is also
+a wire format: a document written before a rename still says the old thing, so
+`KNOWN_KINDS` accepts those without complaining. A warning about the product's own
+former name would be a warning nobody can act on.
+"""
+
+KNOWN_KINDS: tuple[str, ...] = (KIND, "generic-toolbox-settings")
 
 
 def write_document(settings: Settings) -> dict[str, Any]:
@@ -102,7 +113,7 @@ def read_document(
         return current, ("that file is not a settings document - expected a JSON object",)
 
     kind = str(document.get(KIND_KEY, "")).strip()
-    if kind and kind != KIND:
+    if kind and kind not in KNOWN_KINDS:
         problems.append(f"the document says it is '{kind}', not '{KIND}'")
 
     schema = document.get(SCHEMA_KEY)

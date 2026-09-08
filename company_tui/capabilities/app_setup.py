@@ -27,6 +27,7 @@ document half of which was skipped is the outcome this exists to avoid.
 import json
 from pathlib import Path
 
+from company_tui.domain import naming
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.options import Option, OptionKind, OptionValues
@@ -49,7 +50,7 @@ OVERWRITE_KEY = "overwrite"
 EXPORT = "export"
 IMPORT = "import"
 
-DEFAULT_NAME = "generic-settings.json"
+DEFAULT_NAME = f"{naming.APP_SLUG}-settings.json"
 
 
 class AppSetupCapability(Capability):

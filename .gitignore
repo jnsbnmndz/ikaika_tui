@@ -92,7 +92,7 @@ test/
 certs/
 *.pfx
 *.p12
-.generic_configs/signing.env
-.generic_configs/logs/
-!.generic_configs/*.sha256
-!.generic_configs/share.env
+.dti_configs/signing.env
+.dti_configs/logs/
+!.dti_configs/*.sha256
+!.dti_configs/share.env

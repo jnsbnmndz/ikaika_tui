@@ -15,6 +15,7 @@ from pathlib import Path
 from company_tui.domain.config import Settings, TemplateSource
 from company_tui.domain.settings_document import (
     KIND,
+    KNOWN_KINDS,
     SCHEMA,
     read_document,
     write_document,
@@ -28,7 +29,7 @@ from company_tui.domain.updates import (
 FULL = Settings(
     workspace_root="~/work",
     bundle_prefix="com.example",
-    scripts_root="~/.generic/scripts",
+    scripts_root="~/.dti/scripts",
     templates={"python": TemplateSource(url="https://host/py.git", ref="v1.0.0")},
     scripts={"react": TemplateSource(url="https://host/react.git")},
     script_checks={"react": False},
@@ -74,6 +75,18 @@ class TheRoundTrip(unittest.TestCase):
         document = write_document(Settings())
         self.assertEqual(KIND, document["kind"])
         self.assertEqual(SCHEMA, document["schema"])
+
+    def test_a_document_written_under_a_former_name_is_not_complained_about(self):
+        # The kind is a wire format. A document exported before a rename still says
+        # the old thing, and a warning about the product's own former name is one
+        # nobody can act on.
+        for legacy in KNOWN_KINDS:
+            with self.subTest(kind=legacy):
+                document = write_document(FULL)
+                document["kind"] = legacy
+                settings, problems = read_document(document, Settings())
+                self.assertEqual((), problems)
+                self.assertEqual(FULL.bundle_prefix, settings.bundle_prefix)
 
 
 class ReadingSomethingOdd(unittest.TestCase):

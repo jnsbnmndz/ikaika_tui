@@ -32,9 +32,9 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\app-version.ps1')
 
-$AppName = 'generic-toolbox'
-$AppTitle = 'Generic Toolbox'
-$Publisher = 'Generic'
+$AppName = 'dti'
+$AppTitle = 'Developer Toolbox Inventory'
+$Publisher = 'Developer Toolbox Inventory'
 
 if ($Help) {
     Write-Host ''
@@ -94,7 +94,8 @@ Write-Host "[2/5] makensis: $makensis"
 
 $sourceName = "$AppName-$text"
 $source = Join-Path $root "dist\$sourceName"
-$exeName = "$sourceName.exe"
+# Named for the app, not the version - see build-app.
+$exeName = "$AppName.exe"
 
 if (-not (Test-Path -LiteralPath (Join-Path $source $exeName))) {
     Write-Host ''
@@ -122,7 +123,11 @@ $defines = @(
     "/DVI_VERSION=$viVersion",
     "/DSOURCE_DIR=$source",
     "/DEXE_NAME=$exeName",
-    "/DOUT_FILE=$outFile"
+    "/DOUT_FILE=$outFile",
+    # The script that edits PATH. Passed as a path rather than embedded in the
+    # .nsi: it is a real PowerShell file that can be run and tested on its own,
+    # which is how the PATH round trip was verified before an installer existed.
+    "/DPATH_SCRIPT=$(Join-Path $PSScriptRoot 'lib\path-entry.ps1')"
 )
 if ($Released) { $defines += '/DRELEASED=1' }
 

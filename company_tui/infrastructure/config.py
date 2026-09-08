@@ -5,8 +5,8 @@ pin a template for one repository without changing what everyone else gets.
 
     [scaffold]
     workspace_root = "~/work"
-    bundle_prefix  = "com.generic"
-    scripts_root   = "~/.generic/scripts"
+    bundle_prefix  = "com.dti"
+    scripts_root   = "~/.dti/scripts"
 
     [templates.react_native]
     url = "https://github.com/JDM-Github/react_native_structure.git"
@@ -70,7 +70,7 @@ TEMPLATES_SECTION = "templates"
 SCRIPTS_SECTION = "scripts"
 UPDATES_SECTION = "updates"
 
-HEADER = f"# {naming.APP_TITLE} developer toolbox settings."
+HEADER = f"# {naming.APP_TITLE} settings."
 
 
 def quote(value: str) -> str:

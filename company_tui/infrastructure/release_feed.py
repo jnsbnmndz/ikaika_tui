@@ -34,8 +34,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from company_tui.domain import naming
 from company_tui.domain.updates import (
+    USER_AGENT,
     Release,
     ReleaseFeedError,
     ReleaseFeedPort,
@@ -52,7 +52,6 @@ MAX_BYTES = 4 * 1024 * 1024
 at something that streams cannot exhaust memory - the read is bounded before the
 body is parsed, not after."""
 
-USER_AGENT = f"{naming.APP_TITLE}-toolbox"
 
 
 class HttpReleaseFeed(ReleaseFeedPort):

@@ -33,6 +33,7 @@ from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.updates import (
+    USER_AGENT,
     Release,
     ReleaseFeedError,
     ReleaseFeedPort,
@@ -237,7 +238,7 @@ class UpdatesCapability(Capability):
         # once in the buffer and once on the way to disk.
         def _pull() -> int:
             request = urllib.request.Request(
-                url, headers={"User-Agent": f"{self.info.key}-toolbox"}
+                url, headers={"User-Agent": USER_AGENT}
             )
             total = 0
             with urllib.request.urlopen(request, timeout=60) as response:

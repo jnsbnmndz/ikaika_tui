@@ -31,6 +31,18 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from company_tui.domain import naming
+
+USER_AGENT = f"{naming.APP_SLUG}-toolbox"
+"""What every request from here identifies itself as.
+
+GitHub rejects an API request with no User-Agent, so this is not optional. Here in
+the domain rather than in the feed because the downloader sends it too, and it was
+building its own out of a capability key - so an installer download announced
+itself as "updates-toolbox". Built from APP_SLUG, not APP_TITLE: the title has
+spaces in it.
+"""
+
 DEFAULT_API_BASE = "https://api.github.com"
 DEFAULT_ASSET_PATTERN = "*-setup*.exe"
 RELEASED_SUFFIX = "-released"

@@ -182,7 +182,7 @@ class _Config(ConfigPort):
         return default
 
     def bundle_prefix(self) -> str:
-        return "com.generic"
+        return "com.dti"
 
     def workspace_root(self):
         from pathlib import Path
@@ -275,7 +275,7 @@ class TheCheck(unittest.TestCase):
                 Release(
                     tag="v0.2.0-released",
                     prerelease=False,
-                    asset_name="generic-toolbox-0.2.0-setup-released.exe",
+                    asset_name="dti-0.2.0-setup-released.exe",
                     asset_url="https://example.invalid/setup.exe",
                     asset_size=13_000_000,
                 ),
@@ -285,7 +285,7 @@ class TheCheck(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("v0.2.0-released", message)
         self.assertIn("Download the installer", message)
-        self.assertTrue(any("generic-toolbox-0.2.0-setup" in line for line in lines))
+        self.assertTrue(any("dti-0.2.0-setup" in line for line in lines))
 
     def test_only_prereleases_says_which_switch_would_change_that(self):
         feed = _Feed((Release(tag="v9.9.9", prerelease=True),))

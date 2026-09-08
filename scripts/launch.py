@@ -6,8 +6,8 @@ named directly, but a file inside the package being run as a top-level script is
 how a package ends up imported twice under two names.
 
 So this is the script: it imports the package the normal way and calls the same
-`main` the `generic` console command calls, which is what keeps a frozen build,
-`generic` and `python -m company_tui` the same program.
+`main` the `dti` console command calls, which is what keeps a frozen build,
+`dti` and `python -m company_tui` the same program.
 """
 
 from company_tui.cli import main

@@ -10,9 +10,15 @@
 # disagree - which is the failure a hand-maintained table has, silently, the first time
 # somebody adds a file.
 #
-# scripts\lib\ is not searched. Those are dot-sourced libraries; running one directly
-# defines some functions and does nothing, which looks like a command that silently
-# failed.
+# scripts\lib\ is NOT searched, and it holds two kinds of thing alike in the one
+# way that matters here: neither is a command.
+#
+#   dot-sourced libraries      running one defines some functions and does nothing,
+#                              which looks like a command that silently failed
+#   helpers other programs run lib\path-entry.ps1 is invoked by the installer with
+#                              arguments it requires. It sat in scripts\ for one build
+#                              and appeared in this listing, where the only thing it
+#                              could do was fail on a missing -Directory.
 #
 #
 # A BARE RUN PRINTS AND EXITS. IT DOES NOT PROMPT.
@@ -83,7 +89,7 @@ $commands = Get-CommandList
 
 if (-not $Name -or $Name -in @('help', '-h', '--help', '-help')) {
     Write-Host ''
-    Write-Host '  Generic Toolbox' -ForegroundColor Cyan
+    Write-Host '  Developer Toolbox Inventory' -ForegroundColor Cyan
     $versionFile = Join-Path $PSScriptRoot 'VERSION'
     if (Test-Path -LiteralPath $versionFile) {
         Write-Host "  v$("$(Get-Content -LiteralPath $versionFile -TotalCount 1)".Trim())" -ForegroundColor DarkGray

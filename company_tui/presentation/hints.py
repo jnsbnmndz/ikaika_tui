@@ -4,6 +4,8 @@ Card descriptions have to stay short enough to fit a card; these do not, so the
 menu can say more about the focused entry without crowding the grid.
 """
 
+from company_tui.domain import naming
+
 _HINTS = {
     "scaffold": "Start a new project, or add a file to one you already have.",
     "build": "Run a workflow from the stack's script repository against a project.",
@@ -20,7 +22,9 @@ _HINTS = {
     "toolkit": "Release this tooling, or move this project onto a version of it.",
     "php": "Deploy a PHP backend and version the plugin it ships as.",
     "react-native": "Build and run a React Native application.",
-    "settings": "Edit generic.toml — workspace, bundle prefix, and template sources.",
+    # Derived: this line named the settings file outright and has now been wrong
+    # after two renames, both times silently.
+    "settings": f"Edit {naming.CONFIG_NAME} — workspace, bundle prefix, and template sources.",
     "doctor": "Report the interpreter, the platform, and the tools each stack needs.",
     "app_setup": "Carry this whole configuration out as one JSON file, or bring one in.",
     "updates": "Ask the release feed whether a newer build has been published.",

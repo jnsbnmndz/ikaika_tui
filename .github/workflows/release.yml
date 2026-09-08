@@ -39,7 +39,7 @@
 # be signed by a different identity that exists only inside that runner - and users would
 # see the publisher change on every update. -FetchOnly makes that case fail instead.
 #
-# The certificate comes from the link committed in .generic_configs/share.env; only the
+# The certificate comes from the link committed in .dti_configs/share.env; only the
 # password is a secret, and the checksum committed beside it is what proves the file that
 # arrived is the right one.
 #
@@ -123,10 +123,10 @@ jobs:
         if: ${{ inputs.sign }}
         shell: pwsh
         env:
-          GENERIC_CERT_PASSWORD: ${{ secrets.GENERIC_CERT_PASSWORD }}
+          DTI_CERT_PASSWORD: ${{ secrets.DTI_CERT_PASSWORD }}
         run: |
-          if (-not $env:GENERIC_CERT_PASSWORD) {
-            Write-Host 'The GENERIC_CERT_PASSWORD secret is not set on this repository.' -ForegroundColor Red
+          if (-not $env:DTI_CERT_PASSWORD) {
+            Write-Host 'The DTI_CERT_PASSWORD secret is not set on this repository.' -ForegroundColor Red
             Write-Host 'Set it, or run this workflow with sign = false.' -ForegroundColor Yellow
             exit 1
           }

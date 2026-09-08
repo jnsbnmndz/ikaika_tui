@@ -10,12 +10,15 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["textual>=0.60"]
 
-# TWO NAMES, ONE ENTRY POINT. `generic` is what the product is called; `company`
-# was the only name and is kept so anything already invoking it keeps working.
+# TWO NAMES, ONE ENTRY POINT. `dti` is what the product is called and what the
+# installer puts on PATH; `company` was the only name for a long time and is kept
+# so anything already invoking it keeps working. `generic` existed for one
+# afternoon and was never released, so it is not kept.
+#
 # Neither is the package name - renaming company_tui itself would churn every
 # import in the repository to no one's benefit.
 [project.scripts]
-generic = "company_tui.cli:main"
+dti = "company_tui.cli:main"
 company = "company_tui.cli:main"
 
 [tool.setuptools.packages.find]

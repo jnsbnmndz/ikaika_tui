@@ -1,4 +1,4 @@
-# Generic Developer Toolbox
+# Developer Toolbox Inventory
 
 A scalable Python terminal application for development workflows. The first capability boundary covered scaffolding; the same application now also builds, deploys, runs a project's own commands, and maintains itself.
 
@@ -20,12 +20,14 @@ python -m company_tui doctor           # plain stdout, scriptable
 python -m company_tui check            # the gate: tests, list and doctor
 ```
 
-Install the console command locally when needed. Two names are installed for one entry point — `generic` matches what the product is called, and `company` is kept so anything already invoking it keeps working:
+Install the console command locally when needed. Two names are installed for one entry point — `dti` is what the product is called, and `company` is kept so anything already invoking it keeps working:
 
 ```sh
 python -m pip install -e .
-generic
+dti
 ```
+
+The installer puts the install directory on PATH, so an installed copy is started by typing `dti` in any new terminal — see below.
 
 Run the tests:
 
@@ -62,7 +64,7 @@ Every interactive step in the domain/application/capability layers is `async` �
 
 ## Branding
 
-- `presentation/branding.py` holds the tagline, the version and `APP_THEME` — a Textual `Theme`: a deep navy primary, a warm gold accent, near-black navy background. `TuiConsole` registers and activates it on mount. The name itself is not here: it comes from `domain/naming.py`, which is the single place every name derives from `APP_SLUG`, so the wordmark and the theme name cannot drift from it. `SPLASH_MARK` is a deliberately abstract placeholder — it used to be one company's logo, which is exactly what a generic toolbox should not open with; regenerate it from an image with `python -m tools.blockify <image>.png --rows 13 --name SPLASH_MARK`.
+- `presentation/branding.py` holds the tagline, the version and `APP_THEME` — a Textual `Theme`: a deep navy primary, a warm gold accent, near-black navy background. `TuiConsole` registers and activates it on mount. The name itself is not here: it comes from `domain/naming.py`, which is the single place every name derives from `APP_SLUG`, so the wordmark and the theme name cannot drift from it. `SPLASH_MARK` is a deliberately abstract placeholder — it used to be one company's logo, which is exactly what a generic toolbox should not open with; regenerate it from an image with `python -m tools.blockify <image>.png --rows 13 --name SPLASH_MARK`. Every name the product answers to lives in `domain/naming.py`, derived from `APP_SLUG` — which is `dti` rather than the whole name because it ends up in a filename, a directory under your home, and the command you type.
 - `presentation/chrome.py` is the frame every screen is composed inside: `AppFrame` (outer border), `AppHeader` (logo mark, name, tagline, version, and the working directory as a status), and `AppFooter` (key hints on the left, `APP_SIGNATURE` on the right). It fills the terminal by default; `FRAME_WIDTH`/`FRAME_HEIGHT` at the top of the module can be set to viewport units to float the app as a smaller centred panel instead.
 - Every key hint is also a button: hovering one lights it in the accent colour and clicking it presses the key it names, so `Esc`, `Ctrl+R`, `⌃T` and the rest work with the mouse as well as the keyboard. Hints that name a range rather than one key (`↑↓/←→`, `1–9`) stay quiet, as does a key that would do nothing at that moment. Tabs light up under the pointer for the same reason — you can see what a click is about to hit before you make it.
 - The run panel says what it wants before you press anything: required fields carry a gold `*`, a line under the form names whatever is still missing, and the terminal half says it is empty rather than just being empty. Press Run without filling something in and that same line goes red with the cursor already on the field it is about.
@@ -136,9 +138,9 @@ to generate at all.
 | What | Where | Committed? |
 |---|---|---|
 | The private keys | `certs/*.pfx` | **no** |
-| The password | `.generic_configs/signing.env` | **no** |
-| Their checksums | `.generic_configs/*.pfx.sha256` | yes, deliberately |
-| The share links | `.generic_configs/share.env` | yes |
+| The password | `.dti_configs/signing.env` | **no** |
+| Their checksums | `.dti_configs/*.pfx.sha256` | yes, deliberately |
+| The share links | `.dti_configs/share.env` | yes |
 
 The checksums are the point of that split: a `.pfx` arrives over a link from a machine
 nobody here controls, and a same-named file is not the same file. The link is safe to
@@ -155,6 +157,27 @@ developer tool that demands one is a tool people install once and stop updating.
 upgrade runs the old uninstaller first: a PyInstaller folder's contents change between
 versions, and copying a new build over an old one leaves whatever the new one no longer
 ships sitting on the import path.
+
+It also adds the install directory to your **user** PATH, so the app starts by typing
+`dti` in any terminal opened afterwards. Pass `/NOPATH` to skip that. An already-open
+terminal keeps the environment it started with — that is Windows, not the
+installer, and the finish page says so.
+
+The exe inside the package is called `dti.exe`, not `dti-0.1.0+2.exe`. The FOLDER
+under `dist/` carries the version so two builds can sit side by side; the command does
+not, because a command whose name changes every release is no use on PATH and makes a
+Start Menu shortcut that breaks on every upgrade.
+
+**The PATH edit is not done in NSIS**, and that is worth knowing before anyone
+simplifies it. NSIS is built with a fixed string limit — `makensis /HDRINFO`
+reports `NSIS_MAX_STRLEN=1024` — and `ReadRegStr` truncates *silently* at it.
+Writing that truncated value back is the well-known way an installer destroys
+somebody's PATH, and it is not hypothetical: on the machine this was built for, the
+user PATH was already 723 characters and the merged machine+user value 1117, past the
+limit before this installer adds anything. So `scripts/lib/path-entry.ps1` does it
+through .NET, which has no such limit and broadcasts `WM_SETTINGCHANGE` itself. It
+reads and writes the **User** scope only — writing the merged `$env:Path` into
+user scope is the other classic bug, and it doubles the length every time.
 
 ## Template packs
 

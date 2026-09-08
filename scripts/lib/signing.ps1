@@ -17,10 +17,10 @@
 #
 # WHAT IS COMMITTED AND WHAT IS NOT
 #
-#   certs/*.pfx                        NO  - the private key
-#   .generic_configs/signing.env       NO  - the password
-#   .generic_configs/*.pfx.sha256      YES - deliberately, see below
-#   .generic_configs/share.env         YES - the links, which alone open nothing
+#   certs/*.pfx                     NO  - the private key
+#   .dti_configs/signing.env        NO  - the password
+#   .dti_configs/*.pfx.sha256       YES - deliberately, see below
+#   .dti_configs/share.env          YES - the links, which alone open nothing
 #
 # The checksums are the point of the split. A .pfx arrives over a shared link from a
 # machine nobody here controls, and a same-named file is not the same file; the committed
@@ -51,9 +51,9 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'app-version.ps1')
 
-$script:ConfigsDirName = '.generic_configs'
+$script:ConfigsDirName = '.dti_configs'
 $script:CertsDirName = 'certs'
-$script:Publisher = 'CN=Generic, O=Generic'
+$script:Publisher = 'CN=Developer Toolbox Inventory, O=DTI'
 
 
 function Get-ConfigsDir {
@@ -145,7 +145,7 @@ function Get-CertContext([switch]$Released) {
         ShareUrl  = if ($share.ContainsKey($shareKey)) { $share[$shareKey] } else { '' }
         ShareKey  = $shareKey
         Publisher = $publisher
-        Friendly  = "Generic Toolbox $(if ($Released) { 'release' } else { 'debug' }) signing"
+        Friendly  = "DTI $(if ($Released) { 'release' } else { 'debug' }) signing"
     }
 }
 
@@ -242,7 +242,7 @@ function Get-SharedCert([hashtable]$Ctx) {
         return @{ Ok = $false; Reason = "$($Ctx.ShareKey) is not set in $($script:ConfigsDirName)/share.env" }
     }
     $url = Get-RawShareUrl $Ctx.ShareUrl
-    $temp = Join-Path ([IO.Path]::GetTempPath()) "generic-cert-$([guid]::NewGuid().ToString('n')).tmp"
+    $temp = Join-Path ([IO.Path]::GetTempPath()) "dti-cert-$([guid]::NewGuid().ToString('n')).tmp"
 
     try {
         Invoke-WebRequest -Uri $url -OutFile $temp -MaximumRedirection 10 -ErrorAction Stop | Out-Null
@@ -318,10 +318,10 @@ function New-CertPassword {
 function Get-CertPassword {
     $saved = Read-EnvFile (Get-SigningEnvPath)
     if ($saved['windows.certPassword']) { return $saved['windows.certPassword'] }
-    if ($saved['GENERIC_CERT_PASSWORD']) { return $saved['GENERIC_CERT_PASSWORD'] }
+    if ($saved['DTI_CERT_PASSWORD']) { return $saved['DTI_CERT_PASSWORD'] }
     # The environment wins nothing here, but CI has no gitignored file to read - so a
     # value passed in through the environment is honoured and never written to disk.
-    if ($env:GENERIC_CERT_PASSWORD) { return $env:GENERIC_CERT_PASSWORD }
+    if ($env:DTI_CERT_PASSWORD) { return $env:DTI_CERT_PASSWORD }
     return ''
 }
 
@@ -360,7 +360,7 @@ function Invoke-SignFile {
     param(
         [Parameter(Mandatory)][string]$Path,
         [switch]$Released,
-        [string]$Description = 'Generic Toolbox'
+        [string]$Description = 'Developer Toolbox Inventory'
     )
 
     if (-not (Test-Path -LiteralPath $Path)) {
