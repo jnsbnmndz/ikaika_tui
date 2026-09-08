@@ -160,7 +160,13 @@ class ThePicker(unittest.IsolatedAsyncioTestCase):
                 await pilot.click(".recent--entry")
                 await pilot.pause()
                 tree = app.screen.query_one(DirectoryTree)
-                self.assertEqual(elsewhere, Path(str(tree.path)))
+                # BOTH SIDES RESOLVED, because the picker resolves and a Windows
+                # temp directory may be an 8.3 short path. CI's runner hands out
+                # C:/Users/RUNNER~1/... and the picker expands it to
+                # C:/Users/runneradmin/... - one directory, two spellings. Comparing
+                # them raw passes on any machine whose user name is short enough not
+                # to shorten, which is exactly how this passed here and failed there.
+                self.assertEqual(elsewhere.resolve(), Path(str(tree.path)).resolve())
                 self.assertIsNone(app.chosen, "navigating is not answering")
 
 
