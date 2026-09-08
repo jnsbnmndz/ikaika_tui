@@ -32,10 +32,12 @@ import fnmatch
 import json
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from company_tui.domain.updates import (
     USER_AGENT,
+    AssetDownloadPort,
     Release,
     ReleaseFeedError,
     ReleaseFeedPort,
@@ -145,3 +147,56 @@ class HttpReleaseFeed(ReleaseFeedPort):
             asset_url=str(chosen.get("browser_download_url", "")),
             asset_size=int(chosen.get("size", 0) or 0),
         )
+
+
+DOWNLOAD_CHUNK = 64 * 1024
+"""Read and written a chunk at a time.
+
+An installer is tens of megabytes. Read whole into memory it is held twice - once in the
+buffer and once on the way to disk - which on the smallest machine this runs on is the
+difference between a download and a swap storm.
+"""
+
+DOWNLOAD_TIMEOUT_SECONDS = 60
+"""Per read, not for the whole transfer. A slow connection is allowed to be slow; a
+connection that has stopped answering is not allowed to look like one."""
+
+PARTIAL_SUFFIX = ".part"
+"""What an unfinished download is called.
+
+The finished name is only ever a file that finished. A partial file under the real name
+is an installer somebody's app will offer to run, and there is no way to tell it from a
+whole one by looking - which is why the launch check is allowed to trust a path it read
+out of a file written by a previous launch.
+"""
+
+
+class HttpAssetDownload(AssetDownloadPort):
+    """`AssetDownloadPort` over `urllib`, in a thread, in chunks."""
+
+    def __init__(self, timeout: int = DOWNLOAD_TIMEOUT_SECONDS) -> None:
+        self._timeout = timeout
+
+    async def fetch(self, url: str, target: Path) -> int:
+        # to_thread, because urllib is blocking: called inline it would stop the
+        # interface redrawing, and this one runs while the user is looking at a menu
+        # rather than at a progress bar.
+        return await asyncio.to_thread(self._pull, url, target)
+
+    def _pull(self, url: str, target: Path) -> int:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        staging = target.with_suffix(target.suffix + PARTIAL_SUFFIX)
+        total = 0
+        with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with staging.open("wb") as handle:
+                while True:
+                    chunk = response.read(DOWNLOAD_CHUNK)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    total += len(chunk)
+        # Moved into place only once every byte is written. `replace` rather than
+        # `rename`, so a leftover from an interrupted run is overwritten instead of
+        # raising on Windows.
+        staging.replace(target)
+        return total

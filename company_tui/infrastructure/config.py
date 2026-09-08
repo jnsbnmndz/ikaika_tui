@@ -179,6 +179,10 @@ class FileConfig(ConfigPort):
             include_prereleases=section.get("include_prereleases", False) is True,
             asset_pattern=str(section.get("asset_pattern", "")).strip()
             or DEFAULT_ASSET_PATTERN,
+            # `is not False`, so a missing key and a malformed one both leave the
+            # check on. The same reading as `script_check` above: a setting nobody
+            # wrote is not a setting saying no.
+            check_on_launch=section.get("check_on_launch", True) is not False,
         )
 
     def settings(self) -> Settings:

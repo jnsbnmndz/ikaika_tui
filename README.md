@@ -236,6 +236,39 @@ through .NET, which has no such limit and broadcasts `WM_SETTINGCHANGE` itself. 
 reads and writes the **User** scope only — writing the merged `$env:Path` into
 user scope is the other classic bug, and it doubles the length every time.
 
+### Updating itself
+
+The app asks the release feed once as it starts, and says nothing unless the answer is
+useful. If there is a newer build it downloads the installer, and the header grows a
+badge — `▲ 0.0.2+4 ready · Ctrl+U`. Pressing that asks once, closes the toolbox, and
+hands over to the installer.
+
+The handover is the whole feature. `installer.nsi` upgrades by running the old
+uninstaller and then `RMDir /r` over the install directory, which holds the running
+`dti.exe` — and Windows will not delete a running executable. So the installer is
+started by a **third** process that waits for this one to exit first:
+
+```powershell
+powershell -Command "Wait-Process -Id <pid>; Start-Process '<installer>'"
+```
+
+Detached, so it outlives the app. Windows PowerShell 5.1 rather than `pwsh`, which is the
+one place in this repository that cannot assume PowerShell 7 — 7 is something a developer
+installed, and this runs wherever the app was installed. `docs/decisions/0004` is why, and
+`docs/pitfalls.md` 6.1 is what happens without it.
+
+Everything about the check follows from nobody having asked for it: it runs as a worker so
+the first paint never waits on the network, every failure is silence, and it asks at most
+once every `CHECK_INTERVAL_HOURS` — unauthenticated GitHub allows sixty requests an hour,
+and spending those on somebody restarting the app is how the manual check ends up
+rate-limited when they actually want it. A launch with an installer already downloaded
+makes no request at all.
+
+`[updates] check_on_launch = false` turns it off. It is already inert until a repository
+is set, so the shipped default checks nothing. **Check for Updates** is still the card
+that reports everything properly — asset size, release notes, why the check failed — and
+what it downloads is recorded in the same place, so `Ctrl+U` installs that too.
+
 ### Keeping the actions current, in two halves
 
 `.github/dependabot.yml` opens the pull requests. `.github/workflows/actions-audit.yml`

@@ -6,13 +6,21 @@ This is the consumer of that: read the feed, compare, and say which of the three
 answers it is - up to date, something newer, or the check could not be made.
 
 
-IT DOES NOT INSTALL ANYTHING
+IT DOWNLOADS, AND IT DOES NOT RUN ANYTHING ITSELF
 
-It downloads the installer when asked and says where it put it. Running it is
-left to the person, and that is deliberate: the installer replaces the very
-files this process is executing from, so launching it from here would have the
-uninstaller deleting a running program. The one-line-of-code version of this
-feature is the one that corrupts an install.
+The warning this paragraph used to carry was right and still is: the installer
+replaces the very files this process is executing from, so a launch from here
+would have the uninstaller deleting a running program. The one-line-of-code
+version of this feature is the one that corrupts an install.
+
+What changed is that there is now a version that is not one line of code.
+`infrastructure/handover.py` starts a third process that waits for this one to
+exit and only then runs the installer, and `Ctrl+U` is how somebody asks for
+that. So this capability records what it downloaded - through `UpdateStatePort`,
+the same file the launch check reads - and the install is offered by the chrome,
+which is the only thing here that can quit the app without cancelling the
+workflow doing the asking. See
+`docs/decisions/0004-the-toolbox-can-install-its-own-update.md`.
 
 
 WHERE IT LOOKS IS A SETTING, NOT A CONSTANT
@@ -24,20 +32,20 @@ build of. An unconfigured source is reported as unconfigured, with the name of
 the screen that configures it.
 """
 
-import asyncio
-import urllib.error
-import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.updates import (
-    USER_AGENT,
+    AssetDownloadPort,
     Release,
     ReleaseFeedError,
     ReleaseFeedPort,
     UpdateSource,
+    UpdateState,
+    UpdateStatePort,
     choose,
     parse_version,
 )
@@ -50,7 +58,14 @@ DOWNLOAD_KEY = "download"
 FOLDER_KEY = "folder"
 
 NOT_CONFIGURED = "not configured - set it in Advanced"
-DOWNLOAD_CHUNK = 64 * 1024
+
+INSTALL_HINT = "Ctrl+U installs it and closes the toolbox."
+"""Said after a download, because the download is not the end of it any more.
+
+Not a prompt and not a dialog: this runs inside a run panel, and quitting the app
+from inside a workflow means cancelling the workflow that asked - which is the
+one path that cannot work. The chrome owns the install; this says so.
+"""
 
 
 class UpdatesCapability(Capability):
@@ -60,10 +75,18 @@ class UpdatesCapability(Capability):
         config: ConfigPort,
         feed: ReleaseFeedPort,
         version: str,
+        downloads: AssetDownloadPort,
+        state: UpdateStatePort | None = None,
     ) -> None:
         self._console = console
         self._config = config
         self._feed = feed
+        self._downloads = downloads
+        """The same downloader the launch check uses. One implementation of
+        "fetch an installer without leaving a partial file that looks whole"."""
+        self._state = state
+        """Where a finished download is recorded, so the chrome can offer to
+        install it. Optional: the plain console has no chrome to offer it in."""
         # Passed in rather than imported from branding: this is the one fact the
         # whole comparison rests on, and a capability that reads it from a module
         # global cannot be tested against a version it is not running.
@@ -223,36 +246,37 @@ class UpdatesCapability(Capability):
         self._console.write(f"Downloading to {target}...")
         try:
             folder.mkdir(parents=True, exist_ok=True)
-            written = await self._fetch_to(release.asset_url, target)
-        except (OSError, urllib.error.URLError) as error:
+            written = await self._downloads.fetch(release.asset_url, target)
+        except Exception as error:  # noqa: BLE001 - the port raises OSError or URLError
             return (f"The download failed: {error}", False)
 
         megabytes = written / (1024 * 1024)
         self._console.write(f"Saved {written} bytes.")
-        self._console.write("Close the toolbox before running it.")
+        self._remember(release, target)
+        self._console.write(INSTALL_HINT)
         return (f"Downloaded {target.name} ({megabytes:.1f} MB) to {folder}", True)
 
-    async def _fetch_to(self, url: str, target: Path) -> int:
-        # In a thread, and in chunks. urllib is blocking, and an installer is
-        # tens of megabytes - read whole into memory it would hold that twice,
-        # once in the buffer and once on the way to disk.
-        def _pull() -> int:
-            request = urllib.request.Request(
-                url, headers={"User-Agent": USER_AGENT}
-            )
-            total = 0
-            with urllib.request.urlopen(request, timeout=60) as response:
-                # A partial file must not be left looking like a finished one, so
-                # it is written beside the target and moved into place at the end.
-                staging = target.with_suffix(target.suffix + ".part")
-                with staging.open("wb") as handle:
-                    while True:
-                        chunk = response.read(DOWNLOAD_CHUNK)
-                        if not chunk:
-                            break
-                        handle.write(chunk)
-                        total += len(chunk)
-                staging.replace(target)
-            return total
+    def _remember(self, release: Release, target: Path) -> None:
+        """Record the download where the chrome looks for one.
 
-        return await asyncio.to_thread(_pull)
+        `checked_at` goes down with it: the feed did answer, and leaving the
+        timestamp alone would have the launch check ask again within minutes for
+        an answer it already has on disk.
+
+        Swallowed, like every other write to that store. A recorded download that
+        failed to record costs the offer of an install; it does not cost the
+        installer, which is on disk with its path in the message above.
+        """
+        if self._state is None:
+            return
+        try:
+            self._state.save(
+                UpdateState(
+                    checked_at=datetime.now(UTC).isoformat(),
+                    tag=release.tag,
+                    installer=str(target.resolve()),
+                )
+            )
+        except Exception:  # noqa: BLE001 - see the docstring
+            return
+

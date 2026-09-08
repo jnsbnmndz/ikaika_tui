@@ -13,6 +13,7 @@ from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.updates import (
     DEFAULT_API_BASE,
     UNKNOWN_BUILD,
+    AssetDownloadPort,
     Release,
     ReleaseFeedError,
     ReleaseFeedPort,
@@ -264,6 +265,13 @@ class _Feed(ReleaseFeedPort):
         return self._releases
 
 
+class _Downloads(AssetDownloadPort):
+    """Never reached by these tests, which stop before the download."""
+
+    async def fetch(self, url: str, target) -> int:
+        raise AssertionError("_check must not download unless asked to")
+
+
 class _Console:
     """Captures what the capability narrates, and nothing else."""
 
@@ -280,7 +288,11 @@ class TheCheck(unittest.TestCase):
     def _run(self, source, feed, version="0.1.0+2", values=None):
         console = _Console()
         capability = UpdatesCapability(
-            console=console, config=_Config(source), feed=feed, version=version
+            console=console,
+            config=_Config(source),
+            feed=feed,
+            version=version,
+            downloads=_Downloads(),
         )
         message, ok = asyncio.run(capability._check(values or {}))
         return message, ok, console.lines

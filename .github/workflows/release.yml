@@ -63,7 +63,7 @@
 # behind, rather than in PowerShell, where it leaves a string in an array. Interpolating an
 # input into a command line is safe here and only here because every input is TYPED - a
 # choice of four words and two booleans, never free text. check-all now fails on either
-# wrong spelling; see docs/pitfalls.md 6.1.
+# wrong spelling; see docs/pitfalls.md 7.1.
 #
 #
 # fetch-depth: 0, AND THAT IS NOT OPTIONAL

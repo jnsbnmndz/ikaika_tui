@@ -33,6 +33,8 @@ precisely so this default cannot offer one.
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from company_tui.domain import naming
 
@@ -88,6 +90,17 @@ class UpdateSource:
 
     asset_pattern: str = DEFAULT_ASSET_PATTERN
     """Which asset of a release is the installer, as a glob."""
+
+    check_on_launch: bool = True
+    """Ask the feed as the app starts, as well as when somebody asks.
+
+    On by default and harmless when nothing else is set: `configured` is false
+    until a repository is named, so the shipped default checks nothing. What
+    this switch is for is the person who has configured a repository and does
+    not want their terminal talking to it - and it is a setting rather than a
+    build-time constant because that is a preference, not a property of the
+    program.
+    """
 
     @property
     def configured(self) -> bool:
@@ -275,3 +288,183 @@ def choose(releases: tuple[Release, ...], source: UpdateSource) -> Release | Non
             release.version.build,
         ),
     )
+
+
+# ---------------------------------------------------------------- the launch check
+#
+# The manual capability is somebody asking. This is the app asking on their behalf as it
+# starts, and the difference is entirely in what it is allowed to cost: a check nobody
+# asked for may not delay the first paint, may not report its own plumbing, and may not
+# ask GitHub sixty times an hour because somebody is restarting the app to test a theme.
+#
+# So there is a memory. `UpdateState` is what the last check found, written down between
+# launches: when it looked, which tag it found, and where the installer it fetched is
+# sitting. A launch with a downloaded installer already recorded touches the network not
+# at all - the badge comes straight back out of the file.
+
+
+CHECK_INTERVAL_HOURS = 6
+"""How stale the last answer has to be before the feed is asked again.
+
+Not per launch. Unauthenticated GitHub allows sixty requests an hour per address, and an
+app that asks on every start spends that budget on a person opening a terminal - which is
+the same person who then finds the manual check rate-limited when they actually want it.
+
+Six hours rather than a day because the thing being offered is a build of this toolbox,
+and the people running it are the people releasing it.
+"""
+
+UPDATE_NOTICE = "{mark} {version} ready"
+"""The badge, when an installer is sitting on disk waiting to be run.
+
+`ready` rather than `available`: by the time this is shown the bytes are already here,
+and telling somebody an update is available when it is actually downloaded understates
+what pressing the key will do. The mark is passed in rather than written here - the
+interface owns its glyphs, and this module has no business holding one.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateState:
+    """What the last launch check found, as it survives a restart.
+
+    Deliberately four strings and nothing else: no `Release`, no `Version`, nothing that
+    would have to be reconstructed from a file written by an older build. What cannot be
+    rebuilt from the tag and the path is not worth keeping.
+    """
+
+    checked_at: str = ""
+    """When the feed last answered, ISO 8601. Empty means it never has."""
+
+    tag: str = ""
+    """The tag of the newer release that was found, or empty for none."""
+
+    installer: str = ""
+    """Where the installer for that tag was downloaded to, or empty."""
+
+    @property
+    def fetched(self) -> bool:
+        """Whether this state names an installer that was actually downloaded.
+
+        Whether that file is still THERE is a question for the filesystem, and so is
+        asked by the thing that has one.
+        """
+        return bool(self.tag and self.installer)
+
+
+def due(
+    state: UpdateState,
+    now: datetime,
+    interval_hours: int = CHECK_INTERVAL_HOURS,
+) -> bool:
+    """Whether enough time has passed to ask the feed again.
+
+    `now` is passed in rather than read here, so the whole throttle is testable without
+    waiting six hours or monkeypatching a clock.
+
+    A timestamp in the FUTURE means asking again. That is not paranoia: the file is
+    written on one machine and read after the clock has been corrected, or after a
+    timezone-naive value from an older build has been read back as UTC. Waiting for the
+    calendar to catch up would suppress the check for hours with nothing on screen to say
+    why - and asking once more costs one request.
+    """
+    if not state.checked_at:
+        return True
+    try:
+        last = datetime.fromisoformat(state.checked_at)
+    except ValueError:
+        # Unreadable is the same as never, for the same reason the store swallows a
+        # broken file: the cost is one extra request, and the alternative is an update
+        # check that stays off until somebody deletes a file they do not know about.
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    if last > now:
+        return True
+    return (now - last) >= timedelta(hours=interval_hours)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateReport:
+    """What the launch check concluded. Empty when there is nothing to say.
+
+    `problem` is filled in for the benefit of anything that wants to explain itself -
+    Doctor, a log, a future screen - and is NOT what the badge shows. A check nobody
+    asked for reports a result or nothing at all; a courtesy that narrates its own
+    plumbing is noise, which is the same rule the script-store version check follows.
+    """
+
+    tag: str = ""
+    installed: "Version" = INVALID_VERSION
+    available: "Version" = INVALID_VERSION
+    installer: str = ""
+    problem: str = ""
+
+    @property
+    def waiting(self) -> bool:
+        """Whether there is an installer here, newer than this build, ready to run."""
+        return bool(self.tag and self.installer)
+
+    def notice(self, mark: str) -> str:
+        """The badge text, or empty. `mark` is the interface's glyph."""
+        if not self.waiting:
+            return ""
+        return UPDATE_NOTICE.format(mark=mark, version=self.available.text or self.tag)
+
+
+NOTHING_TO_REPORT = UpdateReport()
+
+
+class AssetDownloadPort(ABC):
+    """Fetches a release asset to a path. A port, so nothing above it holds a socket."""
+
+    @abstractmethod
+    async def fetch(self, url: str, target: Path) -> int:
+        """Download `url` to `target`, returning the bytes written.
+
+        Raises `OSError` or `urllib.error.URLError` for anything that stops it. The
+        target must not exist as a partial file afterwards - a half-downloaded installer
+        that looks finished is the one failure this must not have.
+        """
+        raise NotImplementedError
+
+
+class UpdateStatePort(ABC):
+    """Remembers what the last check found, between launches."""
+
+    @abstractmethod
+    def load(self) -> UpdateState:
+        """The last state, or an empty one. Never raises: unreadable is empty."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def save(self, state: UpdateState) -> None:
+        """Write it down. Never raises: a state that cannot be saved costs one
+        redundant check next launch, which is not worth taking a launch down for."""
+        raise NotImplementedError
+
+
+class HandoverPort(ABC):
+    """Starts an installer in such a way that it runs AFTER this process is gone.
+
+    The whole feature is this one method being correct. The installer removes the
+    directory it is replacing, and that directory holds the executable running this
+    code - so an installer started as a child of a process that is still alive reaches
+    its first `File` instruction, finds the exe locked, and stops with a file-in-use
+    error over a half-removed install.
+
+    Which is why this is not `ProcessRunner`. Every method there is about a subprocess
+    whose output and exit code are the point, and whose lifetime is bounded by the run
+    that started it. This one is the opposite on both counts: nothing it prints is ever
+    read, and it must outlive its parent deliberately.
+    """
+
+    @abstractmethod
+    def hand_over(self, installer: Path) -> str:
+        """Arrange for `installer` to run once this process has exited.
+
+        Returns a problem to report, or `""` when the handover is armed. The caller
+        quits immediately afterwards - and must, because what has been armed is
+        something waiting for exactly that.
+        """
+        raise NotImplementedError

@@ -203,7 +203,7 @@ try {
 # skipped deliberately - release.yml's header shows the wrong shape on purpose, and a
 # warning that trips the check it is warning about is a check nobody keeps.
 #
-# docs/pitfalls.md 6.1. Cheap regex rather than a YAML parser: this is one line shape in
+# docs/pitfalls.md 7.1. Cheap regex rather than a YAML parser: this is one line shape in
 # two files, and a parser would be a dependency for it.
 $workflowDir = Join-Path $root '.github\workflows'
 if (-not (Test-Path -LiteralPath $workflowDir)) {
