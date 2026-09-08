@@ -339,6 +339,30 @@ is set, so the shipped default checks nothing. **Check for Updates** is still th
 that reports everything properly — asset size, release notes, why the check failed — and
 what it downloads is recorded in the same place, so `Ctrl+U` installs that too.
 
+### What CI caches, and what it deliberately does not
+
+The **download** caches: pip's, and PyInstaller's on the release workflow. Keyed on
+`uv.lock` + `pyproject.toml` and the runner's python version, with `restore-keys` — which
+matter more than the key, because without them a one-line change to the lock means a
+completely cold cache and every wheel fetched again.
+
+The paths are *asked for*, not written down. `%LOCALAPPDATA%\pip\Cache` is where pip keeps
+its downloads today and is not a contract; `pip cache dir` is. It is asked with the
+runner's python, before the virtualenv exists, and that works because pip's download cache
+is per **user** rather than per environment — the path the runner's pip reports is the one
+the venv's pip will use.
+
+**Not the virtualenv.** A restored pip cache cannot make a run wrong: worst case it is
+ignored and everything is fetched again. A restored `.venv` can — it carries an
+interpreter and an editable install, and one built against a python the runner has since
+upgraded is a venv whose `python.exe` will not start. That fails on a cache *hit* and
+passes on a miss, which is the worst failure shape CI has.
+
+And caching is never why a run fails. The discovery step catches its own errors and
+reports an empty path; the cache step is skipped when the path is empty. A missing python
+is `setup-dev-env`'s to report — it has a sentence for it — and a caching step that died
+first would replace that sentence with a stack trace.
+
 ### Keeping the actions current, in two halves
 
 `.github/dependabot.yml` opens the pull requests. `.\script.ps1 check-actions` — run

@@ -217,6 +217,83 @@ jobs:
           choco install nsis --no-progress -y
           if ($LASTEXITCODE -ne 0) { throw 'choco install nsis failed' }
 
+      # WHERE THE CACHES ARE, ASKED RATHER THAN ASSUMED
+      #
+      # `%LOCALAPPDATA%\pip\Cache` is where pip keeps its downloads today and is not a
+      # contract - `pip cache dir` is. Asked with the RUNNER's python, before the
+      # virtualenv exists, and that is not a problem: pip's download cache is per USER,
+      # not per environment, so the path the runner's pip reports is the one the venv's
+      # pip will use. That is the whole reason this works at all.
+      #
+      # PyInstaller has no equivalent question to ask, so its documented location is used
+      # with a fallback. A cache path that comes back empty is simply not cached: `if` on
+      # the cache step, rather than a step that fails over a directory that does not
+      # exist yet.
+      - name: Locate the caches
+        id: caches
+        shell: pwsh
+        run: |
+          # try/catch, because CACHING MUST NEVER BE WHY A RUN FAILS. A missing python
+          # is setup-dev-env's to report - it has a sentence for it - and a caching step
+          # that dies first replaces that sentence with a CommandNotFoundException.
+          $pip = ''
+          try {
+              $answer = & python -m pip cache dir 2>$null
+              if ($LASTEXITCODE -eq 0) { $pip = "$answer".Trim() }
+          } catch {
+              $pip = ''
+          }
+          "pip=$pip" | Out-File $env:GITHUB_OUTPUT -Append
+
+          # In the key, not the path: a runner image that moves to a new python patch
+          # release should start a new cache rather than accumulate wheels for two
+          # interpreters in one.
+          $python = 'unknown'
+          try {
+              $answer = & python -c "import sys; sys.stdout.write('.'.join(map(str, sys.version_info[:3])))"
+              if ($LASTEXITCODE -eq 0 -and $answer) { $python = "$answer".Trim() }
+          } catch {
+              $python = 'unknown'
+          }
+          "python=$python" | Out-File $env:GITHUB_OUTPUT -Append
+
+          $pyinstaller = Join-Path $env:LOCALAPPDATA 'pyinstaller'
+          "pyinstaller=$pyinstaller" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # The DOWNLOAD cache, and deliberately not the virtualenv.
+      #
+      # A restored pip cache cannot make a run wrong - worst case it is ignored and
+      # everything is fetched again. A restored `.venv` can: it carries an interpreter and
+      # an editable install, and one built against a python the runner has since upgraded
+      # is a venv whose python.exe will not start. `setup-dev-env` would then fail on a
+      # cache hit and pass on a miss, which is the worst failure shape CI has.
+      #
+      # `restore-keys` matters more than the key here. Without it, changing one line of
+      # `uv.lock` means a completely cold cache and every wheel downloaded again; with it,
+      # the newest cache for this python is used as a starting point and only what actually
+      # changed is fetched.
+      - name: Cache the downloads
+        if: ${{ steps.caches.outputs.pip != '' }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.caches.outputs.pip }}
+          key: pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-build-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-build-
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-
+
+      # PyInstaller's own cache: the bootloader it links and the analysis it did last
+      # time. Keyed loosely on purpose - it is keyed on what is INSTALLED rather than on
+      # the source, because a source change is exactly what it is meant to re-analyse.
+      # Nothing here is correctness-critical; a stale entry costs a re-analysis.
+      - name: Cache the PyInstaller build cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.caches.outputs.pyinstaller }}
+          key: pyinstaller-${{ runner.os }}-py${{ steps.caches.outputs.python }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            pyinstaller-${{ runner.os }}-py${{ steps.caches.outputs.python }}-
+
       - name: Set up the environment
         shell: pwsh
         run: .\script.ps1 setup-dev-env -Build -Lint
