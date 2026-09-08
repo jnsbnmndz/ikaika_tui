@@ -20,6 +20,7 @@ from company_tui.infrastructure.config import FileConfig
 from company_tui.infrastructure.filesystem import LocalFileSystem
 from company_tui.infrastructure.handover import WindowsHandover
 from company_tui.infrastructure.processes import LocalProcessRunner
+from company_tui.infrastructure.recent_file import FileRecentPaths
 from company_tui.infrastructure.release_feed import HttpAssetDownload, HttpReleaseFeed
 from company_tui.infrastructure.session_file import FileSessionMemory
 from company_tui.infrastructure.update_state import FileUpdateState
@@ -128,6 +129,9 @@ def create_tui_console(start: str = "") -> TuiConsole:
         memory=FileSessionMemory(),
         workspace=str(Path.cwd().resolve()),
         watch=_build_update_watch(),
+        # NOT keyed by workspace, unlike the tabs: "where have I been lately" is one
+        # answer per person, and the whole point is that it spans projects.
+        recent=FileRecentPaths(),
     )
     console.application = Application(
         console=console, registry=_build_capability_registry(console)

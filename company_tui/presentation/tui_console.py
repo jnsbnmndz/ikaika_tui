@@ -15,6 +15,7 @@ from company_tui.application.updates import UpdateWatch
 from company_tui.domain import naming
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
+from company_tui.domain.recent import RecentPathsPort
 from company_tui.domain.script_config import (
     ScriptAction,
     ScriptCatalogue,
@@ -280,6 +281,7 @@ class TuiConsole(App):
         memory: SessionMemory | None = None,
         workspace: str = "",
         watch: UpdateWatch | None = None,
+        recent: RecentPathsPort | None = None,
     ) -> None:
         super().__init__()
         self.application: Application | None = None
@@ -287,6 +289,9 @@ class TuiConsole(App):
         """A capability to open on instead of the menu. See Ui.choose_capability."""
         self.workspace_label = workspace_label
         self._memory = memory
+        self._recent = recent
+        """The directories picked before, or None where there is nothing to remember
+        with. Kept under the user's home, which an installer update cannot reach."""
         self._watch = watch
         """The launch-time update check, or None where there is nothing to check
         with — the plain console has no chrome to put a badge in, and a test pilot
@@ -1500,9 +1505,19 @@ class TuiConsole(App):
         # made of, and putting it in TRAIL_STEPS would make going back to a menu
         # forget it.
         await self._claim_screen(current_session())
-        return await self.push_screen_wait(
-            PathScreen(start, prompt or "Choose a project")
+        chosen = await self.push_screen_wait(
+            PathScreen(
+                start,
+                prompt or "Choose a project",
+                recent=self._recent.recent() if self._recent is not None else (),
+            )
         )
+        # Recorded on the way out, and only for an answer: a dialog somebody escaped
+        # out of said nothing about where they work, and a history that filled up with
+        # cancelled navigation would be a history of nothing.
+        if chosen and self._recent is not None:
+            self._recent.remember(chosen)
+        return chosen
 
     async def choose_script_section(
         self,
