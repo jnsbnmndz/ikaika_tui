@@ -27,6 +27,17 @@ DETACHED_PROCESS, not a plain Popen. Without it the waiter belongs to this conso
 the console goes away with the process it is waiting for.
 
 
+IT IS SILENT, AND IT PUTS THE APP BACK
+
+The sequence is: wait for this process, run the installer with /S, start the new build.
+So what the user sees is the app close and reopen a few seconds later on the new version,
+which is the update being performed rather than being handed to them.
+
+The failure path is the reason this is not simply "add /S". Silent means invisible, and an
+install that fails silently is an app that closed and never came back. So a non-zero exit
+runs the installer again WITHOUT /S, and its own error dialog says what went wrong.
+
+
 IT IS ARMED, AND THEN THE CALLER QUITS
 
 `hand_over` returning "" means something is now waiting for this process to end. The
@@ -38,6 +49,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from company_tui.domain.updates import HandoverPort
@@ -61,11 +73,39 @@ that has to work on a machine where nobody installed anything.
 
 # -Id, then the installer. `Wait-Process` errors when the pid has already gone, which is
 # the good case and not an error here - hence SilentlyContinue rather than a check.
+SILENT = "/S"
+"""NSIS's silent switch: no wizard, no pages, no clicks.
+
+The whole point of an in-app update. Without it the app closes and a Setup window
+appears with a Next button, which is not an update the app performed - it is the app
+handing you an installer. Safe here because the install is per-user under
+%LOCALAPPDATA%, so nothing elevates and there is nothing to consent to; and because an
+update never asks where to install, that page being skipped costs nothing.
+"""
+
 WAITER = (
     "$ErrorActionPreference='SilentlyContinue';"
     "Wait-Process -Id {pid} -Timeout {timeout};"
-    "Start-Process -FilePath '{installer}'"
+    # -Wait, so the exit code is the installer's own and the relaunch happens after it
+    # has finished rather than alongside it.
+    "$done = Start-Process -FilePath '{installer}' -ArgumentList '{silent}' -Wait -PassThru;"
+    # A SILENT FAILURE IS THE ONE THING WORSE THAN A WIZARD. Silent means the user sees
+    # the app close and nothing come back, with no idea why - so a non-zero exit runs the
+    # installer AGAIN, visibly, and its own error dialog does the explaining.
+    "if ($done.ExitCode -ne 0) {{ Start-Process -FilePath '{installer}' }}"
+    "{relaunch}"
 )
+
+RELAUNCH = " elseif ('{exe}') {{ Start-Process -FilePath '{exe}' }}"
+"""Start the new build once the installer has finished with the old one.
+
+Only when this process is a frozen exe. Under `python -m company_tui` there is nothing
+to restart - `sys.executable` is the interpreter, and relaunching that would open a bare
+Python prompt over somebody's terminal.
+
+The path is this process's OWN executable, which is the right one by construction: the
+installer replaces the directory it lives in, so the same path is the new version.
+"""
 
 NOT_WINDOWS = "handing over to an installer is Windows-only"
 NO_INSTALLER = "the installer is not where it was downloaded to"
@@ -96,10 +136,17 @@ class WindowsHandover(HandoverPort):
         if not installer.is_file():
             return NO_INSTALLER
 
+        # Frozen only. See RELAUNCH.
+        relaunch = ""
+        if getattr(sys, "frozen", False):
+            relaunch = RELAUNCH.format(exe=quote(str(Path(sys.executable).resolve())))
+
         command = WAITER.format(
             pid=os.getpid(),
             timeout=self._timeout,
+            silent=SILENT,
             installer=quote(str(installer.resolve())),
+            relaunch=relaunch,
         )
         try:
             subprocess.Popen(  # noqa: S603 - a fixed argv, no shell, no user input

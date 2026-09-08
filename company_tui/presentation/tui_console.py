@@ -181,9 +181,9 @@ mark it is handed rather than holding one."""
 UPDATE_CONFIRM = "Install the update?"
 UPDATE_DETAIL = (
     "{version} replaces {installed}.\n"
-    "The toolbox will close and the installer will take over."
+    "The toolbox will close, update itself, and reopen."
 )
-UPDATE_ANSWER = "INSTALL AND CLOSE"
+UPDATE_ANSWER = "INSTALL AND RESTART"
 """What saying yes costs, spelled out.
 
 It closes the app — which is not what "install" implies on its own, and is the
