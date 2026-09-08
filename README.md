@@ -254,6 +254,28 @@ own name rather than from which build it is. So settings, remembered tabs and cl
 script repositories are common to both — which is also why neither uninstaller removes
 it, on top of it holding work nobody should delete to tidy up.
 
+### Release notes are generated, then prefixed
+
+`POST /releases/generate-notes` returns the changelog GitHub builds from the commits and
+pull requests since the previous release, and the workflow composes the body itself: the
+four lines that matter for an installer first — version, whether it is signed, where it
+installs — then a rule, then the generated part. `.github/release.yml` groups what comes
+back.
+
+Composed in that order here rather than by passing `--generate-notes` to
+`gh release create`, because that flag generates the title *and* body and what happens to
+a `--notes` given alongside it is not documented. A release path is not the place for a
+behaviour nobody wrote down. A failure to generate is not a failure to release: the body
+falls back to the four lines, which are the ones somebody installing actually needs.
+
+Every workflow also writes a **run summary**, so a run can be understood from the
+Actions tab without opening a log. `check-all` writes its own result table — in the
+script, where the results are, rather than in YAML that would re-derive them from parsed
+stdout and go stale. A release summarises the version, tag, kind, whether it was signed
+and which installer went up; a rehearsal says what it *would* have done, and says it even
+when the run failed, because a red run with a blank summary is one somebody has to read
+the log to understand.
+
 ### An update is not an install, and says so
 
 When a version is already recorded, "Choose Install Location" is not shown. The answer is
@@ -319,42 +341,39 @@ what it downloads is recorded in the same place, so `Ctrl+U` installs that too.
 
 ### Keeping the actions current, in two halves
 
-`.github/dependabot.yml` opens the pull requests. `.github/workflows/actions-audit.yml`
-runs `saadmk11/github-actions-version-updater` in check-only mode and **fails** when
-something is behind. Both, because they answer different questions: one proposes the
-bump, the other notices when the proposal was never merged — or when Dependabot itself
-has been switched off. A version check whose only output is a pull request has no way to
-say that it has stopped running.
+`.github/dependabot.yml` opens the pull requests. `.\script.ps1 check-actions` — run
+weekly by `.github/workflows/actions-audit.yml` — reads every `uses:` off the checkout,
+asks GitHub for each action's latest release, and **fails** when one has moved on. Both,
+because they answer different questions: one proposes the bump, the other notices when
+the proposal was never merged, or when Dependabot itself has been switched off. A version
+check whose only output is a pull request has no way to say it has stopped running.
 
-The split of labour follows the credential. GitHub forbids a workflow's own
-`GITHUB_TOKEN` from editing workflow files, so anything running *as* a workflow needs a
-PAT with `workflow` scope to change one — a long-lived secret able to rewrite
-`release.yml`, which is the file that signs and publishes. Dependabot is not a workflow
-and needs no token at all. So the half that writes is the half that needs no credential,
-and the third-party action never writes: `skip_pull_request: true`, which also stops the
-two of them opening competing pull requests for the same one-line bump.
+The audit **was** a third-party action, `saadmk11/github-actions-version-updater`, and
+that is exactly how it failed. It is a Docker *container* action, so every run builds its
+image from the Dockerfile at the pinned SHA — and that Dockerfile says
+`FROM python:3.12-slim-bullseye`. Debian bullseye's repositories have since been
+archived, so `apt-get update` inside the build fails, so the image cannot be built, so
+the job failed before doing anything: *Docker build failed with exit code 1*, three
+attempts, two backoffs. Upstream's `main` carries the same line and v0.9.0 is still the
+newest tag, so there was nothing to bump to — and a container action pinned by SHA cannot
+be patched from outside. What it did was four API calls and a string comparison.
 
-The audit needs `ACTIONS_AUDIT_TOKEN`: a fine-grained token, scoped to this repository
-only, with **Actions: Read-only** and nothing else. `Metadata: Read` is force-enabled
-alongside it and cannot be turned off.
+Doing it here costs less than depending on somebody else's base image aging out, and it
+removed the credential with it. That action wanted a PAT with `workflow` scope, because
+it listed this repository's workflows through the API; the script reads them off the
+checkout, and every version lookup is a public read, so the default `GITHUB_TOKEN` is
+enough. **`ACTIONS_AUDIT_TOKEN` is no longer read by anything and can be deleted.**
 
-That is one permission, and it is what the action's own calls need rather than what its
-README asks for. It reads `GET /repos/<this repo>/actions/workflows` to discover workflow
-*paths* — hence Actions — and then reads the files off the disk `actions/checkout` already
-populated, which is why `Contents` is not needed. Its other calls (`/releases`,
-`/commits`) are public reads of the action repositories themselves, and a fine-grained
-token always has read access to public repositories. Everything that would write —
-branch, commit, pull request — sits behind `skip_pull_request` and never runs. The
-README's `repo` + `workflow` is what *pushing* needs.
+What counts as behind: a tag pin is current while the newest release shares its major, so
+`v7` covers `v7.0.1` and stops covering anything at `v8`. A SHA pin is read through the
+`# vX.Y.Z` comment beside it rather than by resolving the SHA — and a SHA pin with no
+comment is reported as `unknown`, because it is unauditable by anything, including a
+person. A lookup that fails is `unknown` too, and neither fails the job: a version check
+that guesses is worse than one that abstains.
 
-Without the secret the weekly run fails and names it; delete the `schedule:` block to
-make the audit manual instead.
-
-That action is pinned to a commit SHA rather than a tag, unlike `actions/checkout` and
-`actions/upload-artifact`. It is third-party and it is handed a token, and a tag is a
-moving pointer — those two together are where a pin earns its maintenance cost.
-Dependabot moves the pin and rewrites the version comment beside it, so it stays a pin
-rather than becoming a fossil.
+The same command runs on a laptop. It uses `gh` when it is there, so a run inside Actions
+is authenticated rather than spending the sixty-an-hour unauthenticated budget, and falls
+back to plain HTTPS otherwise.
 
 ## Template packs
 

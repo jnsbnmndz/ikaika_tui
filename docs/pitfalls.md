@@ -259,3 +259,39 @@ switch is chosen in YAML (`${{ inputs.sign && '-Sign' || '' }}`), where the subs
 leaves a token behind, never in PowerShell, where it leaves a string in an array. The
 `workflow calls` check in `check-all` reads the workflows for both wrong spellings, because
 a rule the gate cannot see is a rule that only CI can break.
+
+---
+
+## 8. A dependency you cannot patch
+
+### 8.1 A Docker container action builds its image on every run
+
+`saadmk11/github-actions-version-updater` was pinned to a commit SHA, in check-only mode,
+holding no write permission — every precaution taken. It still broke, and not in a way any
+of those precautions covered.
+
+It is a Docker *container* action (`runs: using: docker`, `image: 'Dockerfile'`), so the
+runner **builds the image on every run** from the Dockerfile at that SHA. That Dockerfile
+begins `FROM python:3.12-slim-bullseye` and then runs `apt-get update`. Debian bullseye's
+repositories have been archived, so the update fails, so the build fails, so the job fails
+before executing a line of the action's own code:
+
+```
+Docker build failed with exit code 1
+Docker build failed with exit code 1, back off 3.449 seconds before retry.
+Docker build failed with exit code 1, back off 9.923 seconds before retry.
+```
+
+Pinning to a SHA is what you are told to do, and it made this *worse*: the pin froze a
+Dockerfile whose base layer kept aging while the pin stayed still. Upstream's `main` had
+the same line and v0.9.0 was still the newest tag, so there was nothing to bump to — and a
+container action pinned by SHA cannot be patched from outside the repository that owns it.
+The only moves available were "wait for a stranger" and "stop using it".
+
+**Rule.** For a third-party action, ask what it would cost to reimplement before adopting
+it. This one was four API calls and a string comparison, and it is now
+`scripts/check-actions.ps1` — which also removed the Personal Access Token the action
+needed, because a script reading the workflow files off the checkout needs no permission
+that the default `GITHUB_TOKEN` lacks. A container action carries a build of somebody
+else's operating system into every run; a JavaScript action does not, and neither does a
+line of PowerShell.

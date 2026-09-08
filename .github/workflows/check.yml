@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # No setup-python and no setup-uv. setup-dev-env creates the virtualenv with
       # whichever of uv or python is present, and the runner has python - so the fallback

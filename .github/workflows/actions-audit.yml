@@ -1,5 +1,9 @@
 # Asks whether any action used in this repository is behind, and FAILS when one is.
 #
+# One call into script.ps1, like every other workflow here. What it runs is
+# `scripts/check-actions.ps1`, which reads every `uses:` off the checkout, asks GitHub for
+# each action's latest release, and writes a table into the run summary.
+#
 # The second half of keeping them current. Dependabot (.github/dependabot.yml) is the half
 # that opens pull requests; this is the half that says so out loud when one was never
 # merged, or when Dependabot has been switched off in the repository settings. A pull
@@ -8,66 +12,39 @@
 # stopped running - which is docs/pitfalls.md 3, in a place no test can reach.
 #
 #
-# skip_pull_request, AND THAT IS THE WHOLE POINT OF RUNNING BOTH
+# IT WAS A THIRD-PARTY ACTION, AND THAT IS EXACTLY HOW IT FAILED
 #
-# Two things opening a pull request for the same one-line bump is two pull requests that
-# each invalidate the other, and a merge conflict between two bots. In check-only mode
-# this one writes the diff into the run summary and fails the job instead. Louder than a
-# pull request, and it needs no permission to push anything.
+# saadmk11/github-actions-version-updater, pinned to a SHA, in check-only mode. It is a
+# Docker CONTAINER action, so every run builds its image from the Dockerfile at that SHA -
+# and that Dockerfile says `FROM python:3.12-slim-bullseye`. Debian bullseye's
+# repositories have been archived, so `apt-get update` inside the build fails, so the
+# image cannot be built, so the job failed before doing anything at all: "Docker build
+# failed with exit code 1", after two backoffs and three attempts.
 #
-#
-# THE TOKEN NEEDS ONE PERMISSION: Actions, READ
-#
-# Fine-grained, this repository only, `Actions: Read-only`. Metadata: Read comes along
-# with it automatically and cannot be turned off. Nothing else - no Contents, no
-# Workflows, no Pull requests.
-#
-# That is read off what the action actually calls rather than off its README, which
-# documents `repo` + `workflow` (classic) or Contents/Workflows/Pull-requests write. Those
-# are what PUSHING needs, and in this mode it never pushes:
-#
-#   GET /repos/<this repo>/actions/workflows  needs Actions: Read. Always called, first
-#                                             thing, and only for the PATHS - the file
-#                                             contents come off the local disk that the
-#                                             checkout above already populated, which is
-#                                             why Contents is not needed.
-#   GET /repos/<each action>/releases         a public read of somebody else's repository.
-#   GET /repos/<each action>/commits          A fine-grained token always has read access
-#   GET /repos/<each action>                  to public repositories, so these need no
-#                                             permission granted here.
-#
-# Everything that touches this repository beyond that listing - branch, commit, pull
-# request - sits behind the skip_pull_request check and does not run. What must not end up
-# here is a `workflow`-scoped token doing a job that never writes: that is a credential
-# able to rewrite the workflow that signs and publishes releases, kept for the sake of
-# reading version numbers.
+# Nothing here could fix it. Upstream's main branch carries the same line and v0.9.0 is
+# still the newest tag, so there was no version to bump to - and a container action pinned
+# by SHA cannot be patched from the outside. What it did was four API calls and a string
+# comparison. See docs/pitfalls.md 8.1.
 #
 #
-# PINNED TO A SHA, unlike the first-party actions elsewhere in this repository
+# AND IT NEEDS NO SECRET AT ALL NOW
 #
-# A tag is a moving pointer. That is fine for actions/checkout, which is first-party and
-# is handed nothing; it is not fine for third-party code that is handed a token, because
-# the tag and the code under it can change independently. Those two facts together are
-# exactly the case where a pin earns its maintenance cost - and Dependabot maintains it.
-#
-#
-# ubuntu, NOT windows, unlike every other job here
-#
-# Required rather than preferred: the action declares `using: docker`, and a Docker
-# container action only runs on a Linux runner. Nothing in this job touches a PowerShell
-# script, so there is nothing to lose.
+# That action wanted a Personal Access Token with `workflow` scope, because it listed this
+# repository's workflows through the API. The script reads them off the checkout instead,
+# and every version lookup is a public read - so the default GITHUB_TOKEN is enough, and
+# there is no long-lived credential here able to rewrite the workflow that signs releases.
+# ACTIONS_AUDIT_TOKEN is no longer read by anything and can be deleted.
 
 name: actions-audit
 
 on:
   schedule:
     # Monday, a few hours after Dependabot's own run, so a bump it opened that morning is
-    # already on the branch and this does not report what is currently under review.
+    # already on a branch and this does not report what is currently under review.
     - cron: '0 6 * * 1'
   workflow_dispatch:
 
-# Read-only. The audit reads workflow files and asks an API about tags; the PAT below is
-# the only thing here with any reach, and it is meant to be read-only too.
+# Read-only, and only the checkout uses it. The version lookups are public reads.
 permissions:
   contents: read
 
@@ -77,43 +54,21 @@ concurrency:
 
 jobs:
   audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # windows-latest like everything else here. script.ps1 and the libraries it dot-sources
+    # are written with Windows path separators, and the twenty seconds a Linux runner would
+    # save is not worth a second dialect of the same script.
+    runs-on: windows-latest
+    timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      # Named up front rather than left to the action, whose failure for a missing token
-      # is a Python traceback out of a container. Same shape as release.yml's check on the
-      # signing secrets: say which secret, and say what the alternative is.
-      #
-      # A failure rather than a quiet skip. An audit that reports success when it never
-      # ran is worse than no audit, and this repository has that mistake written down
-      # twice already.
-      - name: Refuse to pass without a token
-        env:
-          TOKEN: ${{ secrets.ACTIONS_AUDIT_TOKEN }}
-        run: |
-          if [ -n "$TOKEN" ]; then exit 0; fi
-          echo "::error::ACTIONS_AUDIT_TOKEN is not set on this repository."
-          {
-            echo "## The action audit did not run"
-            echo
-            echo "\`ACTIONS_AUDIT_TOKEN\` is not set on this repository."
-            echo
-            echo "Add it as a fine-grained token scoped to this repository with"
-            echo "**Actions: Read-only** and nothing else, or delete the"
-            echo "\`schedule:\` block from \`.github/workflows/actions-audit.yml\`"
-            echo "to make this audit manual."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-
+      # GH_TOKEN so the lookups go through gh authenticated: unauthenticated GitHub allows
+      # sixty requests an hour per address, and a shared runner address is not the place to
+      # spend that. The script falls back to unauthenticated HTTPS when gh is absent, which
+      # is how the same command runs on a laptop.
       - name: Check every action reference
-        uses: saadmk11/github-actions-version-updater@d8781caf11d11168579c8e5e94f62b068038f442 # v0.9.0
-        with:
-          token: ${{ secrets.ACTIONS_AUDIT_TOKEN }}
-          # Report and fail; never open a pull request. See the header.
-          skip_pull_request: true
-          # Compare against release tags, which is how these references are written.
-          # `release-commit-sha` would report every tag-pinned action as behind forever.
-          update_version_with: release-tag
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .\script.ps1 check-actions
