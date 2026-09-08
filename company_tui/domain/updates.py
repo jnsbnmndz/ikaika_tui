@@ -48,6 +48,24 @@ itself as "updates-toolbox". Built from APP_SLUG, not APP_TITLE: the title has
 spaces in it.
 """
 
+DEFAULT_REPOSITORY = "jnsbnmndz/ikaika_tui"
+"""Where this build's own releases are published.
+
+It was empty, on the grounds that this code has no business guessing which fork of
+itself somebody is running. Named now, because the alternative it was protecting
+turned out to be worse: a toolbox that ships with update checking switched off is
+one where the feature exists and does nothing until somebody finds the screen that
+turns it on - and the people running this are the people releasing it.
+
+A fork changes one line in Advanced, which is a smaller cost than everybody else
+having to. Being wrong here is inert rather than harmful: the check reads a public
+release feed and offers an installer, and the offer is a badge nobody has to press.
+
+Empty is still off, and still means off. See `infrastructure/config.py` for the one
+distinction that makes both true - a repository absent from the settings file gets
+this default, and a repository written there as empty stays empty.
+"""
+
 DEFAULT_API_BASE = "https://api.github.com"
 DEFAULT_ASSET_PATTERN = "*-setup*.exe"
 RELEASED_SUFFIX = "-released"
@@ -76,10 +94,13 @@ working.
 class UpdateSource:
     """Where to look for a newer build. Every field is editable in Advanced."""
 
-    repository: str = ""
-    """`owner/name` on the host. Empty means update checking is not configured -
-    which is the shipped default, because this code has no business guessing
-    which fork of it somebody is running."""
+    repository: str = DEFAULT_REPOSITORY
+    """`owner/name` on the host. Empty means update checking is off.
+
+    Defaulted rather than empty - see `DEFAULT_REPOSITORY`. This is also what
+    Advanced's "reset to defaults" restores, since that writes a bare
+    `UpdateSource()`, so the default here and the default the interface offers
+    cannot drift apart."""
 
     api_base: str = DEFAULT_API_BASE
     """The API root. Configurable for GitHub Enterprise, and for pointing a test

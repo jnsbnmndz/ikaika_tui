@@ -334,8 +334,24 @@ and spending those on somebody restarting the app is how the manual check ends u
 rate-limited when they actually want it. A launch with an installer already downloaded
 makes no request at all.
 
-`[updates] check_on_launch = false` turns it off. It is already inert until a repository
-is set, so the shipped default checks nothing. **Check for Updates** is still the card
+It is **on out of the box**: `[updates] repository` defaults to `jnsbnmndz/ikaika_tui`,
+which is where this build's own releases are published. That was empty once, on the
+grounds that the code has no business guessing which fork somebody runs — and the thing
+that argument protected turned out to be worse, because a toolbox shipping with update
+checking switched off is one where the feature exists and does nothing until somebody
+finds the screen that turns it on. A fork changes one line in Advanced, which is a
+smaller cost than everybody else having to.
+
+Two switches turn it off, and both keep working: `[updates] check_on_launch = false`
+stops the launch check while leaving the card, and clearing the repository in Advanced
+stops both. **Absent and empty are different answers** in the settings file — a file with
+no `repository` line has said nothing and gets the default, one that says
+`repository = ""` has said *off*. Which is why saving an empty repository writes that
+empty value down rather than omitting it the way every other default is omitted;
+otherwise clearing the field would switch checking off until the next read and then
+quietly back on.
+
+**Check for Updates** is still the card
 that reports everything properly — asset size, release notes, why the check failed — and
 what it downloads is recorded in the same place, so `Ctrl+U` installs that too.
 

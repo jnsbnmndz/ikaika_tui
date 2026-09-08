@@ -207,11 +207,22 @@ class Looking(unittest.TestCase):
         )
 
     def test_an_unconfigured_source_asks_nothing_and_says_nothing(self):
+        # Spelled out, because a bare UpdateSource is CONFIGURED now - it carries
+        # DEFAULT_REPOSITORY. Empty is somebody having turned checking off, and it is
+        # still the one thing that stops this asking.
         feed = _Feed()
-        report = asyncio.run(self._watch(UpdateSource(), feed).look())
+        report = asyncio.run(self._watch(UpdateSource(repository=""), feed).look())
         self.assertEqual(0, feed.asked)
         self.assertFalse(report.waiting)
         self.assertEqual("", report.notice("^"))
+
+    def test_the_shipped_default_does_get_asked(self):
+        # The other side of it: out of the box, with nothing configured, the check runs.
+        # That is what making the repository a default was for.
+        feed = _Feed()
+        report = asyncio.run(self._watch(UpdateSource(), feed).look())
+        self.assertEqual(1, feed.asked)
+        self.assertFalse(report.waiting, "the fake feed published nothing")
 
     def test_check_on_launch_off_asks_nothing(self):
         feed = _Feed((_release("v9.9.9+9-released"),))

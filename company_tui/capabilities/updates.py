@@ -23,13 +23,18 @@ workflow doing the asking. See
 `docs/decisions/0004-the-toolbox-can-install-its-own-update.md`.
 
 
-WHERE IT LOOKS IS A SETTING, NOT A CONSTANT
+WHERE IT LOOKS IS A SETTING, AND IT HAS A DEFAULT
 
-`UpdateSource` comes from the settings file and is edited in Advanced. Empty by
-default - a fork, an internal mirror and a GitHub Enterprise host are the same
-program pointed somewhere else, and this code should not guess which one it is a
-build of. An unconfigured source is reported as unconfigured, with the name of
-the screen that configures it.
+`UpdateSource` comes from the settings file and is edited in Advanced. A fork, an
+internal mirror and a GitHub Enterprise host are the same program pointed
+somewhere else, which is why it is a setting at all - but it defaults to this
+build's own repository rather than to nothing, because a check that is off until
+somebody finds the screen that turns it on is a feature that does not exist. See
+`DEFAULT_REPOSITORY`.
+
+Empty is still off, and an unconfigured source is still reported as unconfigured,
+with the name of the screen that configures it - which is now the state somebody
+chose rather than the state it shipped in.
 """
 
 from datetime import UTC, datetime

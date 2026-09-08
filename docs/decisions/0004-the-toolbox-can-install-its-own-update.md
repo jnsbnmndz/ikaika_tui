@@ -109,7 +109,12 @@ key, and the badge only exists when the key does something.
 ## 3. Consequences
 
 - `[updates] check_on_launch` turns it off. On by default and harmless when nothing else is
-  set, because `configured` is false until a repository is named — the shipped default
+  set — the launch check reads a public release feed and offers a badge nobody has to
+  press. `repository` now defaults to this build's own repository (it shipped empty at
+  first; see `DEFAULT_REPOSITORY` for why that was worse), and clearing it in Advanced
+  turns both halves off. In the settings file an absent `repository` takes the default
+  while an explicit `repository = ""` means off, so the save path writes that empty value
+  down instead of omitting it — the shipped default
   checks nothing.
 - Only the interactive console gets a watch. `list` and `doctor` print and exit, and a
   scriptable command that quietly downloads thirty megabytes is a surprise in somebody's CI
