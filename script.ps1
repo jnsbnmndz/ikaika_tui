@@ -40,6 +40,19 @@
 #
 # The automatic $args keeps them as unbound argument tokens, so @args re-parses them as
 # parameter names, which is the whole job. Verified both ways rather than reasoned about.
+#
+# THE SAME RULE BINDS THE CALLER, AND THAT HALF IS EASIER TO GET WRONG.
+#
+#     .\script.ps1 bump-version -Bump minor -Yes        works
+#     .\script.ps1 bump-version @('-Bump','minor')      does NOT
+#     .\script.ps1 bump-version @{ Bump = 'minor' }     does NOT
+#     .\script.ps1 bump-version -Bump minor -Yes:$true  does NOT
+#
+# Array splatting is positional, so '-Bump' arrives as the VALUE of -Bump. A hashtable
+# splat binds by name at this hop and is flattened to values before $args is forwarded, as
+# is a colon-bound switch. Everything reaching a command through here has to be a token
+# written at the call site - which is what release.yml learned the hard way, and what the
+# `workflow calls` check in check-all now enforces on the workflows.
 param(
     # Which command. Empty lists them.
     [string]$Name = ''

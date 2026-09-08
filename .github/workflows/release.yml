@@ -13,6 +13,28 @@
 # and publishing.
 #
 #
+# EVERY CALL IS LITERAL TOKENS, NEVER A SPLATTED ARRAY
+#
+# The lines above are what a person types, and that is the only shape that survives the
+# trip through script.ps1. This file built its argument lists as arrays and splatted them:
+#
+#     $bumpArgs = @('-Bump', 'minor', '-Yes')
+#     .\script.ps1 bump-version @bumpArgs        # WRONG, and it failed a whole release
+#
+# Array splatting in PowerShell is POSITIONAL. '-Bump' arrives as the VALUE of -Bump and
+# 'minor' then has nowhere left to go: "A positional parameter cannot be found that accepts
+# argument 'minor'". A hashtable splat does bind by name and still does not survive,
+# because script.ps1 forwards the automatic $args and everything in it has been flattened
+# to a value by then - `-Released:$false` comes back as a positional 'False'. Only tokens
+# typed at the call site make it, which is exactly what script.ps1's own header says.
+#
+# So an optional switch is decided in YAML, where the substitution leaves a literal token
+# behind, rather than in PowerShell, where it leaves a string in an array. Interpolating an
+# input into a command line is safe here and only here because every input is TYPED - a
+# choice of four words and two booleans, never free text. check-all now fails on either
+# wrong spelling; see docs/pitfalls.md 6.1.
+#
+#
 # fetch-depth: 0, AND THAT IS NOT OPTIONAL
 #
 # The build number rises globally and is read from the VERSION file AT each tag, with
@@ -160,9 +182,7 @@ jobs:
         id: bump
         shell: pwsh
         run: |
-          $bumpArgs = @('-Bump', '${{ inputs.bump }}', '-Yes')
-          if ('${{ inputs.released }}' -eq 'true') { $bumpArgs += '-Released' }
-          .\script.ps1 bump-version @bumpArgs
+          .\script.ps1 bump-version -Bump ${{ inputs.bump }} -Yes ${{ inputs.released && '-Released' || '' }}
           if ($LASTEXITCODE -ne 0) { throw 'bump-version failed' }
 
           # Read back what it actually wrote rather than recomputing it here. Two places
@@ -178,19 +198,13 @@ jobs:
       - name: Build the app
         shell: pwsh
         run: |
-          $buildArgs = @()
-          if ('${{ inputs.released }}' -eq 'true') { $buildArgs += '-Released' }
-          if ('${{ inputs.sign }}' -eq 'true') { $buildArgs += '-Sign' }
-          .\script.ps1 build-app @buildArgs
+          .\script.ps1 build-app ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }}
           if ($LASTEXITCODE -ne 0) { throw 'build-app failed' }
 
       - name: Build the installer
         shell: pwsh
         run: |
-          $installerArgs = @()
-          if ('${{ inputs.released }}' -eq 'true') { $installerArgs += '-Released' }
-          if ('${{ inputs.sign }}' -eq 'true') { $installerArgs += '-Sign' }
-          .\script.ps1 build-installer @installerArgs
+          .\script.ps1 build-installer ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }}
           if ($LASTEXITCODE -ne 0) { throw 'build-installer failed' }
 
       # AFTER the build. bump-version tags before building on purpose, so the number is

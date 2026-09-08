@@ -54,7 +54,7 @@ if ($Help) {
     Write-Host '  build-app - freeze the app into a folder that needs no Python.'
     Write-Host ''
     Write-Host '  Usage'
-    Write-Host '    .\script.ps1 build-app [-Released] [-Clean]'
+    Write-Host '    .\script.ps1 build-app [-Released] [-Clean] [-Sign]'
     Write-Host ''
     Write-Host '  Writes dist\<name>-<version>\ and leaves build\ behind as scratch.'
     Write-Host '  VERSION is bundled as data because the header reads it at runtime.'

@@ -136,3 +136,37 @@ survives reformatting.
 
 `Static.renderable` does not exist on this version; `App.run_test()` and the screen's
 compositor do. Ask the object, do not assume the attribute.
+
+---
+
+## 6. An argument list is not a list of arguments
+
+### 6.1 A splatted array reaches a command positionally
+
+The release workflow built its switches up as an array and splatted it:
+
+```powershell
+$bumpArgs = @('-Bump', 'minor', '-Yes')
+.\script.ps1 bump-version @bumpArgs
+```
+
+Array splatting is **positional**. `-Bump` was passed as the *value* of `-Bump`, `minor`
+had nowhere left to go, and the whole release died on
+`A positional parameter cannot be found that accepts argument 'minor'`. The two obvious
+repairs do not work either: a hashtable splat binds by name at the first hop and is
+flattened to values before `script.ps1` forwards the automatic `$args`, and
+`-Released:$false` comes back out of that hop as a positional `False`. Only tokens written
+at the call site survive it. `script.ps1`'s header had documented the callee half of this
+for exactly the same reason and the caller half was still written wrong.
+
+**What made it a pitfall rather than a bug** is that nothing could see it. `check-all`,
+`ruff`, `PSScriptAnalyzer` and 149 tests all passed, because the only thing that runs those
+lines is a dispatched release, and the array is empty - so the splat is a no-op and the
+call works - unless somebody ticks a box. Both build steps carried the same defect and had
+never once run.
+
+**Rule.** Anything reaching a command through `script.ps1` is a literal token. An optional
+switch is chosen in YAML (`${{ inputs.sign && '-Sign' || '' }}`), where the substitution
+leaves a token behind, never in PowerShell, where it leaves a string in an array. The
+`workflow calls` check in `check-all` reads the workflows for both wrong spellings, because
+a rule the gate cannot see is a rule that only CI can break.
