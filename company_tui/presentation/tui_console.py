@@ -194,6 +194,13 @@ is named there rather than repeated here.
 """
 
 UPDATE_DECLINED = "Left alone - nothing was installed."
+
+UPDATE_RUNS = "\n{count} other run{s} will be stopped."
+"""Added to the install question when something else is going.
+
+The run doing the asking is not counted: it is about to end either way, and naming it
+turns the question into the app arguing with the button just pressed.
+"""
 NO_INSTALLER_AT = "There is no installer at {path} any more."
 
 NOTHING_TO_INSTALL = "Nothing to install - no newer build has been downloaded."
@@ -472,6 +479,17 @@ class TuiConsole(App):
 
         The path is checked before anything is asked. A dialog offering to install a
         file that is not there is a dialog whose only outcome is an error.
+
+        ONE QUESTION, NOT TWO
+        =====================
+        This asked the quit confirmation underneath the install one, the way `Ctrl+U`
+        does. From a keypress that is right - the runs it names are somebody's real
+        work. From inside a run panel it is not: the card IS a run, so the second
+        dialog asked whether to stop the very run doing the asking. Answering no to
+        that - which is the sane answer to "quit with a run going" when you asked to
+        install, not to quit - abandoned the install with nothing to say why.
+        So the cost of the OTHER runs is named in the one question, and the run that
+        is asking is left out of the count.
         """
         if self._watch is None:
             return "update installing is not configured"
@@ -479,17 +497,23 @@ class TuiConsole(App):
         if not target.is_file():
             return NO_INSTALLER_AT.format(path=installer)
 
+        detail = UPDATE_DETAIL.format(version=version, installed=APP_VERSION)
+        session = current_session()
+        others = [live for live in self._sessions.live() if live is not session]
+        if others:
+            detail += UPDATE_RUNS.format(
+                count=len(others), s="" if len(others) == 1 else "s"
+            )
+
         answer = await self.push_screen_wait(
             ConfirmScreen(
                 UPDATE_CONFIRM,
                 self.trail_label(),
-                detail=UPDATE_DETAIL.format(version=version, installed=APP_VERSION),
+                detail=detail,
                 confirm=UPDATE_ANSWER,
             )
         )
         if not answer:
-            return UPDATE_DECLINED
-        if not await self._confirm_quit():
             return UPDATE_DECLINED
 
         problem = self._watch.arm(target)
