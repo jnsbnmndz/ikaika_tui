@@ -4,11 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "company-tui"
-version = "0.1.0+2"
+version = "0.0.1+2"
 description = "Company developer toolbox for project scaffolding and automation"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["textual>=0.60"]
+
+# TEXTUAL IS FLOORED AT THE LINE THIS IS TESTED ON, AND CAPPED BELOW THE NEXT MAJOR.
+#
+# The floor was `>=0.60`, eight majors back, and it was a claim nothing supported: the
+# app uses `App.register_theme`, `push_screen_wait`, and `Strip`/`render_line` selection
+# APIs that 0.60 does not have. It only ever worked because uv.lock pins 8.2.8 - so a
+# `pip install` from the sdist, with no lock to read, could resolve a Textual the code
+# cannot start on and fail with an AttributeError rather than a resolution error.
+#
+# The cap is docs/pitfalls.md 5.2: `SelectableLog` reads and paints `Strip`s, which is
+# widget internals, and internals move between majors. A cap turns that into a
+# resolution failure somebody can read instead of a blank terminal. Raise it after
+# running the gate against the new major, not before.
+dependencies = ["textual>=8.2,<9"]
 
 # TWO NAMES, ONE ENTRY POINT. `dti` is what the product is called and what the
 # installer puts on PATH; `company` was the only name for a long time and is kept
@@ -20,6 +33,21 @@ dependencies = ["textual>=0.60"]
 [project.scripts]
 dti = "company_tui.cli:main"
 company = "company_tui.cli:main"
+
+# RUFF IS DECLARED SO `uv sync` STOPS DELETING IT.
+#
+# `setup-dev-env -Lint` installs it with `uv pip install`, which puts it in the venv and
+# not in the lock - so the next `uv sync` prunes it as something that does not belong,
+# check-all drops from PASS to "SKIP - not installed", and the run still says it passed.
+# That is precisely the report check-all's own header calls the one that gets believed and
+# should not be, arrived at by accident.
+#
+# Capped below the next minor for the reason the rule selection below is written out at
+# all: ruff's own defaults changed under this project once and turned a passing lint into
+# 91 findings without a line of code changing. The cap makes that an upgrade somebody
+# chooses and runs the gate against.
+[dependency-groups]
+dev = ["ruff>=0.16.6,<0.17"]
 
 [tool.setuptools.packages.find]
 include = ["company_tui*"]

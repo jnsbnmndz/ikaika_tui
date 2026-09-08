@@ -140,7 +140,14 @@ if ($testExit -ne 0) {
     Add-Result 'tests' 'PASS' $ran
 }
 
-# --- the version, which lives in two files that have to agree ------------------------
+# --- the version, which lives in three files that have to agree ----------------------
+# uv.lock is the third and was the one nobody was watching: it records this project among
+# the locked packages, version and all, and a release rewrote only the first two - so it
+# sat a release behind saying 0.1.0+2 while VERSION said 0.0.1+1. Set-AppVersion writes
+# all three now; this is what would notice if that stopped being true.
+#
+# A missing or nameless lock is not a failure. Not every checkout uses uv, and a project
+# that has never been locked has nothing to disagree with.
 try {
     $version = Get-AppVersion
     $text = Format-AppVersion $version
@@ -148,8 +155,16 @@ try {
     foreach ($line in (Get-Content -LiteralPath (Get-PyProjectFile))) {
         if ($line -match '^\s*version\s*=\s*"([^"]+)"') { $pyprojectVersion = $Matches[1]; break }
     }
-    if ($pyprojectVersion -ne $text) {
-        Add-Result 'version' 'FAIL' "VERSION says $text, pyproject says $pyprojectVersion"
+    $lockVersion = Get-LockVersionText
+
+    $disagree = @()
+    if ($pyprojectVersion -ne $text) { $disagree += "pyproject says $pyprojectVersion" }
+    if ($lockVersion -and $lockVersion -ne $text) { $disagree += "uv.lock says $lockVersion" }
+
+    if ($disagree.Count) {
+        Add-Result 'version' 'FAIL' "VERSION says $text, $($disagree -join ', ')"
+    } elseif (-not $lockVersion) {
+        Add-Result 'version' 'PASS' "$text (no uv.lock entry to check)"
     } else {
         Add-Result 'version' 'PASS' $text
     }
@@ -175,6 +190,43 @@ try {
     }
 } catch {
     Add-Result 'secrets' 'FAIL' $_.Exception.Message
+}
+
+# --- how the workflows call this file ------------------------------------------------
+# A release run is the one path no local gate exercises, and the last one failed on
+# argument passing rather than on anything a script does: an array splatted into
+# script.ps1 arrives POSITIONALLY, so @('-Bump','minor') binds '-Bump' as the value of
+# -Bump and leaves 'minor' homeless. A hashtable splat and a colon-bound switch are
+# flattened the same way by the $args hop. Only tokens written at the call site survive.
+#
+# So this reads the workflows for the two spellings that do not work. Comment lines are
+# skipped deliberately - release.yml's header shows the wrong shape on purpose, and a
+# warning that trips the check it is warning about is a check nobody keeps.
+#
+# docs/pitfalls.md 6.1. Cheap regex rather than a YAML parser: this is one line shape in
+# two files, and a parser would be a dependency for it.
+$workflowDir = Join-Path $root '.github\workflows'
+if (-not (Test-Path -LiteralPath $workflowDir)) {
+    Add-Result 'workflow calls' 'SKIP' 'no .github\workflows here'
+} else {
+    $offenders = @()
+    foreach ($file in Get-ChildItem -LiteralPath $workflowDir -Filter '*.yml') {
+        $number = 0
+        foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+            $number++
+            $text = "$line"
+            if ($text -match '^\s*#') { continue }
+            if ($text -notmatch 'script\.ps1\s+[\w-]+') { continue }
+            if ($text -match '@\w+' -or $text -match '\s-\w+:') {
+                $offenders += "$($file.Name):$number"
+            }
+        }
+    }
+    if ($offenders.Count) {
+        Add-Result 'workflow calls' 'FAIL' "splatted or colon-bound arguments at $($offenders -join ', ') - script.ps1 takes literal tokens only"
+    } else {
+        Add-Result 'workflow calls' 'PASS' 'literal tokens only'
+    }
 }
 
 # --- the linters, which are allowed to be absent -------------------------------------

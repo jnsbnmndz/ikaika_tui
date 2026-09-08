@@ -2,8 +2,9 @@
 
 The toolbox ships as an installer built by `scripts/build-installer.ps1` and
 published by `.github/workflows/release.yml`, which tags an official build
-`v<x.y.z>-released` and a debug build `v<x.y.z>`. This is the other half of that:
-given a release feed, decide whether what it is offering is worth installing.
+`v<x.y.z>+<n>-released` and a debug build `v<x.y.z>+<n>`. This is the other half
+of that: given a release feed, decide whether what it is offering is worth
+installing.
 
 
 THE COMPARISON IS ON FOUR NUMBERS, AND THE BUILD NUMBER IS ONE OF THEM
@@ -14,10 +15,12 @@ compared first because that is what a person reads, and the build number settles
 two artefacts of the same name — a rebuild of the same source is a different
 artefact, and something has to be able to tell them apart.
 
-A tag's own name carries only `x.y.z`, so the build number is read from the
-release's VERSION where the feed exposes it and treated as unknown otherwise.
-Unknown is NOT zero: zero would make every release of the current version look
-older than what is installed and silently suppress a legitimate update.
+A tag written by the release workflow carries the build number, so the four
+numbers all come off the tag. A tag that does not - one made by hand, or by an
+older version of that workflow, which put only `x.y.z` in the name - leaves the
+build unknown. Unknown is NOT zero: zero would make every release of the current
+version look older than what is installed and silently suppress a legitimate
+update.
 
 
 AN OFFICIAL BUILD IS THE DEFAULT, AND A PRERELEASE IS OPT-IN

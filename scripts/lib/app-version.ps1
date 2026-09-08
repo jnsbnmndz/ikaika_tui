@@ -21,15 +21,27 @@
 # records it, and the next machine hands out the same one.
 #
 #
-# THE TAG NAME SAYS WHICH KIND OF BUILD IT WAS
+# THE TAG NAME CARRIES THE BUILD NUMBER, AND SAYS WHICH KIND OF BUILD IT WAS
 #
-#     v1.2.0              a debug build - what a branch or a local run produces
-#     v1.2.0-released     an official release, signed and published
+#     v1.2.0+8              a debug build - what a branch or a local run produces
+#     v1.2.0+8-released     an official release, signed and published
 #
 # One version can therefore have both, which is the point: the same source is tagged
 # debug while it is being tested and released once it ships, and the suffix is what tells
 # a release feed which of the two to offer. The build number is shared - it belongs to the
 # source, not to the kind of build - so `Get-NextBuildNumber` counts both spellings.
+#
+# The `+n` is in the NAME because that is the number an installer compares, and a tag
+# without it can only be told apart from another build of the same version by fetching the
+# VERSION file committed at it - which is a clone away from anything reading a release
+# feed. `domain/updates.py` has parsed `v1.2.3+4-released` since it was written and had
+# nothing to read it out of; this is what finally puts it there. It also makes every tag
+# unique by construction, since the number never repeats.
+#
+# THE SUFFIX STAYS LAST. `Release.official` asks whether a tag ENDS WITH `-released`, so
+# `v1.2.0-released+8` reads as a debug build and would never be offered as an update.
+# That is not semver's ordering, and semver is not what parses this - nor is `-released` a
+# prerelease, it is the opposite.
 
 Set-StrictMode -Version Latest
 
@@ -45,6 +57,25 @@ function Get-RepoRoot {
 
 function Get-VersionFile { return Join-Path (Get-RepoRoot) 'VERSION' }
 function Get-PyProjectFile { return Join-Path (Get-RepoRoot) 'pyproject.toml' }
+function Get-LockFile { return Join-Path (Get-RepoRoot) 'uv.lock' }
+
+
+# The distribution's own name, read out of pyproject rather than written here as well.
+# It is what identifies this project's entry among the locked packages, and a second copy
+# of it here would be one more thing to remember on a rename.
+function Get-ProjectName {
+    $pyproject = Get-PyProjectFile
+    if (-not (Test-Path -LiteralPath $pyproject)) { return '' }
+    $inProject = $false
+    foreach ($line in (Get-Content -LiteralPath $pyproject)) {
+        if ($line -match '^\s*\[([^\]]+)\]') {
+            $inProject = ($Matches[1] -eq 'project')
+            continue
+        }
+        if ($inProject -and $line -match '^\s*name\s*=\s*"([^"]+)"') { return $Matches[1] }
+    }
+    return ''
+}
 
 
 # Parses `x.y.z+n` into its parts, or throws saying what it read.
@@ -76,10 +107,11 @@ function Format-AppVersion($Version) { return "$($Version.Name)+$($Version.Build
 
 # Every version a tag has already claimed, either spelling, as parsed parts.
 #
-# The BUILD NUMBER is read out of the VERSION file AT each tag, not out of the tag's name.
-# A tag is called `v1.1.9`, which parses with a build of 0, so scanning names alone made
-# every tag contribute nothing and "the number comes from the tags" was really "VERSION
-# plus one" - which is exactly the reset the rule exists to prevent, just later.
+# A tag written by this code carries its build number, so the NAME is the answer. Tags
+# written before it did not - `v1.1.9` parses with a build of 0, so reading names alone
+# made every one of them contribute nothing and "the number comes from the tags" was
+# really "VERSION plus one", which is exactly the reset the rule exists to prevent, just
+# later. So a name with no `+n` still falls back to the VERSION file committed AT the tag.
 #
 # `git show <tag>:VERSION` reads the committed file rather than the working tree, so a tag
 # made before VERSION existed simply answers nothing and is skipped.
@@ -97,10 +129,13 @@ function Get-TaggedVersion {
         if ($name.EndsWith($script:ReleasedSuffix)) {
             $name = $name.Substring(0, $name.Length - $script:ReleasedSuffix.Length)
         }
-        if ($name -notmatch '^\d+\.\d+\.\d+$') { continue }
+        if ($name -notmatch $script:VersionPattern) { continue }
 
-        $recorded = "$(& git -C $root show "${tag}:VERSION" 2>$null | Select-Object -First 1)".Trim()
-        $text = if ($recorded -match $script:VersionPattern) { $recorded } else { $name }
+        $text = $name
+        if ($name -notmatch '\+\d+$') {
+            $recorded = "$(& git -C $root show "${tag}:VERSION" 2>$null | Select-Object -First 1)".Trim()
+            if ($recorded -match $script:VersionPattern) { $text = $recorded }
+        }
         $found += (Split-AppVersion $text)
     }
     return $found
@@ -121,17 +156,34 @@ function Test-TagIsFree([string]$Tag) {
     return -not $existing.Count
 }
 
-function Get-TagName([string]$VersionName, [switch]$Released) {
-    if ($Released) { return "v$VersionName$($script:ReleasedSuffix)" }
-    return "v$VersionName"
+# The tag for a version, build number included. See the header for why it is in there and
+# why the suffix has to come after it.
+#
+# Takes the PARSED version rather than its name, so a caller cannot hand over `$v.Name`
+# and get a tag with the number quietly missing - which is what both callers did before
+# the number was part of it, and a silently build-less tag is a tag that contributes
+# nothing to the next build number.
+function Get-TagName($Version, [switch]$Released) {
+    if ($Version -is [string]) {
+        throw "Get-TagName takes a parsed version, not '$Version' - pass (Get-AppVersion) or Split-AppVersion's result."
+    }
+    $text = Format-AppVersion $Version
+    if ($Released) { return "v$text$($script:ReleasedSuffix)" }
+    return "v$text"
 }
 
 
 # What `-Bump` means, as the version it produces.
 #
-# 'same' keeps the name and still takes a new build number: a rebuild of the same source
+# 'keep' keeps the NAME and still takes a new build number: a rebuild of the same source
 # is a different artifact, and an installer that cannot tell them apart will not replace
-# one with the other.
+# one with the other. So it is the one option that raises nothing and still produces a
+# version - which is why the release form spells out what it does rather than trusting the
+# word to carry it.
+#
+# 'same' is the older spelling and still accepted. An empty string is too, because a
+# caller that passes through an unset input should get the harmless branch rather than a
+# throw.
 function Resolve-NextVersion([string]$Bump) {
     $current = Get-AppVersion
     $build = Get-NextBuildNumber
@@ -143,14 +195,76 @@ function Resolve-NextVersion([string]$Bump) {
         { $_ -in @('same', 'keep', '') } { $name = $current.Name }
         default {
             if ("$Bump" -match '^\d+\.\d+\.\d+$') { $name = "$Bump" }
-            else { throw "'$Bump' is not major, minor, patch, same, or an x.y.z version." }
+            else { throw "'$Bump' is not major, minor, patch, keep, or an x.y.z version." }
         }
     }
     return Split-AppVersion "$name+$build"
 }
 
 
-# Writes VERSION and pyproject.toml together, and reports what it touched.
+# The version inside uv.lock, or '' when there is nothing to write.
+#
+# THERE ARE THREE COPIES OF THE VERSION, NOT TWO. uv.lock records this project as one of
+# the locked packages, version and all, so a release that rewrote only VERSION and
+# pyproject left the lock a release behind - which is how it came to say 0.1.0+2 while
+# VERSION said 0.0.1+1, silently, because nothing compared them.
+#
+# Rewritten in place rather than by running `uv lock`, for the same reason pyproject is:
+# the rest of the file is a resolution this has no business redoing. It also means a
+# release does not need uv installed and does not need the network, and cannot turn a
+# version bump into a dependency change nobody asked for.
+#
+# Anchored on the [[package]] entry whose name is this project's. `version` appears once
+# per locked package, so an unanchored match would set textual's version to the app's.
+function Set-LockVersion([string]$Text) {
+    $lock = Get-LockFile
+    if (-not (Test-Path -LiteralPath $lock)) { return '' }
+    $name = Get-ProjectName
+    if (-not $name) { return '' }
+
+    $lines = @(Get-Content -LiteralPath $lock)
+    $found = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^\s*name\s*=\s*""$([regex]::Escape($name))""\s*$") {
+            $found = $true
+            continue
+        }
+        if (-not $found) { continue }
+        if ($lines[$i] -match '^\s*version\s*=') {
+            $lines[$i] = "version = `"$Text`""
+            [IO.File]::WriteAllLines($lock, $lines, (New-Object Text.UTF8Encoding $false))
+            return $lock
+        }
+        # Left the entry without finding a version line. Nothing to write, and guessing
+        # at another entry's would set some dependency's version to the app's.
+        if ($lines[$i] -match '^\s*\[') { break }
+    }
+    return ''
+}
+
+
+# Reads the version uv.lock records for this project, or '' if it records none.
+function Get-LockVersionText {
+    $lock = Get-LockFile
+    if (-not (Test-Path -LiteralPath $lock)) { return '' }
+    $name = Get-ProjectName
+    if (-not $name) { return '' }
+
+    $found = $false
+    foreach ($line in (Get-Content -LiteralPath $lock)) {
+        if ($line -match "^\s*name\s*=\s*""$([regex]::Escape($name))""\s*$") {
+            $found = $true
+            continue
+        }
+        if (-not $found) { continue }
+        if ($line -match '^\s*version\s*=\s*"([^"]+)"') { return $Matches[1] }
+        if ($line -match '^\s*\[') { break }
+    }
+    return ''
+}
+
+
+# Writes VERSION, pyproject.toml and uv.lock together, and reports what it touched.
 #
 # pyproject's line is rewritten in place rather than the file being regenerated: it holds
 # dependencies and an entry point this has no business rewriting. Anchored to the line
@@ -182,5 +296,9 @@ function Set-AppVersion($Version) {
         }
         [IO.File]::WriteAllLines($pyproject, $lines, (New-Object Text.UTF8Encoding $false))
     }
-    return @($versionFile, $pyproject)
+
+    $written = @($versionFile, $pyproject)
+    $lock = Set-LockVersion $text
+    if ($lock) { $written += $lock }
+    return $written
 }

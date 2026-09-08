@@ -4,13 +4,66 @@
 #
 #     .\script.ps1 check-all
 #     .\script.ps1 setup-signing -FetchOnly
-#     .\script.ps1 bump-version -Bump patch [-Released] -Yes
-#     .\script.ps1 build-app -Sign [-Released]
+#     .\script.ps1 bump-version -Bump patch [-Released] [-WhatIf] -Yes
+#     .\script.ps1 build-app -Sign [-Released] [-Clean]
 #     .\script.ps1 build-installer -Sign [-Released]
 #
 # so a release can be rehearsed locally in full. What this file adds is the two things
 # that are genuinely CI's job and which bump-version deliberately refuses to do: pushing,
 # and publishing.
+#
+#
+# THE DEFAULT RUN PUBLISHES NOTHING
+#
+# `tag` is off by default, and it is the one input that decides whether anything leaves
+# the runner. With it off the whole outward-facing half is skipped: bump-version runs with
+# -WhatIf, so VERSION is not rewritten and nothing is committed or tagged, and the push and
+# publish steps do not run. What that leaves is a rehearsal - the gate, a real signed
+# build, a real installer - kept as a workflow artifact so there is something to have
+# rehearsed. `bump` still says what a release WOULD produce, and the build is of the
+# version already in the tree, because that is the version build-app is about to stamp.
+#
+# Defaulting to a rehearsal rather than to a release is the same reasoning as bump-version
+# never pushing: publishing is a decision somebody makes, not what happens when a form is
+# submitted with everything left alone.
+#
+# `installer` and `clean` are there because a rehearsal is worth having quickly. Both map
+# onto switches the scripts already have, so neither adds a behaviour that exists only in
+# CI. `tag` without `installer` is refused up front - the release is published with the
+# installer as its only asset.
+#
+#
+# && AND || IN AN EXPRESSION: THE NON-EMPTY SIDE GOES FIRST
+#
+#     ${{ inputs.sign && '-Sign' || '' }}        correct
+#     ${{ inputs.tag && '' || '-WhatIf' }}       ALWAYS yields -WhatIf
+#
+# These operators return an operand rather than a boolean, and '' is falsy - so a true
+# condition whose left result is empty falls straight through to the right one. Every
+# switch below is written with the token on the left and the empty string on the right,
+# and a condition needing the opposite sense is negated instead.
+#
+#
+# EVERY CALL IS LITERAL TOKENS, NEVER A SPLATTED ARRAY
+#
+# The lines above are what a person types, and that is the only shape that survives the
+# trip through script.ps1. This file built its argument lists as arrays and splatted them:
+#
+#     $bumpArgs = @('-Bump', 'minor', '-Yes')
+#     .\script.ps1 bump-version @bumpArgs        # WRONG, and it failed a whole release
+#
+# Array splatting in PowerShell is POSITIONAL. '-Bump' arrives as the VALUE of -Bump and
+# 'minor' then has nowhere left to go: "A positional parameter cannot be found that accepts
+# argument 'minor'". A hashtable splat does bind by name and still does not survive,
+# because script.ps1 forwards the automatic $args and everything in it has been flattened
+# to a value by then - `-Released:$false` comes back as a positional 'False'. Only tokens
+# typed at the call site make it, which is exactly what script.ps1's own header says.
+#
+# So an optional switch is decided in YAML, where the substitution leaves a literal token
+# behind, rather than in PowerShell, where it leaves a string in an array. Interpolating an
+# input into a command line is safe here and only here because every input is TYPED - a
+# choice of four words and two booleans, never free text. check-all now fails on either
+# wrong spelling; see docs/pitfalls.md 6.1.
 #
 #
 # fetch-depth: 0, AND THAT IS NOT OPTIONAL
@@ -24,11 +77,13 @@
 #
 # -released IS THE SUFFIX, AND IT IS WHAT MAKES A BUILD OFFICIAL
 #
-#     v1.2.0              a debug build
-#     v1.2.0-released     the official release, signed with the release certificate
+#     v1.2.0+8              a debug build
+#     v1.2.0+8-released     the official release, signed with the release certificate
 #
 # One version can carry both. The debug tags are what the source collected on its way
-# there; the suffixed one is what a release feed offers. `released: false` publishes as a
+# there; the suffixed one is what a release feed offers. The `+8` is the build number,
+# which is in the tag because that is the number an installer compares - and the suffix
+# stays last, because `Release.official` in domain/updates.py asks what a tag ends with. `released: false` publishes as a
 # prerelease, so the "latest release" the updater asks for is only ever an official one.
 #
 #
@@ -73,11 +128,15 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Which part of the version to raise'
+        # The description carries what `keep` means, because a dropdown option is one word
+        # and this one is the only entry that does not raise anything. It is the same
+        # branch Resolve-NextVersion has always had, which accepts `same` as well - the
+        # form offers one spelling of it rather than two identical choices.
+        description: 'Which part of the version to raise. keep = a new build number, same version name'
         type: choice
         required: true
         default: patch
-        options: [patch, minor, major, same]
+        options: [patch, minor, major, keep]
       released:
         description: 'Official release (adds -released, publishes as latest)'
         type: boolean
@@ -88,11 +147,31 @@ on:
         type: boolean
         required: true
         default: true
+      tag:
+        description: 'Tag, push and publish. Off = rehearsal, nothing leaves the runner'
+        type: boolean
+        required: true
+        default: false
+      installer:
+        description: 'Also wrap the frozen app in the NSIS installer'
+        type: boolean
+        required: true
+        default: true
+      clean:
+        description: "Clear PyInstaller's cache and work directory before freezing"
+        type: boolean
+        required: true
+        default: false
 
 # Never two releases at once: both would read the same tags, hand out the same build
 # number, and the second push would be rejected after a full build had already run.
+#
+# Keyed on `tag`, because that reasoning is entirely about runs which push. A rehearsal
+# claims nothing and pushes nothing, so it has no business queueing behind a release - or
+# holding one up. Two rehearsals still serialize with each other, which is a runner minute
+# rather than something worth an expression nobody can read.
 concurrency:
-  group: release
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -105,7 +184,20 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      # First, and before the clone: an impossible combination costs seconds here and
+      # forty minutes three steps in. `gh release create` would fail on its own, but only
+      # after a full signed build AND a pushed tag - which is a version published that
+      # nobody can install, the one outcome the ordering further down exists to prevent.
+      - name: Refuse an impossible combination
+        if: ${{ inputs.tag && !inputs.installer }}
+        shell: pwsh
+        run: |
+          Write-Host 'tag = true needs installer = true.' -ForegroundColor Red
+          Write-Host 'The release is published with the installer as its only asset,' -ForegroundColor Yellow
+          Write-Host 'and with installer = false there would not be one.' -ForegroundColor Yellow
+          exit 1
+
+      - uses: actions/checkout@v5
         with:
           # See the header. Tags and their history, or the build number resets.
           fetch-depth: 0
@@ -119,6 +211,7 @@ jobs:
       # Chocolatey is already on windows-latest, so this is a shell command rather than a
       # marketplace action. The Windows SDK - and signtool with it - is preinstalled.
       - name: Install NSIS
+        if: ${{ inputs.installer }}
         shell: pwsh
         run: |
           choco install nsis --no-progress -y
@@ -156,13 +249,16 @@ jobs:
 
       # Commits VERSION and pyproject.toml and tags them. Local only - it prints the push
       # line rather than running it, so the push below is this file's decision.
+      #
+      # -WhatIf when this run is not tagging: it still checks that the tag is free and
+      # prints what it would write, and writes nothing. The readback below then reports the
+      # version already in the tree, which is the right answer either way - it is the
+      # version build-app is about to stamp.
       - name: Bump the version and tag it
         id: bump
         shell: pwsh
         run: |
-          $bumpArgs = @('-Bump', '${{ inputs.bump }}', '-Yes')
-          if ('${{ inputs.released }}' -eq 'true') { $bumpArgs += '-Released' }
-          .\script.ps1 bump-version @bumpArgs
+          .\script.ps1 bump-version -Bump ${{ inputs.bump }} -Yes ${{ inputs.released && '-Released' || '' }} ${{ !inputs.tag && '-WhatIf' || '' }}
           if ($LASTEXITCODE -ne 0) { throw 'bump-version failed' }
 
           # Read back what it actually wrote rather than recomputing it here. Two places
@@ -170,7 +266,7 @@ jobs:
           . .\scripts\lib\app-version.ps1
           $version = Get-AppVersion
           $text = Format-AppVersion $version
-          $tag = Get-TagName $version.Name -Released:('${{ inputs.released }}' -eq 'true')
+          $tag = Get-TagName $version -Released:('${{ inputs.released }}' -eq 'true')
           "version=$text"   | Out-File $env:GITHUB_OUTPUT -Append
           "name=$($version.Name)" | Out-File $env:GITHUB_OUTPUT -Append
           "tag=$tag"        | Out-File $env:GITHUB_OUTPUT -Append
@@ -178,25 +274,21 @@ jobs:
       - name: Build the app
         shell: pwsh
         run: |
-          $buildArgs = @()
-          if ('${{ inputs.released }}' -eq 'true') { $buildArgs += '-Released' }
-          if ('${{ inputs.sign }}' -eq 'true') { $buildArgs += '-Sign' }
-          .\script.ps1 build-app @buildArgs
+          .\script.ps1 build-app ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }} ${{ inputs.clean && '-Clean' || '' }}
           if ($LASTEXITCODE -ne 0) { throw 'build-app failed' }
 
       - name: Build the installer
+        if: ${{ inputs.installer }}
         shell: pwsh
         run: |
-          $installerArgs = @()
-          if ('${{ inputs.released }}' -eq 'true') { $installerArgs += '-Released' }
-          if ('${{ inputs.sign }}' -eq 'true') { $installerArgs += '-Sign' }
-          .\script.ps1 build-installer @installerArgs
+          .\script.ps1 build-installer ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }}
           if ($LASTEXITCODE -ne 0) { throw 'build-installer failed' }
 
       # AFTER the build. bump-version tags before building on purpose, so the number is
       # claimed before anything is produced with it - but pushing a tag for a build that
       # then failed publishes a version nobody can install.
       - name: Push the commit and the tag
+        if: ${{ inputs.tag }}
         shell: pwsh
         run: |
           git push origin HEAD "${{ steps.bump.outputs.tag }}"
@@ -205,6 +297,7 @@ jobs:
       # gh is preinstalled on the runner, so this is the CLI rather than a marketplace
       # release action - the same command anybody can run against this repository.
       - name: Publish the release
+        if: ${{ inputs.tag }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -239,3 +332,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
 
           Write-Host "Published $tag with $($asset.Name)"
+
+      # The other half of the same either/or: a run that publishes nothing still has to
+      # leave the installer somewhere, or the rehearsal proved the build works and then
+      # threw away the only evidence. upload-artifact rather than gh here because there is
+      # no release to attach to - this is the run's own scratch space, and it expires by
+      # itself rather than accumulating in the release list beside the real ones.
+      #
+      # No artifact when the installer was skipped: the frozen folder is what build-app
+      # leaves behind, and uploading tens of megabytes of it to prove a freeze compiled is
+      # not worth the minutes.
+      - name: Keep the build from a rehearsal
+        if: ${{ !inputs.tag && inputs.installer }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: rehearsal-${{ steps.bump.outputs.version }}
+          path: dist/*-setup*.exe
+          if-no-files-found: error
+          retention-days: 14

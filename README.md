@@ -113,14 +113,43 @@ Which means a release has to be **tagged**. `bump-version` commits and tags but 
 nothing — publishing is a decision, and a build tool that pushes on your behalf is one
 nobody can rehearse.
 
+### The release workflow publishes nothing by default
+
+It is dispatched by hand from the Actions tab, and `tag` — the one input that decides
+whether anything leaves the runner — is **off**:
+
+| Input | Default | What it does |
+|---|---|---|
+| `bump` | `patch` | which part of the version to raise; `keep` takes a new build number and leaves the name alone |
+| `released` | off | adds `-released` to the tag and publishes as latest rather than as a prerelease |
+| `sign` | on | sign the artifacts; needs the three signing secrets |
+| `tag` | **off** | commit, tag, push, publish. Off runs `bump-version -WhatIf` and skips the push and the publish |
+| `installer` | on | also wrap the frozen app in the NSIS installer |
+| `clean` | off | clear PyInstaller's cache and work directory first |
+
+So a default run is a **rehearsal**: the gate, a real signed build, a real installer,
+kept as a workflow artifact for a fortnight — and nothing tagged, pushed or published.
+`bump` still reports what a release *would* produce, and the build carries the version
+already in the tree, because that is the version `build-app` stamps.
+
+That default is the same reasoning as `bump-version` not pushing. Publishing is a
+decision somebody makes, not what happens when a form is submitted with everything left
+alone. `tag` with `installer` off is refused before the clone, because the release is
+published with the installer as its only asset.
+
 ### `-released` is what makes a build official
 
-    v1.2.0              a debug build
-    v1.2.0-released     the official release
+    v1.2.0+8              a debug build
+    v1.2.0+8-released     the official release
 
 One version can carry both: the same source is tagged debug while it is being tested
 and released once it ships. Both share one build number, because the number belongs to
-the source. The release workflow publishes debug builds as prereleases, so
+the source — and it is *in the tag*, because that is the number an installer compares.
+A tag carrying only `x.y.z` can be told apart from another build of the same version
+only by fetching the `VERSION` file committed at it, which is a clone away from anything
+reading a release feed. The suffix stays **last**: `Release.official` asks what a tag
+ends with, so `v1.2.0-released+8` — semver's ordering — would read as a debug build and
+never be offered at all. The release workflow publishes debug builds as prereleases, so
 `Check for Updates` — which asks for the latest official release — cannot offer one.
 
 ### Signing
@@ -206,6 +235,45 @@ limit before this installer adds anything. So `scripts/lib/path-entry.ps1` does 
 through .NET, which has no such limit and broadcasts `WM_SETTINGCHANGE` itself. It
 reads and writes the **User** scope only — writing the merged `$env:Path` into
 user scope is the other classic bug, and it doubles the length every time.
+
+### Keeping the actions current, in two halves
+
+`.github/dependabot.yml` opens the pull requests. `.github/workflows/actions-audit.yml`
+runs `saadmk11/github-actions-version-updater` in check-only mode and **fails** when
+something is behind. Both, because they answer different questions: one proposes the
+bump, the other notices when the proposal was never merged — or when Dependabot itself
+has been switched off. A version check whose only output is a pull request has no way to
+say that it has stopped running.
+
+The split of labour follows the credential. GitHub forbids a workflow's own
+`GITHUB_TOKEN` from editing workflow files, so anything running *as* a workflow needs a
+PAT with `workflow` scope to change one — a long-lived secret able to rewrite
+`release.yml`, which is the file that signs and publishes. Dependabot is not a workflow
+and needs no token at all. So the half that writes is the half that needs no credential,
+and the third-party action never writes: `skip_pull_request: true`, which also stops the
+two of them opening competing pull requests for the same one-line bump.
+
+The audit needs `ACTIONS_AUDIT_TOKEN`: a fine-grained token, scoped to this repository
+only, with **Actions: Read-only** and nothing else. `Metadata: Read` is force-enabled
+alongside it and cannot be turned off.
+
+That is one permission, and it is what the action's own calls need rather than what its
+README asks for. It reads `GET /repos/<this repo>/actions/workflows` to discover workflow
+*paths* — hence Actions — and then reads the files off the disk `actions/checkout` already
+populated, which is why `Contents` is not needed. Its other calls (`/releases`,
+`/commits`) are public reads of the action repositories themselves, and a fine-grained
+token always has read access to public repositories. Everything that would write —
+branch, commit, pull request — sits behind `skip_pull_request` and never runs. The
+README's `repo` + `workflow` is what *pushing* needs.
+
+Without the secret the weekly run fails and names it; delete the `schedule:` block to
+make the audit manual instead.
+
+That action is pinned to a commit SHA rather than a tag, unlike `actions/checkout` and
+`actions/upload-artifact`. It is third-party and it is handed a token, and a tag is a
+moving pointer — those two together are where a pin earns its maintenance cost.
+Dependabot moves the pin and rewrites the version comment beside it, so it stays a pin
+rather than becoming a fossil.
 
 ## Template packs
 

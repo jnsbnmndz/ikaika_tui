@@ -1,0 +1,42 @@
+# Keeps the actions in .github/workflows current. This is the half that opens the pull
+# requests; .github/workflows/actions-audit.yml is the half that notices when nobody
+# merged one.
+#
+#
+# WHY THE WRITING HALF IS THE ONE WITH NO CREDENTIAL
+#
+# GitHub forbids a workflow's own GITHUB_TOKEN from editing workflow files, so anything
+# that runs AS a workflow needs a Personal Access Token with `workflow` scope to change
+# one - a long-lived secret in this repository able to rewrite release.yml, which is the
+# file that signs and publishes. Dependabot is not a workflow and needs no token at all.
+# So the job that actually edits these files is done by the thing that needs no
+# credential to do it, and the third-party action beside it never writes.
+#
+# It also does something the other half cannot: a SECURITY update pins to the minimum
+# patched version rather than to the newest release, which is the better answer when the
+# newest one also carries a behaviour change.
+#
+#
+# ONE PULL REQUEST, NOT ONE PER ACTION
+#
+# Three distinct actions across three workflows. Three pull requests a week, each a
+# one-line version bump, is how reviewing them becomes stamping them - so they are
+# grouped into one.
+#
+# The SHA-pinned reference is covered like any other: Dependabot moves the pin and
+# rewrites the version comment beside it, which is what keeps a pin from becoming a
+# fossil. Only actions written as owner/repo@ref are covered - not a local ./path, and
+# not a Docker registry reference.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore
+    open-pull-requests-limit: 3
