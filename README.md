@@ -18,7 +18,13 @@ python -m company_tui --start scripts  # open straight on a capability
 python -m company_tui list             # plain stdout, scriptable
 python -m company_tui doctor           # plain stdout, scriptable
 python -m company_tui check            # the gate: tests, list and doctor
+python -m company_tui --version        # the same version the header shows
 ```
+
+`--help` lays the four commands out rather than printing argparse's bare
+`{tui,list,doctor,check}`, and both the program name and the description come out of
+`domain/naming.py` — they were the literal `"company"` and `"Company developer toolbox"`
+long after nothing answered to that name.
 
 Install the console command locally when needed. Two names are installed for one entry point — `dti` is what the product is called, and `company` is kept so anything already invoking it keeps working:
 
@@ -219,6 +225,48 @@ It also adds the install directory to your **user** PATH, so the app starts by t
 `dti` in any terminal opened afterwards. Pass `/NOPATH` to skip that. An already-open
 terminal keeps the environment it started with — that is Windows, not the
 installer, and the finish page says so.
+
+### A debug build installs beside the release, not over it
+
+Everything that identifies an install derives from one define, so the two cannot collide:
+
+| | release | debug (prerelease) |
+|---|---|---|
+| Directory | `%LOCALAPPDATA%\Programs\dti` | `…\Programs\dti-debug` |
+| Add/Remove entry | Developer Toolbox Inventory | Developer Toolbox Inventory **(debug)** |
+| Settings key | `…\dti` | `…\dti-debug` |
+| On PATH | yes, unless `/NOPATH` | **no**, unless `/PATH` |
+
+That is not tidiness. `UNINSTALL_KEY` used to be shared, and the upgrade path reads it —
+so installing a debug build ran the *release* build's uninstaller, took its PATH entry
+with it, and installed the debug tree into the release's directory. One name, two
+products, and the second silently ate the first.
+
+The PATH default inverts because both builds install an executable of the same name. Two
+of them on PATH means `dti` is whichever directory comes first — an order that changes
+whenever anything else edits PATH, is invisible from the prompt, and whose wrong answer
+looks exactly like the right one. Worse than typing a path, so a debug build stays off it
+and its finish page gives you the full path instead. `/PATH` opts in if you want it
+anyway.
+
+The store under `~/.dti` is **shared** between them, because the app derives it from its
+own name rather than from which build it is. So settings, remembered tabs and cloned
+script repositories are common to both — which is also why neither uninstaller removes
+it, on top of it holding work nobody should delete to tidy up.
+
+### An update is not an install, and says so
+
+When a version is already recorded, "Choose Install Location" is not shown. The answer is
+already settled — `$INSTDIR` comes back out of the settings key — and browsing elsewhere
+would leave the old copy installed, on PATH, and first in line. The page header reads
+*Updating … Replacing 0.0.1+2 with 0.0.1+3*, the window is retitled Update, and the
+details log names the transition.
+
+What an uninstall deliberately leaves is `~/.dti`, and it now says so in its details
+rather than leaving you to find out. The one thing there that is genuinely rubbish is the
+downloaded installer cache, and neither installer can tell a stale one from the copy
+currently being offered — so the app sweeps it itself, at the only moment anything knows
+the difference.
 
 The exe inside the package is called `dti.exe`, not `dti-0.1.0+2.exe`. The FOLDER
 under `dist/` carries the version so two builds can sit side by side; the command does

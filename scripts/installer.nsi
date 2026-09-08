@@ -105,28 +105,47 @@
   !error "PUBLISHER is required."
 !endif
 
-!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
-!define SETTINGS_KEY "Software\${PUBLISHER}\${APP_NAME}"
-
+; A DEBUG BUILD IS A SEPARATE INSTALL, NOT A REPLACEMENT
+;
+; Everything that identifies an install derives from INSTALL_SLUG: the directory, the
+; Add/Remove entry, the settings key, the Start Menu folder. One define, so the four
+; cannot end up disagreeing about which install is which.
+;
+; This is not tidiness. UNINSTALL_KEY was shared, and UninstallPrevious reads it - so
+; installing a debug build ran the RELEASE build's uninstaller, took its PATH entry with
+; it, and then installed the debug tree into the release's directory. One name, two
+; products, and the second one silently ate the first.
+;
+; The version stays out of all four. A per-version directory would leave every build ever
+; installed on the disk, and an upgrade would have nothing to find and replace.
 !ifdef RELEASED
   !define BUILD_KIND "release"
+  !define INSTALL_SLUG "${APP_NAME}"
+  !define DISPLAY_NAME "${APP_TITLE}"
 !else
   !define BUILD_KIND "debug"
+  !define INSTALL_SLUG "${APP_NAME}-debug"
+  ; Named in the title bar, in Add/Remove Programs and on the Start Menu, because two
+  ; entries differing only in a version number is a choice nobody can make.
+  !define DISPLAY_NAME "${APP_TITLE} (debug)"
 !endif
 
-Name "${APP_TITLE} ${VERSION}"
+!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALL_SLUG}"
+!define SETTINGS_KEY "Software\${PUBLISHER}\${INSTALL_SLUG}"
+
+Name "${DISPLAY_NAME} ${VERSION}"
 OutFile "${OUT_FILE}"
 Unicode true
 RequestExecutionLevel user
-InstallDir "$LOCALAPPDATA\Programs\${APP_NAME}"
+InstallDir "$LOCALAPPDATA\Programs\${INSTALL_SLUG}"
 InstallDirRegKey HKCU "${SETTINGS_KEY}" "InstallDir"
 SetCompressor /SOLID lzma
 ShowInstDetails show
 ShowUninstDetails show
 
 VIProductVersion "${VI_VERSION}"
-VIAddVersionKey "ProductName" "${APP_TITLE}"
-VIAddVersionKey "FileDescription" "${APP_TITLE} installer"
+VIAddVersionKey "ProductName" "${DISPLAY_NAME}"
+VIAddVersionKey "FileDescription" "${DISPLAY_NAME} installer"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${PUBLISHER}"
@@ -142,10 +161,18 @@ VIAddVersionKey "Comments" "${BUILD_KIND} build"
 !include "FileFunc.nsh"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE_NAME}"
-!define MUI_FINISHPAGE_RUN_TEXT "Open ${APP_TITLE}"
-!define MUI_FINISHPAGE_TEXT "${APP_TITLE} ${VERSION} is installed.$\r$\n$\r$\n\
+!define MUI_FINISHPAGE_RUN_TEXT "Open ${DISPLAY_NAME}"
+!ifdef RELEASED
+!define MUI_FINISHPAGE_TEXT "${DISPLAY_NAME} ${VERSION} is installed.$\r$\n$\r$\n\
 Open a new terminal and type  ${APP_NAME}  to start it.$\r$\n\
 An already-open terminal will not have picked up the change yet."
+!else
+; No command to promise: see the PATH block below for why a debug build stays off it.
+!define MUI_FINISHPAGE_TEXT "${DISPLAY_NAME} ${VERSION} is installed, beside your \
+release build rather than over it.$\r$\n$\r$\n\
+Start it from the Start Menu, or run it directly:$\r$\n\
+$INSTDIR\${EXE_NAME}"
+!endif
 
 ; Both pages ask whether this is an update before they draw, which is why the value is
 ; read in .onInit rather than in the section that uses it.
@@ -185,19 +212,19 @@ FunctionEnd
 ; Retitled at all because `Caption` is compile-time and one installer serves both events.
 Function SkipDirectoryWhenUpdating
   StrCmp $Updating "1" 0 shown
-    SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:${APP_TITLE} ${VERSION} Update"
+    SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:${DISPLAY_NAME} ${VERSION} Update"
     Abort
   shown:
 FunctionEnd
 
 Function SayWhichThisIs
   StrCmp $Updating "1" 0 installing
-    !insertmacro MUI_HEADER_TEXT "Updating ${APP_TITLE}" \
+    !insertmacro MUI_HEADER_TEXT "Updating ${DISPLAY_NAME}" \
       "Replacing $PreviousVersion with ${VERSION}."
     Goto done
   installing:
-    !insertmacro MUI_HEADER_TEXT "Installing ${APP_TITLE}" \
-      "Setting up ${APP_TITLE} ${VERSION}."
+    !insertmacro MUI_HEADER_TEXT "Installing ${DISPLAY_NAME}" \
+      "Setting up ${DISPLAY_NAME} ${VERSION} in $INSTDIR."
   done:
 FunctionEnd
 
@@ -261,7 +288,7 @@ Section "Install"
 
   ; What Add/Remove Programs reads. EstimatedSize is in KB and is what stops the entry
   ; showing a blank size, which reads as a broken install.
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP_TITLE}"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${DISPLAY_NAME}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "${PUBLISHER}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${EXE_NAME}"
@@ -274,26 +301,46 @@ Section "Install"
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" "$0"
 
-  CreateDirectory "$SMPROGRAMS\${APP_TITLE}"
-  CreateShortcut "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk" "$INSTDIR\${EXE_NAME}"
-  CreateShortcut "$SMPROGRAMS\${APP_TITLE}\Uninstall ${APP_TITLE}.lnk" "$INSTDIR\Uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\${DISPLAY_NAME}"
+  CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}\${DISPLAY_NAME}.lnk" "$INSTDIR\${EXE_NAME}"
+  CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}\Uninstall ${DISPLAY_NAME}.lnk" "$INSTDIR\Uninstall.exe"
 
   ; After the files, so a failure here leaves a working install rather than a
   ; PATH entry pointing at a directory that was never populated.
   ;
   ; ${GetOptions} sets the error flag when the switch is absent, so the flag is
   ; cleared first - a stale one from any earlier call would read as /NOPATH.
+  ;
+  ; A RELEASE GOES ON PATH; A DEBUG BUILD DOES NOT, UNLESS ASKED
+  ;
+  ; Both install an executable of the same name, so two of them on PATH means the
+  ; command means whichever directory comes first. That order changes when anything
+  ; else edits PATH, it is invisible from the prompt, and the wrong answer looks
+  ; exactly like the right one - which is worse than having to type a path. So the
+  ; switch inverts: /NOPATH opts a release out, /PATH opts a debug build in.
   ClearErrors
   ${GetParameters} $R0
+!ifdef RELEASED
   ${GetOptions} $R0 "/NOPATH" $R1
+  ; Error flag set = the switch was absent = add it.
   IfErrors 0 pathSkipped
+!else
+  ${GetOptions} $R0 "/PATH" $R1
+  ; The other way round: absent = leave PATH alone.
+  IfErrors pathSkipped 0
+!endif
     InitPluginsDir
     File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
     !insertmacro EditPath add
     WriteRegStr HKCU "${SETTINGS_KEY}" "OnPath" "1"
     Goto pathDone
   pathSkipped:
+!ifdef RELEASED
     DetailPrint "PATH: skipped, /NOPATH was given"
+!else
+    DetailPrint "PATH: not touched - this is a debug build. Pass /PATH to add it,"
+    DetailPrint "  but then  ${APP_NAME}  means whichever copy PATH finds first."
+!endif
     WriteRegStr HKCU "${SETTINGS_KEY}" "OnPath" "0"
   pathDone:
 
@@ -309,9 +356,9 @@ Section "Uninstall"
   File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
   !insertmacro EditPath remove
 
-  Delete "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk"
-  Delete "$SMPROGRAMS\${APP_TITLE}\Uninstall ${APP_TITLE}.lnk"
-  RMDir "$SMPROGRAMS\${APP_TITLE}"
+  Delete "$SMPROGRAMS\${DISPLAY_NAME}\${DISPLAY_NAME}.lnk"
+  Delete "$SMPROGRAMS\${DISPLAY_NAME}\Uninstall ${DISPLAY_NAME}.lnk"
+  RMDir "$SMPROGRAMS\${DISPLAY_NAME}"
 
   ; The whole tree, because everything in it was written by the installer. Settings live
   ; under the user's home rather than here, so nothing anybody typed is in this directory.
@@ -324,6 +371,12 @@ Section "Uninstall"
   ; script repositories cloned for editing - somebody's work, which an uninstaller has no
   ; business deleting to tidy up after itself. Named so that leaving it is a decision the
   ; user can see and act on rather than a surprise they find later.
-  DetailPrint "Left in place: $PROFILE\.${APP_NAME} - settings, tabs and cloned scripts."
+  ;
+  ; It is also SHARED: the release build and the debug build install to separate
+  ; directories but read the same store, because the app derives it from its own name and
+  ; not from which build it is. So removing it here would take the other install's
+  ; settings and tabs with it, which is a second reason on top of the first.
+  DetailPrint "Left in place: $PROFILE\.${APP_NAME} - settings, tabs and cloned scripts,"
+  DetailPrint "  shared with the other build if you have one installed."
   DetailPrint "Delete that folder by hand if you want nothing left behind."
 SectionEnd

@@ -44,6 +44,17 @@ answer to what a release is, and it is the one nobody can run locally.
 .\script.ps1 build-installer -Sign        # wrap it in NSIS
 ```
 
+A debug build is a **separate install**, not a replacement: directory, Add/Remove entry,
+settings key and Start Menu folder all derive from `INSTALL_SLUG` (`dti` or `dti-debug`),
+because `UNINSTALL_KEY` was shared and the upgrade path reads it — so installing a debug
+build ran the release build's uninstaller and then installed over its directory. The PATH
+default inverts with it: a release goes on unless `/NOPATH`, a debug build stays off
+unless `/PATH`, since two copies of the same exe name on PATH means the command is
+whichever directory comes first. The store under `~/.dti` is shared between them, which is
+a second reason no uninstaller removes it. An update skips the directory page — the
+location is already settled and browsing elsewhere would leave the old copy installed and
+first on PATH — and says *Updating* in the header, the caption and the log.
+
 The installer is per-user, adds its directory to the user PATH so the app starts by
 typing `dti` (`/NOPATH` opts out), and installs `dti.exe` rather than a version-named
 exe — the folder under `dist/` carries the version, the command does not. **The
