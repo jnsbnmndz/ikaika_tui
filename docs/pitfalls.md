@@ -195,6 +195,37 @@ again, at every launch, forever.
 file is still there, and what it holds is still newer than what is running.
 `UpdateWatch._remembered` does all three and clears the state when the third fails.
 
+### 6.3 A test's placeholder path became a delete target
+
+`UpdateWatch` takes its download cache as a constructor argument, and the tests passed
+`Path(".")` — the working directory, which is the repository root. Harmless when written:
+the cache was only ever *read* from.
+
+Then `_discard` was added, to clear the stale installer after an update. It iterates the
+cache and unlinks what it finds. Every test that reached it emptied the repository root:
+`README.md`, `CLAUDE.md`, `VERSION`, `pyproject.toml`, `script.ps1`, `uv.lock` and
+`.gitignore`, leaving the directories behind. It happened **twice** — once on the run that
+introduced it, and again on the next `check-all`, before anyone worked out that running
+the tests was what did it.
+
+Three things made it worse than a lost afternoon. `.gitignore` going unmasked `certs/` and
+`.dti_configs/signing.env`, so the next `git add -A` would have committed the signing key
+and its password. `pyproject.toml` going took ruff's rule selection with it, so the lint
+began failing on rules this project does not enable — which is the exact failure that
+file's own comment describes. And the run reported `FAIL version — No VERSION file`, which
+reads as a bug in the version check rather than as the tests having deleted it.
+
+**Rule.** A destructive loop does not trust a path it was handed. `_discard` refuses any
+directory not named `updates` and deletes only `.exe` and `.part` — either guard alone
+would have prevented this. And no test points a real path at the working directory:
+`_scratch_cache` builds a temporary directory that is genuinely named like the cache, so
+the guard is not what makes the tests pass.
+
+`tests/test_auto_update.py::TheSweepDoesNotTrustItsPath` asserts both guards against a
+directory shaped like the one that got emptied — `VERSION` and `.gitignore` included —
+because "no test does that any more" is a promise about the tests, and this needs to be a
+property of the code.
+
 ---
 
 ## 7. An argument list is not a list of arguments

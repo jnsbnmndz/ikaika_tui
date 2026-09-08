@@ -19,6 +19,20 @@ knows when there is something to install, and the interface knows whether the pe
 front of it said yes.
 
 
+IT ALSO CLEANS UP AFTER ITSELF, BECAUSE NOTHING ELSE CAN
+
+A downloaded installer is thirty megabytes, and there is one per version. The installer
+cannot delete them - they live under the user's home, which it deliberately never touches,
+and it has no way to tell a stale one from the one currently being offered. The uninstaller
+cannot either, for the same reason plus a better one: that directory also holds settings
+and the script repositories the user edits, and an uninstall that deleted those would be
+destroying work.
+
+So the sweep is here, at the only moment anything knows the difference: when the version
+that installer held is the version now running, it is rubbish, and `_discard` removes it.
+That is also the moment `.part` files from an interrupted download go.
+
+
 THE COMPARISON IS THE SAME ONE THE MANUAL CHECK MAKES
 
 `choose` then `newer_than`, out of `domain/updates.py`. Deliberately not a second
@@ -28,6 +42,7 @@ how an app offers a downgrade.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -47,6 +62,13 @@ from company_tui.domain.updates import (
     due,
     parse_version,
 )
+
+SWEEPABLE = frozenset({".exe", ".part"})
+"""The only suffixes `_discard` will delete.
+
+Nothing else is ever written to the cache, so this costs nothing - and it is the second
+half of making a delete loop safe to hand a path. See `_discard`.
+"""
 
 CACHE_DIRECTORY = "updates"
 """Where a fetched installer waits, under the toolbox's own store directory.
@@ -129,7 +151,11 @@ class UpdateWatch:
             return None
         available = parse_version(state.tag)
         if not available.newer_than(installed):
+            # The update happened: this is the installer that produced the version
+            # now running. Thirty megabytes of nothing, and the only moment anything
+            # is in a position to know that.
             self._state.save(UpdateState(checked_at=state.checked_at))
+            self._discard()
             return None
         return UpdateReport(
             tag=state.tag,
@@ -171,6 +197,8 @@ class UpdateWatch:
                 problem="the installer could not be downloaded",
             )
 
+        # The previous version's installer, if one is still sitting here.
+        self._discard(keep=installer)
         self._state.save(
             UpdateState(checked_at=now, tag=latest.tag, installer=str(installer))
         )
@@ -189,7 +217,51 @@ class UpdateWatch:
         what is already installed at every launch until something overwrote it.
         """
         self._state.save(UpdateState(checked_at=now))
+        self._discard()
         return NOTHING_TO_REPORT
+
+    def _discard(self, keep: Path | None = None) -> None:
+        """Empty the download cache, except for a file being kept.
+
+        `keep` is the installer just fetched: sweeping after a successful download is
+        how the PREVIOUS version's installer goes, and doing it without an exception
+        would delete the thing about to be offered.
+
+
+        IT DOES NOT TRUST THE PATH IT WAS CONSTRUCTED WITH
+
+        This is a loop that deletes files in a directory that arrived as a constructor
+        argument, and the first version of it trusted that argument completely. A test
+        passed `Path(".")` as a placeholder that looked harmless when it was written -
+        the cache was only ever read from at that point - and the sweep emptied the
+        repository root. Every file, twice, before anybody worked out why.
+
+        So two guards, either of which would have been enough, because the cost of
+        being wrong here is not proportionate to the cost of checking:
+
+        - the directory has to BE the cache, by name. `updates` is not a name anybody
+          runs a program from, and a path that is not it is not swept at all.
+        - only `.exe` and its `.part` are deleted. Those are the only things written
+          here, so the restriction costs nothing and takes documents, source and
+          settings off the table even inside the right directory.
+
+        Directories are skipped rather than recursed for the same reason: "remove
+        everything under a path built from configuration" is not a line worth having,
+        and this file said so before it had one. docs/pitfalls.md 6.3.
+
+        Every failure is swallowed. A file that will not delete is a file Windows has
+        open, and next launch will get it; taking the update check down over disk
+        housekeeping would trade a real feature for a tidy directory.
+        """
+        if self._cache.name != CACHE_DIRECTORY or not self._cache.is_dir():
+            return
+        for entry in self._cache.iterdir():
+            if not entry.is_file() or entry.suffix not in SWEEPABLE:
+                continue
+            if keep is not None and entry == keep:
+                continue
+            with suppress(OSError):
+                entry.unlink()
 
     async def _fetch(self, release: Release) -> Path | None:
         if not release.asset_url:

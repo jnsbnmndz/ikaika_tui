@@ -22,7 +22,7 @@ from tempfile import TemporaryDirectory
 from textual.app import App
 from textual.widgets import Static
 
-from company_tui.application.updates import UpdateWatch, _safe_name
+from company_tui.application.updates import CACHE_DIRECTORY, UpdateWatch, _safe_name
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.updates import (
     CHECK_INTERVAL_HOURS,
@@ -138,6 +138,22 @@ class _Handover(HandoverPort):
         return self.problem
 
 
+def _scratch_cache(case: unittest.TestCase) -> Path:
+    """A real, empty cache directory that goes away with the test.
+
+    NEVER `Path(".")`. That was the placeholder here while the cache was only ever read
+    from, and it stopped being harmless the moment `_discard` learned to delete: the
+    sweep emptied the repository root, every file of it. `_discard` now refuses any
+    directory not named `updates`, and this makes sure no test ever asks it to.
+    docs/pitfalls.md 6.3.
+    """
+    folder = TemporaryDirectory()
+    case.addCleanup(folder.cleanup)
+    cache = Path(folder.name) / CACHE_DIRECTORY
+    cache.mkdir()
+    return cache
+
+
 def _release(tag: str, *, asset: str = "dti-setup.exe", url: str = "https://x/i.exe"):
     return Release(
         tag=tag,
@@ -187,7 +203,7 @@ class Looking(unittest.TestCase):
             state=state or _State(),
             handover=handover or _Handover(),
             version=version,
-            cache=cache or Path("."),
+            cache=cache if cache is not None else _scratch_cache(self),
         )
 
     def test_an_unconfigured_source_asks_nothing_and_says_nothing(self):
@@ -301,7 +317,7 @@ class RememberingWhatWasFetched(unittest.TestCase):
             state=state,
             handover=_Handover(),
             version=version,
-            cache=Path("."),
+            cache=_scratch_cache(self),
         )
 
     def test_an_installer_already_here_needs_no_request_at_all(self):
@@ -368,7 +384,7 @@ class HandingOver(unittest.TestCase):
             state=_State(),
             handover=handover,
             version="0.0.1+1",
-            cache=Path("."),
+            cache=_scratch_cache(self),
         )
         self.assertIn("no installer", watch.hand_over(UpdateReport()))
         self.assertEqual([], handover.armed)
@@ -382,7 +398,7 @@ class HandingOver(unittest.TestCase):
             state=_State(),
             handover=handover,
             version="0.0.1+1",
-            cache=Path("."),
+            cache=_scratch_cache(self),
         )
         report = UpdateReport(
             tag="v0.0.2+4",
@@ -466,6 +482,157 @@ class TheStateFile(unittest.TestCase):
             path = Path(folder) / "updates.json"
             path.write_text('{"version": 99, "installer": "C:/evil.exe"}', encoding="utf-8")
             self.assertEqual(UpdateState(), FileUpdateState(path).load())
+
+
+class SweepingTheCache(unittest.TestCase):
+    """Thirty megabytes per version, and nothing else is in a position to remove it.
+
+    The installer never touches the user's home; the uninstaller must not, because that
+    directory also holds settings and the script repositories somebody edits. So the only
+    thing that can tell a stale installer from the one being offered is the check that
+    knows which version is running.
+    """
+
+    def _watch(self, feed, state, cache, *, version="0.0.1+1"):
+        return UpdateWatch(
+        config=_Config(UpdateSource(repository="a/b")),
+        feed=feed,
+        downloads=_Downloads(),
+        state=state,
+        handover=_Handover(),
+        version=version,
+        cache=cache,
+        )
+
+    def test_the_installer_for_the_running_version_is_deleted(self):
+        # THE RESIDUE THIS EXISTS FOR: the update happened, so this file produced the
+        # version doing the asking. Nothing else will ever come back for it.
+        cache = _scratch_cache(self)
+        installer = cache / "dti-0.0.1-setup.exe"
+        installer.write_bytes(b"installer")
+        state = _State(
+            UpdateState(
+                checked_at=datetime.now(UTC).isoformat(),
+                tag="v0.0.1+1",
+                installer=str(installer),
+            )
+        )
+        asyncio.run(self._watch(_Feed(), state, cache, version="0.0.1+1").look())
+        self.assertFalse(installer.exists(), "the update happened; this is rubbish")
+
+    def test_a_part_file_from_an_interrupted_download_goes_too(self):
+        cache = _scratch_cache(self)
+        partial = cache / "dti-setup.exe.part"
+        partial.write_bytes(b"half")
+        state = _State(UpdateState(checked_at=_stamp(9)))
+        asyncio.run(self._watch(_Feed(), state, cache).look())
+        self.assertFalse(partial.exists())
+
+    def test_a_fresh_download_survives_its_own_sweep(self):
+        # The sweep runs after a successful download, to clear the PREVIOUS version's
+        # installer. Without the exception it would delete what it just fetched.
+        cache = _scratch_cache(self)
+        stale = cache / "dti-0.0.1-setup.exe"
+        stale.write_bytes(b"old")
+        feed = _Feed((_release("v0.0.2+4-released"),))
+        report = asyncio.run(self._watch(feed, _State(), cache).look())
+        self.assertTrue(report.waiting)
+        self.assertTrue(Path(report.installer).is_file(), "it must keep what it fetched")
+        self.assertFalse(stale.exists(), "and drop what it replaced")
+
+    def test_a_directory_in_the_cache_is_left_alone(self):
+        # "Remove everything under a path built from configuration" is not a line worth
+        # having, so the sweep skips directories rather than recursing.
+        cache = _scratch_cache(self)
+        nested = cache / "somebody-elses-folder"
+        nested.mkdir()
+        (nested / "keep.txt").write_text("keep", encoding="utf-8")
+        state = _State(UpdateState(checked_at=_stamp(9)))
+        asyncio.run(self._watch(_Feed(), state, cache).look())
+        self.assertTrue((nested / "keep.txt").exists())
+
+    def test_a_missing_cache_directory_is_not_an_error(self):
+        # Named `updates`, so the name guard is not what makes this pass.
+        cache = _scratch_cache(self) / "gone" / CACHE_DIRECTORY
+        state = _State(UpdateState(checked_at=_stamp(9)))
+        asyncio.run(self._watch(_Feed(), state, cache).look())
+        self.assertFalse(cache.exists())
+
+    def test_an_installer_still_being_offered_is_not_swept(self):
+        # Nothing newer was found, but the remembered installer IS newer than what is
+        # running — so the remembered path short-circuits before any sweep.
+        cache = _scratch_cache(self)
+        installer = cache / "dti-0.0.2-setup.exe"
+        installer.write_bytes(b"installer")
+        state = _State(
+            UpdateState(
+                checked_at=datetime.now(UTC).isoformat(),
+                tag="v0.0.2+4",
+                installer=str(installer),
+            )
+        )
+        report = asyncio.run(self._watch(_Feed(), state, cache).look())
+        self.assertTrue(report.waiting)
+        self.assertTrue(installer.exists(), "it is the thing being offered")
+
+
+class TheSweepDoesNotTrustItsPath(unittest.TestCase):
+    """The regression that ate this repository's root, twice.
+
+    `_discard` is a loop that deletes files in a directory handed to the constructor. A
+    test passed `Path(".")` as a placeholder - harmless when it was written, because the
+    cache was only ever read from - and the sweep emptied every file at the repository
+    root. `.gitignore` with it, which then unmasked the signing keys.
+
+    Both guards are asserted here, either of which would have prevented it. The tests
+    above no longer point the cache anywhere real, but "no test does that any more" is a
+    promise about the tests; this is a property of the code.
+    """
+
+    def _watch(self, cache: Path) -> UpdateWatch:
+        return UpdateWatch(
+            config=_Config(UpdateSource(repository="a/b")),
+            feed=_Feed(),
+            downloads=_Downloads(),
+            state=_State(),
+            handover=_Handover(),
+            version="0.0.1+1",
+            cache=cache,
+        )
+
+    def test_a_directory_that_is_not_the_cache_is_left_completely_alone(self):
+        with TemporaryDirectory() as folder:
+            # Shaped like the thing that actually got deleted.
+            root = Path(folder)
+            (root / "VERSION").write_text("0.0.1+1", encoding="utf-8")
+            (root / ".gitignore").write_text("certs/", encoding="utf-8")
+            (root / "dti-setup.exe").write_bytes(b"even this")
+
+            self._watch(root)._discard()
+
+            self.assertTrue((root / "VERSION").exists())
+            self.assertTrue((root / ".gitignore").exists())
+            self.assertTrue(
+                (root / "dti-setup.exe").exists(),
+                "the name of the directory decides it, before the name of the file",
+            )
+
+    def test_inside_the_cache_only_installers_go(self):
+        with TemporaryDirectory() as folder:
+            cache = Path(folder) / CACHE_DIRECTORY
+            cache.mkdir()
+            (cache / "dti-setup.exe").write_bytes(b"installer")
+            (cache / "dti-setup.exe.part").write_bytes(b"half")
+            (cache / "notes.txt").write_text("mine", encoding="utf-8")
+
+            self._watch(cache)._discard()
+
+            self.assertFalse((cache / "dti-setup.exe").exists())
+            self.assertFalse((cache / "dti-setup.exe.part").exists())
+            self.assertTrue(
+                (cache / "notes.txt").exists(),
+                "the suffix guard is the second half, and costs nothing",
+            )
 
 
 class TheBadge(unittest.IsolatedAsyncioTestCase):

@@ -23,6 +23,32 @@
 ; machine an Add/Remove entry for something they do not have.
 ;
 ;
+; AN UPGRADE SAYS SO, AND DOES NOT ASK WHERE TO INSTALL
+;
+; A first install and an update are the same files landing in the same place, and they are
+; not the same event to the person watching. "Choose Install Location", with a destination
+; folder and a Browse button, is a question on a first install and a trap on an update: the
+; answer is already settled - $INSTDIR comes back out of SETTINGS_KEY\InstallDir - and a
+; browse to somewhere else would leave the old copy installed, on PATH, and first in line.
+;
+; So the directory page is skipped when a version is already recorded, the page headers say
+; Update rather than Install, and the details log names the version being replaced.
+; $PreviousVersion is read once in .onInit, before any page could ask about it.
+;
+;
+; WHAT AN UNINSTALL DELIBERATELY LEAVES
+;
+; Everything under the user's home: settings, remembered tabs, and the script repositories
+; cloned into ~/.dti - which are the copies the user EDITS. Removing those would be
+; deleting somebody's work to tidy up after a program, so the uninstaller says what it is
+; leaving instead of taking it.
+;
+; The downloaded installers under ~/.dti/updates are the one thing there that is genuinely
+; rubbish, and they are not removed here either: this installer cannot tell a stale one
+; from the copy currently being offered. The app sweeps them itself at the only moment
+; anything knows the difference - see `application/updates.py`.
+;
+;
 ; AN UPGRADE UNINSTALLS THE OLD COPY FIRST
 ;
 ; A PyInstaller folder's contents change between versions, and copying a new build over an
@@ -108,6 +134,9 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 VIAddVersionKey "Comments" "${BUILD_KIND} build"
 
 !include "MUI2.nsh"
+; ${WM_SETTEXT}, for retitling the window when this turns out to be an update. The
+; `Caption` command is compile-time and one installer serves both cases.
+!include "WinMessages.nsh"
 ; ${GetSize}, used below for the Add/Remove size. Not built in - without this the
 ; compiler reports it as an invalid command rather than an undefined macro.
 !include "FileFunc.nsh"
@@ -118,12 +147,59 @@ VIAddVersionKey "Comments" "${BUILD_KIND} build"
 Open a new terminal and type  ${APP_NAME}  to start it.$\r$\n\
 An already-open terminal will not have picked up the change yet."
 
+; Both pages ask whether this is an update before they draw, which is why the value is
+; read in .onInit rather than in the section that uses it.
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryWhenUpdating
 !insertmacro MUI_PAGE_DIRECTORY
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SayWhichThisIs
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
+
+Var PreviousVersion
+Var Updating
+
+; Read once, before the first page. Read from SETTINGS_KEY rather than from the uninstall
+; key: this is the same value $INSTDIR is recovered from, so the two cannot disagree about
+; whether there is an install here.
+Function .onInit
+  ReadRegStr $PreviousVersion HKCU "${SETTINGS_KEY}" "Version"
+  StrCpy $Updating "0"
+  StrCmp $PreviousVersion "" +2
+    StrCpy $Updating "1"
+FunctionEnd
+
+; The location is settled on an update, so the page that asks about it is not shown.
+; Abort from a PRE function skips the page rather than cancelling the installer.
+;
+; The caption is retitled here too, and the placement took two attempts worth recording.
+; NOT .onInit: $HWNDPARENT is not a window yet, so the SendMessage goes nowhere and fails
+; silently - the value is read, the branch is taken, and the title bar still says Setup.
+; NOT .onGUIInit either: MUI2 defines that function itself, and a second one is a compile
+; error ("Function named .onGUIInit already exists"), which at least says so out loud.
+; This is the first page callback, it runs before anything is drawn, and it runs whether or
+; not the page it belongs to is shown.
+;
+; Retitled at all because `Caption` is compile-time and one installer serves both events.
+Function SkipDirectoryWhenUpdating
+  StrCmp $Updating "1" 0 shown
+    SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:${APP_TITLE} ${VERSION} Update"
+    Abort
+  shown:
+FunctionEnd
+
+Function SayWhichThisIs
+  StrCmp $Updating "1" 0 installing
+    !insertmacro MUI_HEADER_TEXT "Updating ${APP_TITLE}" \
+      "Replacing $PreviousVersion with ${VERSION}."
+    Goto done
+  installing:
+    !insertmacro MUI_HEADER_TEXT "Installing ${APP_TITLE}" \
+      "Setting up ${APP_TITLE} ${VERSION}."
+  done:
+FunctionEnd
 
 ; Silently removes whatever is installed, so a new build never lands on top of an old
 ; one's leftovers. Quoted with two levels because ExecWait takes one command line and the
@@ -165,6 +241,15 @@ FunctionEnd
 !macroend
 
 Section "Install"
+  ; Labels rather than relative jumps. A `+3` here is correct until somebody inserts a
+  ; line above it, and then it is silently one instruction wrong.
+  StrCmp $Updating "1" 0 sayInstalling
+    DetailPrint "Updating $PreviousVersion to ${VERSION} in $INSTDIR"
+    Goto saidWhich
+  sayInstalling:
+    DetailPrint "Installing ${VERSION} in $INSTDIR"
+  saidWhich:
+
   Call UninstallPrevious
 
   SetOutPath "$INSTDIR"
@@ -234,4 +319,11 @@ Section "Uninstall"
 
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
   DeleteRegKey HKCU "${SETTINGS_KEY}"
+
+  ; Said rather than done. That directory holds the settings, the remembered tabs and the
+  ; script repositories cloned for editing - somebody's work, which an uninstaller has no
+  ; business deleting to tidy up after itself. Named so that leaving it is a decision the
+  ; user can see and act on rather than a surprise they find later.
+  DetailPrint "Left in place: $PROFILE\.${APP_NAME} - settings, tabs and cloned scripts."
+  DetailPrint "Delete that folder by hand if you want nothing left behind."
 SectionEnd
