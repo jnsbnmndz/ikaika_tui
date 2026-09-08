@@ -113,14 +113,43 @@ Which means a release has to be **tagged**. `bump-version` commits and tags but 
 nothing — publishing is a decision, and a build tool that pushes on your behalf is one
 nobody can rehearse.
 
+### The release workflow publishes nothing by default
+
+It is dispatched by hand from the Actions tab, and `tag` — the one input that decides
+whether anything leaves the runner — is **off**:
+
+| Input | Default | What it does |
+|---|---|---|
+| `bump` | `patch` | which part of the version to raise |
+| `released` | off | adds `-released` to the tag and publishes as latest rather than as a prerelease |
+| `sign` | on | sign the artifacts; needs the three signing secrets |
+| `tag` | **off** | commit, tag, push, publish. Off runs `bump-version -WhatIf` and skips the push and the publish |
+| `installer` | on | also wrap the frozen app in the NSIS installer |
+| `clean` | off | clear PyInstaller's cache and work directory first |
+
+So a default run is a **rehearsal**: the gate, a real signed build, a real installer,
+kept as a workflow artifact for a fortnight — and nothing tagged, pushed or published.
+`bump` still reports what a release *would* produce, and the build carries the version
+already in the tree, because that is the version `build-app` stamps.
+
+That default is the same reasoning as `bump-version` not pushing. Publishing is a
+decision somebody makes, not what happens when a form is submitted with everything left
+alone. `tag` with `installer` off is refused before the clone, because the release is
+published with the installer as its only asset.
+
 ### `-released` is what makes a build official
 
-    v1.2.0              a debug build
-    v1.2.0-released     the official release
+    v1.2.0+8              a debug build
+    v1.2.0+8-released     the official release
 
 One version can carry both: the same source is tagged debug while it is being tested
 and released once it ships. Both share one build number, because the number belongs to
-the source. The release workflow publishes debug builds as prereleases, so
+the source — and it is *in the tag*, because that is the number an installer compares.
+A tag carrying only `x.y.z` can be told apart from another build of the same version
+only by fetching the `VERSION` file committed at it, which is a clone away from anything
+reading a release feed. The suffix stays **last**: `Release.official` asks what a tag
+ends with, so `v1.2.0-released+8` — semver's ordering — would read as a debug build and
+never be offered at all. The release workflow publishes debug builds as prereleases, so
 `Check for Updates` — which asks for the latest official release — cannot offer one.
 
 ### Signing

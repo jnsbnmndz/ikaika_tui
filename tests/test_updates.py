@@ -95,6 +95,46 @@ class DecidingWhatIsOfficial(unittest.TestCase):
         # Published as a release but tagged as a debug build.
         self.assertFalse(Release(tag="v1.0.0", prerelease=False).official)
 
+    def test_a_build_number_in_the_tag_does_not_hide_the_suffix(self):
+        # The release workflow tags `v<x.y.z>+<n>-released`, so the suffix is no
+        # longer the end of a bare name.
+        release = Release(tag="v1.0.0+8-released", prerelease=False)
+        self.assertTrue(release.official)
+        self.assertEqual(8, release.version.build)
+
+    def test_the_suffix_has_to_come_after_the_build_number(self):
+        # WHY THE TAG IS `v1.0.0+8-released` AND NOT `v1.0.0-released+8`, which is
+        # semver's ordering and would be the obvious way to write it. `official`
+        # asks what the tag ENDS WITH, so the semver spelling reads as a debug
+        # build - and `include_prereleases` is off, so it would never be offered
+        # at all. Nothing would report an error; the update would just never come.
+        wrong = Release(tag="v1.0.0-released+8", prerelease=False)
+        self.assertFalse(wrong.official)
+
+
+class OfferingABuildOfTheSameVersion(unittest.TestCase):
+    """What putting the build number in the tag is actually for.
+
+    Before it, both sides of this comparison were the same three numbers and the
+    build abstained, so a rebuild of the installed version could never be offered
+    - which is the whole reason the number rises globally.
+    """
+
+    def test_a_higher_build_of_the_installed_version_is_newer(self):
+        installed = parse_version("1.0.0+2")
+        offered = Release(tag="v1.0.0+3-released", prerelease=False).version
+        self.assertTrue(offered.newer_than(installed))
+
+    def test_the_same_build_of_the_installed_version_is_not(self):
+        installed = parse_version("1.0.0+3")
+        offered = Release(tag="v1.0.0+3-released", prerelease=False).version
+        self.assertFalse(offered.newer_than(installed))
+
+    def test_an_older_build_of_the_installed_version_is_not(self):
+        installed = parse_version("1.0.0+4")
+        offered = Release(tag="v1.0.0+3-released", prerelease=False).version
+        self.assertFalse(offered.newer_than(installed))
+
 
 class ChoosingARelease(unittest.TestCase):
     RELEASES = (

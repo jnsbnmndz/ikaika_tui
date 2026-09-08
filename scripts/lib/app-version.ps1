@@ -21,15 +21,27 @@
 # records it, and the next machine hands out the same one.
 #
 #
-# THE TAG NAME SAYS WHICH KIND OF BUILD IT WAS
+# THE TAG NAME CARRIES THE BUILD NUMBER, AND SAYS WHICH KIND OF BUILD IT WAS
 #
-#     v1.2.0              a debug build - what a branch or a local run produces
-#     v1.2.0-released     an official release, signed and published
+#     v1.2.0+8              a debug build - what a branch or a local run produces
+#     v1.2.0+8-released     an official release, signed and published
 #
 # One version can therefore have both, which is the point: the same source is tagged
 # debug while it is being tested and released once it ships, and the suffix is what tells
 # a release feed which of the two to offer. The build number is shared - it belongs to the
 # source, not to the kind of build - so `Get-NextBuildNumber` counts both spellings.
+#
+# The `+n` is in the NAME because that is the number an installer compares, and a tag
+# without it can only be told apart from another build of the same version by fetching the
+# VERSION file committed at it - which is a clone away from anything reading a release
+# feed. `domain/updates.py` has parsed `v1.2.3+4-released` since it was written and had
+# nothing to read it out of; this is what finally puts it there. It also makes every tag
+# unique by construction, since the number never repeats.
+#
+# THE SUFFIX STAYS LAST. `Release.official` asks whether a tag ENDS WITH `-released`, so
+# `v1.2.0-released+8` reads as a debug build and would never be offered as an update.
+# That is not semver's ordering, and semver is not what parses this - nor is `-released` a
+# prerelease, it is the opposite.
 
 Set-StrictMode -Version Latest
 
@@ -76,10 +88,11 @@ function Format-AppVersion($Version) { return "$($Version.Name)+$($Version.Build
 
 # Every version a tag has already claimed, either spelling, as parsed parts.
 #
-# The BUILD NUMBER is read out of the VERSION file AT each tag, not out of the tag's name.
-# A tag is called `v1.1.9`, which parses with a build of 0, so scanning names alone made
-# every tag contribute nothing and "the number comes from the tags" was really "VERSION
-# plus one" - which is exactly the reset the rule exists to prevent, just later.
+# A tag written by this code carries its build number, so the NAME is the answer. Tags
+# written before it did not - `v1.1.9` parses with a build of 0, so reading names alone
+# made every one of them contribute nothing and "the number comes from the tags" was
+# really "VERSION plus one", which is exactly the reset the rule exists to prevent, just
+# later. So a name with no `+n` still falls back to the VERSION file committed AT the tag.
 #
 # `git show <tag>:VERSION` reads the committed file rather than the working tree, so a tag
 # made before VERSION existed simply answers nothing and is skipped.
@@ -97,10 +110,13 @@ function Get-TaggedVersion {
         if ($name.EndsWith($script:ReleasedSuffix)) {
             $name = $name.Substring(0, $name.Length - $script:ReleasedSuffix.Length)
         }
-        if ($name -notmatch '^\d+\.\d+\.\d+$') { continue }
+        if ($name -notmatch $script:VersionPattern) { continue }
 
-        $recorded = "$(& git -C $root show "${tag}:VERSION" 2>$null | Select-Object -First 1)".Trim()
-        $text = if ($recorded -match $script:VersionPattern) { $recorded } else { $name }
+        $text = $name
+        if ($name -notmatch '\+\d+$') {
+            $recorded = "$(& git -C $root show "${tag}:VERSION" 2>$null | Select-Object -First 1)".Trim()
+            if ($recorded -match $script:VersionPattern) { $text = $recorded }
+        }
         $found += (Split-AppVersion $text)
     }
     return $found
@@ -121,9 +137,20 @@ function Test-TagIsFree([string]$Tag) {
     return -not $existing.Count
 }
 
-function Get-TagName([string]$VersionName, [switch]$Released) {
-    if ($Released) { return "v$VersionName$($script:ReleasedSuffix)" }
-    return "v$VersionName"
+# The tag for a version, build number included. See the header for why it is in there and
+# why the suffix has to come after it.
+#
+# Takes the PARSED version rather than its name, so a caller cannot hand over `$v.Name`
+# and get a tag with the number quietly missing - which is what both callers did before
+# the number was part of it, and a silently build-less tag is a tag that contributes
+# nothing to the next build number.
+function Get-TagName($Version, [switch]$Released) {
+    if ($Version -is [string]) {
+        throw "Get-TagName takes a parsed version, not '$Version' - pass (Get-AppVersion) or Split-AppVersion's result."
+    }
+    $text = Format-AppVersion $Version
+    if ($Released) { return "v$text$($script:ReleasedSuffix)" }
+    return "v$text"
 }
 
 

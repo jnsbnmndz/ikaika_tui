@@ -67,7 +67,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 
 $current = Get-AppVersion
 $next = Resolve-NextVersion $Bump
-$tag = Get-TagName $next.Name -Released:$Released
+$tag = Get-TagName $next -Released:$Released
 $kind = if ($Released) { 'official release' } else { 'debug build' }
 
 Write-Host ''
