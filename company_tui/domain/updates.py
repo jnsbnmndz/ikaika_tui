@@ -68,6 +68,35 @@ this default, and a repository written there as empty stays empty.
 
 DEFAULT_API_BASE = "https://api.github.com"
 DEFAULT_ASSET_PATTERN = "*-setup*.exe"
+
+CHANNEL_OFFICIAL = "official"
+CHANNEL_PRERELEASE = "prerelease"
+CHANNEL_ANY = "any"
+CHANNELS = (CHANNEL_OFFICIAL, CHANNEL_PRERELEASE, CHANNEL_ANY)
+"""Which releases are worth offering. Three answers, not two.
+
+This was a boolean, `include_prereleases`, which could only say "official" or "official
+and prereleases too". It had no way to say the thing somebody testing debug builds
+actually wants: the newest PRERELEASE, and never mind the official line.
+
+The distinction is not academic here. Debug builds are cut far more often than official
+ones and carry higher build numbers, so `any` usually lands on a prerelease by accident -
+until the day an official release is newer, and then it silently switches channel. A
+person tracking prereleases wants the prerelease line whatever the official one is doing.
+
+  official     signed with the release certificate, tagged -released. The default.
+  prerelease   debug builds only. Never offers an official release, even a newer one.
+  any          whichever is newest, of either kind.
+"""
+
+CHANNEL_LABELS = {
+    CHANNEL_OFFICIAL: "official releases only",
+    CHANNEL_PRERELEASE: "prereleases only (debug builds)",
+    CHANNEL_ANY: "whichever is newest",
+}
+"""What each channel is called on a form and in a report. Here rather than in the
+interface, because the manual card, the Advanced form and the settings summary all name
+them and three copies of a word is two too many."""
 RELEASED_SUFFIX = "-released"
 
 _VERSION_SHAPE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?")
@@ -106,8 +135,9 @@ class UpdateSource:
     """The API root. Configurable for GitHub Enterprise, and for pointing a test
     at something local without editing code."""
 
-    include_prereleases: bool = False
-    """Offer debug builds too. Off, so `-released` is what a person is offered."""
+    channel: str = CHANNEL_OFFICIAL
+    """Which releases to offer: see `CHANNELS`. Official by default, so a signed
+    build is what somebody is offered unless they asked otherwise."""
 
     asset_pattern: str = DEFAULT_ASSET_PATTERN
     """Which asset of a release is the installer, as a glob."""
@@ -122,6 +152,17 @@ class UpdateSource:
     build-time constant because that is a preference, not a property of the
     program.
     """
+
+    @property
+    def include_prereleases(self) -> bool:
+        """Whether a prerelease can be offered at all.
+
+        Derived rather than stored, because it is the question the older settings key
+        asked and the answer is now a property of the channel. Kept so nothing that only
+        wants the yes/no - a summary line, an exported document - has to learn about
+        three values it does not use.
+        """
+        return self.channel != CHANNEL_OFFICIAL
 
     @property
     def configured(self) -> bool:
@@ -282,19 +323,31 @@ class ReleaseFeedError(RuntimeError):
     """The feed could not be read. Carries what to tell the person who asked."""
 
 
+def wanted(release: Release, channel: str) -> bool:
+    """Whether this release belongs to that channel.
+
+    `prerelease` asks how it was PUBLISHED and `official` asks that plus how it was
+    tagged, which is why the two are not each other's negation: a release marked neither
+    - published as a full release but tagged without `-released` - was made by something
+    other than the workflow, and belongs to `any` alone. Being conservative there is the
+    same reading `Release.official` already takes.
+    """
+    if channel == CHANNEL_ANY:
+        return True
+    if channel == CHANNEL_PRERELEASE:
+        return release.prerelease
+    return release.official
+
+
 def choose(releases: tuple[Release, ...], source: UpdateSource) -> Release | None:
-    """The newest release worth offering, honouring `include_prereleases`.
+    """The newest release worth offering on this source's channel.
 
     The feed's own order is not trusted. GitHub returns releases by creation
     date, and a patch published for an older branch after a newer release would
     then come first - so this sorts by version and only falls back to feed order
     for releases whose tags do not parse.
     """
-    usable = [
-        release
-        for release in releases
-        if source.include_prereleases or release.official
-    ]
+    usable = [release for release in releases if wanted(release, source.channel)]
     if not usable:
         return None
     parsed = [release for release in usable if release.version.valid]

@@ -15,6 +15,9 @@ from company_tui.capabilities.updates import UpdatesCapability
 from company_tui.domain import naming
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.updates import (
+    CHANNEL_ANY,
+    CHANNEL_OFFICIAL,
+    CHANNEL_PRERELEASE,
     DEFAULT_API_BASE,
     DEFAULT_REPOSITORY,
     UNKNOWN_BUILD,
@@ -157,7 +160,7 @@ class ChoosingARelease(unittest.TestCase):
 
     def test_prereleases_are_included_when_asked_for(self):
         chosen = choose(
-            self.RELEASES, UpdateSource(repository="a/b", include_prereleases=True)
+            self.RELEASES, UpdateSource(repository="a/b", channel=CHANNEL_ANY)
         )
         self.assertEqual("v3.0.0", chosen.tag)
 
@@ -177,7 +180,7 @@ class ChoosingARelease(unittest.TestCase):
 
     def test_an_unparseable_tag_is_a_last_resort_not_a_crash(self):
         odd = (Release(tag="nightly", prerelease=False),)
-        chosen = choose(odd, UpdateSource(repository="a/b", include_prereleases=True))
+        chosen = choose(odd, UpdateSource(repository="a/b", channel=CHANNEL_ANY))
         self.assertEqual("nightly", chosen.tag)
 
 
@@ -295,6 +298,52 @@ class _Console:
         self.lines.append(line)
 
 
+class Channels(unittest.TestCase):
+    """Three answers, and the middle one is the reason this is not a boolean.
+
+    `prerelease` has to keep offering the prerelease line even when an official release
+    is newer. That is the whole point for somebody testing debug builds, and it is the
+    case a boolean could not express: `include_prereleases = true` meant "either kind,
+    whichever is newest", which drifts onto the official line the moment one ships.
+    """
+
+    OFFICIAL = Release(tag="v2.0.0+9-released", prerelease=False)
+    DEBUG = Release(tag="v1.5.0+8", prerelease=True)
+    ODD = Release(tag="v3.0.0+7", prerelease=False)
+    """Published as a full release but tagged without -released, so `official` says no.
+    Something other than the workflow made it."""
+
+    def _chosen(self, channel, releases=None):
+        source = UpdateSource(repository="a/b", channel=channel)
+        return choose(releases or (self.OFFICIAL, self.DEBUG), source)
+
+    def test_official_ignores_a_newer_prerelease(self):
+        self.assertEqual(self.OFFICIAL.tag, self._chosen(CHANNEL_OFFICIAL).tag)
+
+    def test_prerelease_ignores_a_newer_official_release(self):
+        # THE POINT OF THE THIRD CHANNEL. 2.0.0+9 is newer than 1.5.0+8 and is not
+        # offered, because somebody on this channel is tracking debug builds.
+        self.assertEqual(self.DEBUG.tag, self._chosen(CHANNEL_PRERELEASE).tag)
+
+    def test_any_takes_whichever_is_newest(self):
+        self.assertEqual(self.OFFICIAL.tag, self._chosen(CHANNEL_ANY).tag)
+
+    def test_prerelease_offers_nothing_when_there_are_none(self):
+        self.assertIsNone(self._chosen(CHANNEL_PRERELEASE, (self.OFFICIAL,)))
+
+    def test_a_release_that_is_neither_belongs_to_any_alone(self):
+        # `official` wants "not prerelease AND tagged -released", `prerelease` asks how
+        # it was published. A release marked neither is nobody's channel but `any`.
+        self.assertIsNone(self._chosen(CHANNEL_OFFICIAL, (self.ODD,)))
+        self.assertIsNone(self._chosen(CHANNEL_PRERELEASE, (self.ODD,)))
+        self.assertEqual(self.ODD.tag, self._chosen(CHANNEL_ANY, (self.ODD,)).tag)
+
+    def test_include_prereleases_is_derived_from_the_channel(self):
+        self.assertFalse(UpdateSource(channel=CHANNEL_OFFICIAL).include_prereleases)
+        self.assertTrue(UpdateSource(channel=CHANNEL_PRERELEASE).include_prereleases)
+        self.assertTrue(UpdateSource(channel=CHANNEL_ANY).include_prereleases)
+
+
 class TheSettingsFileAndTheDefault(unittest.TestCase):
     """Absent and empty are different answers, and the round trip has to keep them apart.
 
@@ -338,6 +387,38 @@ class TheSettingsFileAndTheDefault(unittest.TestCase):
             FileConfig(project=written, user=written.parent / "absent.toml")
             .update_source()
             .configured
+        )
+
+    def test_the_channel_defaults_to_official(self):
+        self.assertEqual(CHANNEL_OFFICIAL, self._config("").update_source().channel)
+
+    def test_a_named_channel_is_read(self):
+        source = self._config('[updates]\nchannel = "prerelease"\n').update_source()
+        self.assertEqual(CHANNEL_PRERELEASE, source.channel)
+
+    def test_the_old_boolean_still_means_what_it_meant(self):
+        # `include_prereleases = true` said "either kind, whichever is newest" and said
+        # nothing about prereleases only. Reading it as prerelease-only would silently
+        # stop offering official releases to somebody who never asked for that.
+        source = self._config('[updates]\ninclude_prereleases = true\n').update_source()
+        self.assertEqual(CHANNEL_ANY, source.channel)
+
+    def test_a_typo_in_the_channel_falls_back_rather_than_failing(self):
+        source = self._config('[updates]\nchannel = "beta"\n').update_source()
+        self.assertEqual(CHANNEL_OFFICIAL, source.channel)
+
+    def test_a_channel_round_trips(self):
+        config = self._config("")
+        settings = replace(
+            config.settings(), updates=UpdateSource(repository="a/b", channel=CHANNEL_PRERELEASE)
+        )
+        written = config.save(settings, ConfigScope.PROJECT)
+        self.assertIn('channel = "prerelease"', written.read_text(encoding="utf-8"))
+        self.assertEqual(
+            CHANNEL_PRERELEASE,
+            FileConfig(project=written, user=written.parent / "absent.toml")
+            .update_source()
+            .channel,
         )
 
     def test_the_default_itself_is_not_written_back_as_configuration(self):
@@ -409,7 +490,8 @@ class TheCheck(unittest.TestCase):
         feed = _Feed((Release(tag="v9.9.9", prerelease=True),))
         message, ok, _ = self._run(UpdateSource(repository="a/b"), feed)
         self.assertTrue(ok)
-        self.assertIn("only prereleases", message)
+        self.assertIn("published nothing on the", message)
+        self.assertIn("Advanced", message)
 
     def test_a_release_with_no_matching_asset_still_reports_the_version(self):
         feed = _Feed((Release(tag="v0.2.0-released", prerelease=False),))

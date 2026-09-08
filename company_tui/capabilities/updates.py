@@ -44,6 +44,7 @@ from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.updates import (
+    CHANNEL_LABELS,
     AssetDownloadPort,
     Release,
     ReleaseFeedError,
@@ -145,11 +146,7 @@ class UpdatesCapability(Capability):
                 key="channel",
                 label="Channel",
                 kind=OptionKind.INFO,
-                default=(
-                    "official releases and prereleases"
-                    if source.include_prereleases
-                    else "official releases only"
-                ),
+                default=CHANNEL_LABELS.get(source.channel, source.channel),
             ),
             Option(
                 key=DOWNLOAD_KEY,
@@ -198,8 +195,9 @@ class UpdatesCapability(Capability):
             # saying which switch would change that is more use than an error.
             return (
                 (
-                    f"{source.repository} has only prereleases, and this is "
-                    "set to official releases only."
+                    f"{source.repository} has published nothing on the "
+                    f"{CHANNEL_LABELS.get(source.channel, source.channel)} "
+                    "channel. Advanced is where that is changed."
                 ),
                 True,
             )
