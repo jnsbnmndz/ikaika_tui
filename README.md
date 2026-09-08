@@ -139,13 +139,41 @@ to generate at all.
 |---|---|---|
 | The private keys | `certs/*.pfx` | **no** |
 | The password | `.dti_configs/signing.env` | **no** |
+| The share links | `.dti_configs/signing.env` | **no** |
 | Their checksums | `.dti_configs/*.pfx.sha256` | yes, deliberately |
-| The share links | `.dti_configs/share.env` | yes |
+| The publisher subject | `.dti_configs/share.env` | yes |
 
 The checksums are the point of that split: a `.pfx` arrives over a link from a machine
-nobody here controls, and a same-named file is not the same file. The link is safe to
-commit because the password is not there — fetching the file gets you a container you
-cannot open. A new machine needs the password out of band.
+nobody here controls, and a same-named file is not the same file — the committed sidecar
+is the only thing that can tell the difference.
+
+The links were committed once, on the grounds that the password is not there and so the
+file cannot be opened. They are secrets now, for reasons unrelated to how strong the
+password is: a share link *is* the capability to fetch the file — the `rlkey` in a Dropbox
+`/scl/fi/` link is part of the credential, not a path — and a committed link cannot be
+rotated, because it stays in the history of every clone that ever pulled it. `check-all`
+fails if one reappears in `share.env`, and `setup-signing` moves it out.
+
+A new machine therefore needs the password and both links out of band. CI reads the same
+three values from repository secrets:
+
+| Secret | Holds |
+|---|---|
+| `DTI_CERT_PASSWORD` | the password that opens both `.pfx` files |
+| `DTI_CERT_SHARE_URL` | one Dropbox link to `release.pfx` |
+| `DTI_DEBUG_CERT_SHARE_URL` | one Dropbox link to `debug.pfx` |
+
+Locally the same three live in `.dti_configs/signing.env`, which is gitignored:
+
+```env
+windows.certPassword=…
+share.cert=https://www.dropbox.com/scl/fi/…/release.pfx?rlkey=…&dl=0
+share.debugCert=https://www.dropbox.com/scl/fi/…/debug.pfx?rlkey=…&dl=0
+```
+
+Paste a Dropbox link exactly as the web app gives it to you — `dl=0` and all. The fetch
+rewrites the parameter to `dl=1` in place, keeps the `rlkey`, and rejects the download if
+a web page arrives instead of a certificate, which is what a revoked link answers with.
 
 Nothing fails when a certificate is missing: the build says the artifacts are unsigned
 and carries on. Unsigned means an Unknown Publisher warning, not a broken installer.

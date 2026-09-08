@@ -23,12 +23,14 @@
 # WHAT ENDS UP WHERE
 #
 #   certs/release.pfx, certs/debug.pfx        gitignored - the private keys
-#   .dti_configs/signing.env                  gitignored - the password
+#   .dti_configs/signing.env                  gitignored - the password AND the links
 #   .dti_configs/*.pfx.sha256                 COMMITTED - the trust anchors
-#   .dti_configs/share.env                    COMMITTED - the links
+#   .dti_configs/share.env                    COMMITTED - the publisher subject
 #
-# A new machine needs the password out of band. The link alone will not open the files,
-# which is what makes committing it safe.
+# A new machine needs the password and both links out of band; CI reads the same three
+# values from the DTI_CERT_PASSWORD, DTI_CERT_SHARE_URL and DTI_DEBUG_CERT_SHARE_URL
+# secrets. A link is the capability to fetch the container rather than a path to it, and a
+# committed one cannot be rotated - see signing.ps1's header.
 #
 #
 # UPLOADING IS A HUMAN STEP, AND SAYING SO IS THE POINT
@@ -95,10 +97,16 @@ if ($Help) {
     Write-Host '  fetches the shared link, else generates. Generating is last: it is a'
     Write-Host '  new identity, and old installers stop matching it.'
     Write-Host ''
-    Write-Host '  Config (.dti_configs/share.env, committed)'
+    Write-Host '  Config (.dti_configs/signing.env, gitignored)'
     Write-Host '    share.cert           link the release .pfx is fetched from'
     Write-Host '    share.debugCert      link the debug .pfx is fetched from'
+    Write-Host '    windows.certPassword the password both .pfx files are protected with'
+    Write-Host ''
+    Write-Host '  Config (.dti_configs/share.env, committed)'
     Write-Host '    publisher            certificate subject, e.g. CN=Name, O=Org'
+    Write-Host ''
+    Write-Host '  A runner has no gitignored file, so the same three values are read from'
+    Write-Host '  DTI_CERT_SHARE_URL, DTI_DEBUG_CERT_SHARE_URL and DTI_CERT_PASSWORD.'
     Write-Host ''
     Write-Host '  The .pfx files and signing.env are secrets and are gitignored. The'
     Write-Host '  .sha256 sidecars are committed - that is what makes a download'
@@ -124,9 +132,22 @@ Write-Host "[1/4] Signing setup for $root"
 # keys are discoverable without reading this file.
 if (-not (Test-Path -LiteralPath $shareEnv)) {
     Set-EnvValue $shareEnv 'publisher' $script:Publisher
-    Set-EnvValue $shareEnv 'share.cert' ''
-    Set-EnvValue $shareEnv 'share.debugCert' ''
     Write-Host "      wrote a template at $($script:ConfigsDirName)\share.env" -ForegroundColor DarkGray
+}
+
+# The links used to live in share.env, which is committed. Carry any that are still there
+# across to signing.env, which is not, and blank the committed copy.
+#
+# Both halves matter. A link left in the committed file is a credential in the history of
+# every clone; a link only in the committed file is now read by nothing, so the next build
+# is quietly unsigned and the only sign of it is a line in the middle of a passing run.
+$stale = Read-EnvFile $shareEnv
+foreach ($key in @('share.cert', 'share.debugCert')) {
+    if (-not $stale[$key]) { continue }
+    Set-EnvValue $signingEnv $key $stale[$key]
+    Set-EnvValue $shareEnv $key ''
+    Write-Host "      moved $key out of share.env (committed) into signing.env" -ForegroundColor Yellow
+    Write-Host '        that link was in the repository - rotate it when you can' -ForegroundColor DarkGray
 }
 if ($Publisher) {
     Set-EnvValue $shareEnv 'publisher' $Publisher
@@ -226,7 +247,7 @@ foreach ($released in $kinds) {
 
     if (-not $Force -and -not $Yes -and -not $ctx.ShareUrl) {
         Write-Host ''
-        Write-Host "      No $label certificate, and $($ctx.ShareKey) is not set." -ForegroundColor Yellow
+        Write-Host "      No $label certificate, and no $($ctx.ShareKey) to fetch one from." -ForegroundColor Yellow
         $answer = Read-Host "      Generate a new $label certificate? (Y/n)"
         if ($answer -match '^(?i)n') {
             Write-Host "      $label - skipped" -ForegroundColor DarkGray
@@ -245,9 +266,10 @@ Write-Host '[4/4] Done'
 Write-Host ''
 
 if ($generated.Count) {
-    Write-Host '  Upload these, then paste the links into share.env:' -ForegroundColor Cyan
+    Write-Host '  Upload these, then put each link in signing.env - and in the' -ForegroundColor Cyan
+    Write-Host '  repository secrets, which is where CI reads it from:' -ForegroundColor Cyan
     foreach ($ctx in $generated) {
-        Write-Host "    $($script:CertsDirName)\$($ctx.Name)  ->  $($ctx.ShareKey)"
+        Write-Host "    $($script:CertsDirName)\$($ctx.Name)  ->  $($ctx.ShareKey)  /  $($ctx.ShareVar)"
     }
     Write-Host ''
     Write-Host '  A Dropbox link copied from the web app ends in dl=0 and serves a preview' -ForegroundColor DarkGray
@@ -257,8 +279,9 @@ if ($generated.Count) {
     Write-Host '  COMMIT the .sha256 sidecars. They are what makes the download verifiable.' -ForegroundColor Cyan
     Write-Host '  Do NOT commit the .pfx files or signing.env.' -ForegroundColor Cyan
     Write-Host ''
-    Write-Host '  The password has to reach another machine out of band - it is not in the' -ForegroundColor DarkGray
-    Write-Host '  repository and cannot be recovered from the certificate.' -ForegroundColor DarkGray
+    Write-Host '  The password and the links have to reach another machine out of band -' -ForegroundColor DarkGray
+    Write-Host '  none of them is in the repository, and the password cannot be recovered' -ForegroundColor DarkGray
+    Write-Host '  from the certificate.' -ForegroundColor DarkGray
     Write-Host ''
 }
 

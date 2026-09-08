@@ -11,6 +11,7 @@ of the obvious objections are already in an "Alternatives rejected" section.
 |---|---|---|---|
 | [0001](0001-a-project-declares-its-own-commands.md) | A project declares its own commands, and the toolbox reads them | ACCEPTED | 2026-09-05 |
 | [0002](0002-the-version-is-one-file.md) | The version is one file, and the gate is one command | ACCEPTED | 2026-09-05 |
+| [0003](0003-a-share-link-is-a-secret.md) | A share link is a secret, and the checksum is what gets committed | ACCEPTED | 2026-09-08 |
 
 ## Working with these
 

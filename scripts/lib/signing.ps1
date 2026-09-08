@@ -18,15 +18,27 @@
 # WHAT IS COMMITTED AND WHAT IS NOT
 #
 #   certs/*.pfx                     NO  - the private key
-#   .dti_configs/signing.env        NO  - the password
+#   .dti_configs/signing.env        NO  - the password AND the two share links
 #   .dti_configs/*.pfx.sha256       YES - deliberately, see below
-#   .dti_configs/share.env          YES - the links, which alone open nothing
+#   .dti_configs/share.env          YES - the publisher subject, which is not a secret
 #
 # The checksums are the point of the split. A .pfx arrives over a shared link from a
 # machine nobody here controls, and a same-named file is not the same file; the committed
-# sidecar is the only thing that can tell the difference. The link is safe to commit
-# because the password is not there - fetching the file gets you a container you cannot
-# open.
+# sidecar is the only thing that can tell the difference.
+#
+# THE LINK IS A SECRET TOO, AND IT USED TO BE COMMITTED
+#
+# The old reasoning was that fetching the file gets you a container you cannot open. True,
+# and not enough, for two reasons that have nothing to do with how strong the password is:
+# a share link IS the capability to fetch the file - the rlkey in a Dropbox /scl/fi/ link
+# is part of the credential, not a path - and a committed link cannot be rotated, because
+# it stays in the history of every clone that ever pulled it. Revoking a secret is an edit;
+# revoking a committed link is a new link and a history rewrite, and nobody does the second
+# half. See docs/decisions/0003-a-share-link-is-a-secret.md.
+#
+# So the links live in signing.env, beside the password and gitignored with it, and CI
+# passes them in as DTI_CERT_SHARE_URL and DTI_DEBUG_CERT_SHARE_URL. Get-ShareUrl is the
+# one place that knows about both halves.
 #
 # THE SIDECAR IS ABSENT ON A FIRST BOOTSTRAP, AND ABSENT MEANS "RECORD ONE". That is the
 # only sane reading, and it is also the failure mode: point the sidecar path at somewhere
@@ -127,6 +139,25 @@ function Set-EnvValue([string]$Path, [string]$Key, [string]$Value) {
 }
 
 
+# Where a certificate's share link comes from.
+#
+# Same order as Get-CertPassword, and for the same reason: the gitignored file first, the
+# environment last. A laptop has signing.env and no variables set; a runner has variables
+# and no file, because the file is the one thing a clone cannot bring with it. Nothing has
+# both, so the order is a description rather than a precedence anybody has to remember.
+#
+# The variable name is also accepted AS A KEY in signing.env, so a value copied out of the
+# repository secrets pastes in under the name it already has.
+function Get-ShareUrl([string]$Key, [string]$Variable) {
+    $saved = Read-EnvFile (Get-SigningEnvPath)
+    if ($saved[$Key]) { return $saved[$Key] }
+    if ($saved[$Variable]) { return $saved[$Variable] }
+    $value = [Environment]::GetEnvironmentVariable($Variable)
+    if ($value) { return "$value".Trim() }
+    return ''
+}
+
+
 # Which certificate a build is signed with, and everything that follows from that choice.
 #
 # One function rather than a released/debug branch at each call site: the file, the
@@ -136,14 +167,16 @@ function Get-CertContext([switch]$Released) {
     $share = Read-EnvFile (Get-ShareEnvPath)
     $name = if ($Released) { 'release.pfx' } else { 'debug.pfx' }
     $shareKey = if ($Released) { 'share.cert' } else { 'share.debugCert' }
+    $shareVar = if ($Released) { 'DTI_CERT_SHARE_URL' } else { 'DTI_DEBUG_CERT_SHARE_URL' }
     $publisher = if ($share['publisher']) { $share['publisher'] } else { $script:Publisher }
 
     return @{
         Kind      = if ($Released) { 'release' } else { 'debug' }
         Path      = Join-Path (Join-Path (Get-RepoRoot) $script:CertsDirName) $name
         Name      = $name
-        ShareUrl  = if ($share.ContainsKey($shareKey)) { $share[$shareKey] } else { '' }
+        ShareUrl  = Get-ShareUrl $shareKey $shareVar
         ShareKey  = $shareKey
+        ShareVar  = $shareVar
         Publisher = $publisher
         Friendly  = "DTI $(if ($Released) { 'release' } else { 'debug' }) signing"
     }
@@ -239,7 +272,7 @@ function Test-LooksLikeHtml([string]$Path) {
 # place everything downstream reads from.
 function Get-SharedCert([hashtable]$Ctx) {
     if (-not $Ctx.ShareUrl) {
-        return @{ Ok = $false; Reason = "$($Ctx.ShareKey) is not set in $($script:ConfigsDirName)/share.env" }
+        return @{ Ok = $false; Reason = "no link - set $($Ctx.ShareKey) in $($script:ConfigsDirName)/signing.env, or $($Ctx.ShareVar) in the environment" }
     }
     $url = Get-RawShareUrl $Ctx.ShareUrl
     $temp = Join-Path ([IO.Path]::GetTempPath()) "dti-cert-$([guid]::NewGuid().ToString('n')).tmp"

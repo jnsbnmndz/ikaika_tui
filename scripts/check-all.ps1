@@ -43,6 +43,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\app-version.ps1')
+# For Get-ShareEnvPath and Read-EnvFile, used by the committed-credential check below.
+. (Join-Path $PSScriptRoot 'lib\signing.ps1')
 
 if ($Help) {
     Write-Host ''
@@ -153,6 +155,26 @@ try {
     }
 } catch {
     Add-Result 'version' 'FAIL' $_.Exception.Message
+}
+
+# --- no credential in a committed file -----------------------------------------------
+# The share links moved out of share.env, which is committed, and into signing.env, which
+# is not (docs/decisions/0003-a-share-link-is-a-secret.md). A link put back into the
+# committed half is a credential in every clone's history, and nothing else here would
+# notice: the fetch works, the installer is signed, the run is green.
+#
+# FAIL rather than a warning. This is the repository being wrong, not the machine being
+# incomplete, which is the line the whole SKIP/FAIL distinction above is drawn on.
+try {
+    $committed = Read-EnvFile (Get-ShareEnvPath)
+    $leaked = @(@('share.cert', 'share.debugCert') | Where-Object { $committed[$_] })
+    if ($leaked.Count) {
+        Add-Result 'secrets' 'FAIL' "$($leaked -join ', ') set in a committed share.env - run setup-signing to move them, then rotate"
+    } else {
+        Add-Result 'secrets' 'PASS' 'no share link in a committed file'
+    }
+} catch {
+    Add-Result 'secrets' 'FAIL' $_.Exception.Message
 }
 
 # --- the linters, which are allowed to be absent -------------------------------------

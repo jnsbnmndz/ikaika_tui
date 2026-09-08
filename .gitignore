@@ -85,10 +85,12 @@ dist/
 test.*
 test/
 
-# Code signing. The private keys and the password never go in, the trust anchors always
-# do - a committed .sha256 is the only thing that can tell a fetched certificate from a
-# same-named different one, and `!` un-ignores it explicitly because git cannot un-ignore
-# a file inside a directory that has been excluded wholesale.
+# Code signing. The private keys, the password and the share links never go in; the trust
+# anchors always do - a committed .sha256 is the only thing that can tell a fetched
+# certificate from a same-named different one, and `!` un-ignores it explicitly because git
+# cannot un-ignore a file inside a directory that has been excluded wholesale.
+# share.env is committed and carries the publisher subject ONLY - the links are secrets,
+# and they live in signing.env beside the password.
 certs/
 *.pfx
 *.p12
