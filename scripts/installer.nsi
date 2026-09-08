@@ -156,10 +156,14 @@ VIAddVersionKey "Comments" "${BUILD_KIND} build"
 ; ${WM_SETTEXT}, for retitling the window when this turns out to be an update. The
 ; `Caption` command is compile-time and one installer serves both cases.
 !include "WinMessages.nsh"
+; ${SF_SELECTED} and SectionSetFlags, for restoring an update's previous choices.
+!include "Sections.nsh"
 ; ${GetSize}, used below for the Add/Remove size. Not built in - without this the
 ; compiler reports it as an invalid command rather than an undefined macro.
 !include "FileFunc.nsh"
 !define MUI_ABORTWARNING
+; Turns the highlighted component's description into the box on the components page.
+!define MUI_COMPONENTSPAGE_SMALLDESC
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE_NAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "Open ${DISPLAY_NAME}"
 !ifdef RELEASED
@@ -178,6 +182,10 @@ $INSTDIR\${EXE_NAME}"
 ; read in .onInit rather than in the section that uses it.
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryWhenUpdating
 !insertmacro MUI_PAGE_DIRECTORY
+; Skipped on an update for the same reason the directory page is: the answers are
+; already recorded, and .onInit has put them back.
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipComponentsWhenUpdating
+!insertmacro MUI_PAGE_COMPONENTS
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SayWhichThisIs
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -188,6 +196,21 @@ $INSTDIR\${EXE_NAME}"
 Var PreviousVersion
 Var Updating
 
+; WHAT THE THREE OPTIONAL SECTIONS ARE FOR
+;
+; The shortcuts and the PATH entry are the three things this installer does OUTSIDE its
+; own directory, and every one of them was unconditional. A components page is the
+; smallest honest way to offer them: three checkboxes, each named after what it touches.
+;
+; Their state is REMEMBERED. An update skips the page - the answers are already given -
+; and .onInit puts the recorded ones back before any section runs, which is also what
+; makes a silent update (`/S`, how the in-app updater installs) keep the choices somebody
+; made in the GUI rather than reverting to these defaults.
+;
+; Desktop is off by default and the other two are on. A terminal application is started by
+; typing its name; a desktop icon for one is clutter for most people and the point for
+; some, which is exactly what a checkbox is for.
+
 ; Read once, before the first page. Read from SETTINGS_KEY rather than from the uninstall
 ; key: this is the same value $INSTDIR is recovered from, so the two cannot disagree about
 ; whether there is an install here.
@@ -196,6 +219,55 @@ Function .onInit
   StrCpy $Updating "0"
   StrCmp $PreviousVersion "" +2
     StrCpy $Updating "1"
+
+  ; An update reuses what was chosen last time. Read before any page and before any
+  ; section, so it holds for a silent run too.
+  StrCmp $Updating "1" 0 defaultsStand
+    Call RestoreChoice
+  defaultsStand:
+
+  ; The command line wins over both, so an unattended install can still say. Applied
+  ; last for that reason. ${GetOptions} sets the error flag when a switch is absent, so
+  ; each is cleared first.
+  ClearErrors
+  ${GetParameters} $R0
+  ${GetOptions} $R0 "/NOPATH" $R1
+  IfErrors +2 0
+    !insertmacro UnselectSection ${SecPath}
+  ClearErrors
+  ${GetOptions} $R0 "/PATH" $R1
+  IfErrors +2 0
+    !insertmacro SelectSection ${SecPath}
+  ClearErrors
+  ${GetOptions} $R0 "/NOSHORTCUTS" $R1
+  IfErrors +3 0
+    !insertmacro UnselectSection ${SecStartMenu}
+    !insertmacro UnselectSection ${SecDesktop}
+FunctionEnd
+
+; Put a recorded choice back onto its section. A value that was never written leaves the
+; default alone - which is what a first install after an upgrade from a version that did
+; not record anything looks like.
+!macro RestoreOne KEY SECTION
+  ReadRegStr $R0 HKCU "${SETTINGS_KEY}" "${KEY}"
+  StrCmp $R0 "1" 0 +3
+    !insertmacro SelectSection ${SECTION}
+    Goto done_${KEY}
+  StrCmp $R0 "0" 0 +2
+    !insertmacro UnselectSection ${SECTION}
+  done_${KEY}:
+!macroend
+
+Function RestoreChoice
+  !insertmacro RestoreOne "OnPath" ${SecPath}
+  !insertmacro RestoreOne "StartMenu" ${SecStartMenu}
+  !insertmacro RestoreOne "Desktop" ${SecDesktop}
+FunctionEnd
+
+Function SkipComponentsWhenUpdating
+  StrCmp $Updating "1" 0 shown
+    Abort
+  shown:
 FunctionEnd
 
 ; The location is settled on an update, so the page that asks about it is not shown.
@@ -267,7 +339,11 @@ FunctionEnd
     DetailPrint "  PATH was not changed (exit $0). The app still runs from $INSTDIR."
 !macroend
 
-Section "Install"
+; Required, and named so the components page says what it is rather than "Install".
+; `!` makes it bold; SectionIn RO takes the checkbox away, because there is no version of
+; this install that does not install the program.
+Section "!${DISPLAY_NAME}" SecCore
+  SectionIn RO
   ; Labels rather than relative jumps. A `+3` here is correct until somebody inserts a
   ; line above it, and then it is silently one instruction wrong.
   StrCmp $Updating "1" 0 sayInstalling
@@ -301,51 +377,69 @@ Section "Install"
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" "$0"
 
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  ; Recorded here rather than in each optional section, so a section that is NOT
+  ; selected still writes its "0" - which is what an update reads back to keep the
+  ; choice. Written from the section flags, so the command-line switches, the page and
+  ; the restored values all arrive through one path.
+  Call RecordChoice
+SectionEnd
+
+Section "Start Menu shortcut" SecStartMenu
   CreateDirectory "$SMPROGRAMS\${DISPLAY_NAME}"
   CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}\${DISPLAY_NAME}.lnk" "$INSTDIR\${EXE_NAME}"
   CreateShortcut "$SMPROGRAMS\${DISPLAY_NAME}\Uninstall ${DISPLAY_NAME}.lnk" "$INSTDIR\Uninstall.exe"
-
-  ; After the files, so a failure here leaves a working install rather than a
-  ; PATH entry pointing at a directory that was never populated.
-  ;
-  ; ${GetOptions} sets the error flag when the switch is absent, so the flag is
-  ; cleared first - a stale one from any earlier call would read as /NOPATH.
-  ;
-  ; A RELEASE GOES ON PATH; A DEBUG BUILD DOES NOT, UNLESS ASKED
-  ;
-  ; Both install an executable of the same name, so two of them on PATH means the
-  ; command means whichever directory comes first. That order changes when anything
-  ; else edits PATH, it is invisible from the prompt, and the wrong answer looks
-  ; exactly like the right one - which is worse than having to type a path. So the
-  ; switch inverts: /NOPATH opts a release out, /PATH opts a debug build in.
-  ClearErrors
-  ${GetParameters} $R0
-!ifdef RELEASED
-  ${GetOptions} $R0 "/NOPATH" $R1
-  ; Error flag set = the switch was absent = add it.
-  IfErrors 0 pathSkipped
-!else
-  ${GetOptions} $R0 "/PATH" $R1
-  ; The other way round: absent = leave PATH alone.
-  IfErrors pathSkipped 0
-!endif
-    InitPluginsDir
-    File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
-    !insertmacro EditPath add
-    WriteRegStr HKCU "${SETTINGS_KEY}" "OnPath" "1"
-    Goto pathDone
-  pathSkipped:
-!ifdef RELEASED
-    DetailPrint "PATH: skipped, /NOPATH was given"
-!else
-    DetailPrint "PATH: not touched - this is a debug build. Pass /PATH to add it,"
-    DetailPrint "  but then  ${APP_NAME}  means whichever copy PATH finds first."
-!endif
-    WriteRegStr HKCU "${SETTINGS_KEY}" "OnPath" "0"
-  pathDone:
-
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
+
+; Unselected by default - see the note above .onInit.
+Section /o "Desktop shortcut" SecDesktop
+  CreateShortcut "$DESKTOP\${DISPLAY_NAME}.lnk" "$INSTDIR\${EXE_NAME}"
+SectionEnd
+
+; AFTER the files, so a failure here leaves a working install rather than a PATH entry
+; pointing at a directory that was never populated. Section order is execution order,
+; which is what puts it here rather than a comment asking for it.
+;
+; A RELEASE IS SELECTED BY DEFAULT AND A DEBUG BUILD IS NOT
+;
+; Both install an executable of the same name, so two of them on PATH means the command
+; means whichever directory comes first. That order changes when anything else edits
+; PATH, it is invisible from the prompt, and the wrong answer looks exactly like the
+; right one - which is worse than having to type a path.
+!ifdef RELEASED
+Section "Add to PATH" SecPath
+!else
+Section /o "Add to PATH (release build already owns this name)" SecPath
+!endif
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
+  !insertmacro EditPath add
+SectionEnd
+
+; One place that turns section flags into the three recorded values.
+!macro RecordOne KEY SECTION
+  SectionGetFlags ${SECTION} $R0
+  IntOp $R0 $R0 & ${SF_SELECTED}
+  IntCmp $R0 ${SF_SELECTED} 0 +3 0
+    WriteRegStr HKCU "${SETTINGS_KEY}" "${KEY}" "1"
+    Goto recorded_${KEY}
+  WriteRegStr HKCU "${SETTINGS_KEY}" "${KEY}" "0"
+  recorded_${KEY}:
+!macroend
+
+Function RecordChoice
+  !insertmacro RecordOne "OnPath" ${SecPath}
+  !insertmacro RecordOne "StartMenu" ${SecStartMenu}
+  !insertmacro RecordOne "Desktop" ${SecDesktop}
+FunctionEnd
+
+; What the components page says about each line when it is highlighted.
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "The application itself. Required."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "A Start Menu entry, with an uninstall shortcut beside it."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "An icon on your desktop."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Add the install folder to your user PATH, so  ${APP_NAME}  starts it from any new terminal."
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
   ; BEFORE the tree is deleted, while $INSTDIR is still the thing being removed.
@@ -356,9 +450,13 @@ Section "Uninstall"
   File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
   !insertmacro EditPath remove
 
+  ; Unconditional, like the PATH entry above and for the same reason: deleting a
+  ; shortcut that is not there is a no-op, and trusting a registry value an upgrade may
+  ; have rewritten is how a shortcut outlives the program it points at.
   Delete "$SMPROGRAMS\${DISPLAY_NAME}\${DISPLAY_NAME}.lnk"
   Delete "$SMPROGRAMS\${DISPLAY_NAME}\Uninstall ${DISPLAY_NAME}.lnk"
   RMDir "$SMPROGRAMS\${DISPLAY_NAME}"
+  Delete "$DESKTOP\${DISPLAY_NAME}.lnk"
 
   ; The whole tree, because everything in it was written by the installer. Settings live
   ; under the user's home rather than here, so nothing anybody typed is in this directory.
