@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Sequence
 from contextlib import suppress
+from pathlib import Path
 from typing import TypeVar
 
 from textual import events, work
@@ -191,6 +192,9 @@ part somebody with a run going needs to know before they press it. The quit
 confirmation still happens underneath this one when runs are live, so the count
 is named there rather than repeated here.
 """
+
+UPDATE_DECLINED = "Left alone - nothing was installed."
+NO_INSTALLER_AT = "There is no installer at {path} any more."
 
 NOTHING_TO_INSTALL = "Nothing to install - no newer build has been downloaded."
 """Ctrl+U pressed with no badge up.
@@ -458,6 +462,49 @@ class TuiConsole(App):
     def update_notice(self) -> str:
         """What a header composed after the fact should show. See `AppHeader`."""
         return self._update_notice
+
+    async def install_update(self, installer: str, version: str) -> str:
+        """`Ui.install_update`. Ask, then hand over from a worker of this app's own.
+
+        The worker matters. `_shut_down` cancels every session, and this is called from
+        inside one - so the confirmation and the handover run on the app rather than on
+        the caller, and the caller's cancellation is then just part of leaving.
+
+        The path is checked before anything is asked. A dialog offering to install a
+        file that is not there is a dialog whose only outcome is an error.
+        """
+        if self._watch is None:
+            return "update installing is not configured"
+        target = Path(installer)
+        if not target.is_file():
+            return NO_INSTALLER_AT.format(path=installer)
+
+        answer = await self.push_screen_wait(
+            ConfirmScreen(
+                UPDATE_CONFIRM,
+                self.trail_label(),
+                detail=UPDATE_DETAIL.format(version=version, installed=APP_VERSION),
+                confirm=UPDATE_ANSWER,
+            )
+        )
+        if not answer:
+            return UPDATE_DECLINED
+        if not await self._confirm_quit():
+            return UPDATE_DECLINED
+
+        problem = self._watch.arm(target)
+        if problem:
+            return problem
+        # From here the app is leaving, and the caller is one of the runs that leaving
+        # cancels. Started as a worker so that cancellation cannot take the shutdown
+        # with it.
+        self._leave_for_update()
+        return ""
+
+    @work
+    async def _leave_for_update(self) -> None:
+        await self._shut_down()
+        self.exit()
 
     def action_install_update(self) -> None:
         self._install_update()

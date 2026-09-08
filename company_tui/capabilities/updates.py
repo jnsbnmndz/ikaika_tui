@@ -62,6 +62,8 @@ FAILED = 1
 
 DOWNLOAD_KEY = "download"
 FOLDER_KEY = "folder"
+INSTALL_KEY = "install"
+ANYWAY_KEY = "anyway"
 
 NOT_CONFIGURED = "not configured - set it in Advanced"
 
@@ -149,6 +151,29 @@ class UpdatesCapability(Capability):
                 default=CHANNEL_LABELS.get(source.channel, source.channel),
             ),
             Option(
+                key=ANYWAY_KEY,
+                label="Download and install anyway",
+                kind=OptionKind.BOOLEAN,
+                default=False,
+                help=(
+                    "Fetch and run the latest release even when it is the "
+                    "version already running. A repair: the installer removes "
+                    "the old copy first either way, so this rebuilds the "
+                    "install rather than layering on it."
+                ),
+            ),
+            Option(
+                key=INSTALL_KEY,
+                label="Install it when the download finishes",
+                kind=OptionKind.BOOLEAN,
+                default=False,
+                help=(
+                    "Asks first, then closes the toolbox, installs, and "
+                    "reopens on the new build. Leave it off to be told where "
+                    "the installer was saved instead."
+                ),
+            ),
+            Option(
                 key=DOWNLOAD_KEY,
                 label="Download the installer",
                 kind=OptionKind.BOOLEAN,
@@ -219,13 +244,20 @@ class UpdatesCapability(Capability):
                 f"{latest.tag} does not parse as a version, so it cannot be compared.",
                 False,
             )
-        if not available.newer_than(installed):
+        if not available.newer_than(installed) and not values.get(ANYWAY_KEY):
             return (f"Up to date - {self._version} is current.", True)
+        if not available.newer_than(installed):
+            # Asked for explicitly. Said out loud, because "installing an update" and
+            # "reinstalling the version you are running" are different acts and only
+            # one of them was ticked.
+            self._console.write(
+                f"{self._version} is already current - reinstalling it as asked."
+            )
 
         for line in latest.notes.splitlines()[:20]:
             self._console.write(line)
 
-        if not values.get(DOWNLOAD_KEY):
+        if not values.get(DOWNLOAD_KEY) and not values.get(ANYWAY_KEY):
             return (
                 (
                     f"{latest.tag} is newer than {self._version}. "
@@ -256,8 +288,32 @@ class UpdatesCapability(Capability):
         megabytes = written / (1024 * 1024)
         self._console.write(f"Saved {written} bytes.")
         self._remember(release, target)
+
+        if values.get(INSTALL_KEY) or values.get(ANYWAY_KEY):
+            return await self._install(release, target, megabytes)
+
         self._console.write(INSTALL_HINT)
         return (f"Downloaded {target.name} ({megabytes:.1f} MB) to {folder}", True)
+
+    async def _install(
+        self, release: Release, target: Path, megabytes: float
+    ) -> tuple[str, bool]:
+        """Hand the installer to the app, which is the only thing that can run it.
+
+        On success this does not come back: the app confirms, arms the handover and
+        starts shutting down, and this workflow is one of the runs that shutting down
+        cancels. So the line before it is the last thing written - said in the past
+        tense on purpose, because by the time anybody reads it, it has happened.
+        """
+        version = release.version.text or release.tag
+        self._console.write(f"Installing {version} - the toolbox will reopen.")
+        problem = await self._console.install_update(str(target), version)
+        if problem:
+            self._console.write(INSTALL_HINT)
+            return (f"Downloaded {target.name} ({megabytes:.1f} MB), but {problem}", False)
+        # Reached only if the app declined to leave after all; the shutdown above does
+        # not return.
+        return (f"Installing {version}.", True)
 
     def _remember(self, release: Release, target: Path) -> None:
         """Record the download where the chrome looks for one.

@@ -289,13 +289,31 @@ class _Downloads(AssetDownloadPort):
 
 
 class _Console:
-    """Captures what the capability narrates, and nothing else."""
+    """Captures what the capability narrates, and whether it was asked to install."""
 
-    def __init__(self) -> None:
+    def __init__(self, install_problem: str = "") -> None:
         self.lines: list[str] = []
+        self.installed: list[tuple[str, str]] = []
+        self.install_problem = install_problem
 
     def write(self, line: str) -> None:
         self.lines.append(line)
+
+    async def install_update(self, installer: str, version: str) -> str:
+        self.installed.append((installer, version))
+        return self.install_problem
+
+
+class _RealDownloads(AssetDownloadPort):
+    """Writes a file, so the paths after a successful download are reachable."""
+
+    def __init__(self) -> None:
+        self.fetched: list[str] = []
+
+    async def fetch(self, url: str, target) -> int:
+        self.fetched.append(url)
+        target.write_bytes(b"installer")
+        return 9
 
 
 class Channels(unittest.TestCase):
@@ -342,6 +360,82 @@ class Channels(unittest.TestCase):
         self.assertFalse(UpdateSource(channel=CHANNEL_OFFICIAL).include_prereleases)
         self.assertTrue(UpdateSource(channel=CHANNEL_PRERELEASE).include_prereleases)
         self.assertTrue(UpdateSource(channel=CHANNEL_ANY).include_prereleases)
+
+
+class DownloadingAndInstalling(unittest.TestCase):
+    """The card's own install path, and the flag that ignores being up to date."""
+
+    def _run(self, values, *, version="0.1.0+2", latest="v0.2.0+3-released",
+             install_problem=""):
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        console = _Console(install_problem=install_problem)
+        downloads = _RealDownloads()
+        feed = _Feed((
+            Release(
+                tag=latest,
+                prerelease=False,
+                asset_name="dti-setup.exe",
+                asset_url="https://x/i.exe",
+                asset_size=1024,
+            ),
+        ))
+        capability = UpdatesCapability(
+            console=console,
+            config=_Config(UpdateSource(repository="a/b")),
+            feed=feed,
+            version=version,
+            downloads=downloads,
+        )
+        merged = {"folder": folder.name, **values}
+        message, ok = asyncio.run(capability._check(merged))
+        return message, ok, console, downloads
+
+    def test_up_to_date_stops_unless_asked_anyway(self):
+        message, ok, console, downloads = self._run(
+            {"download": True}, version="0.2.0+3", latest="v0.2.0+3-released"
+        )
+        self.assertTrue(ok)
+        self.assertIn("Up to date", message)
+        self.assertEqual([], downloads.fetched, "nothing to fetch")
+
+    def test_anyway_reinstalls_the_version_already_running(self):
+        # A repair. The installer removes the old copy first either way, so this
+        # rebuilds the install rather than layering on it.
+        message, ok, console, downloads = self._run(
+            {"anyway": True}, version="0.2.0+3", latest="v0.2.0+3-released"
+        )
+        self.assertEqual(1, len(downloads.fetched))
+        self.assertTrue(any("reinstalling it as asked" in line for line in console.lines))
+        self.assertEqual(1, len(console.installed), "anyway installs as well as fetches")
+
+    def test_anyway_downloads_without_the_download_box(self):
+        # Two boxes for one intent would be a trap: ticking "install anyway" and
+        # forgetting "download" would report success having fetched nothing.
+        _, _, _, downloads = self._run({"anyway": True})
+        self.assertEqual(1, len(downloads.fetched))
+
+    def test_install_hands_the_path_to_the_app(self):
+        message, ok, console, _ = self._run({"download": True, "install": True})
+        self.assertEqual(1, len(console.installed))
+        installer, version = console.installed[0]
+        self.assertTrue(installer.endswith("dti-setup.exe"))
+        self.assertEqual("0.2.0+3", version)
+
+    def test_download_alone_installs_nothing(self):
+        message, ok, console, _ = self._run({"download": True})
+        self.assertEqual([], console.installed)
+        self.assertIn("Downloaded", message)
+
+    def test_a_refused_install_reports_it_and_says_where_the_file_is(self):
+        # The app can decline - somebody answers no to the confirmation, or the
+        # handover cannot be armed. The download still happened and is still usable.
+        message, ok, console, _ = self._run(
+            {"download": True, "install": True}, install_problem="Left alone"
+        )
+        self.assertFalse(ok)
+        self.assertIn("Left alone", message)
+        self.assertTrue(any("Ctrl+U" in line for line in console.lines))
 
 
 class TheSettingsFileAndTheDefault(unittest.TestCase):
