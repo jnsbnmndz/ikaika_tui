@@ -11,9 +11,21 @@
 
 name: check
 
+# WHEN THIS RUNS, AND WHY IT IS NOT EVERY PUSH
+#
+# It was `push: branches: ['**']` plus `pull_request`, which is the worst of both: a push
+# to a branch with an open pull request triggered BOTH, so every push to a PR branch cost
+# two full Windows runs answering the same question.
+#
+# Now: pull requests, and pushes to main. Not pull requests alone, because main is what
+# releases are cut from and much of this repository arrives as direct commits - a gate
+# that never runs on main is a gate that does not cover the branch that matters. A
+# feature branch with no pull request open is checked by `.\script.ps1 check-all` on the
+# machine doing the work, which is the same file this runs and is what -InstallHook wires
+# into git as a pre-push hook.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
