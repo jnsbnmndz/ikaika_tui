@@ -10,6 +10,7 @@ from textual.timer import Timer
 from textual.widgets import RichLog
 
 from company_tui.application.app import Application
+from company_tui.application.updates import UpdateWatch
 from company_tui.domain import naming
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
@@ -25,6 +26,7 @@ from company_tui.domain.template_pack import (
     ScaffoldTargetOption,
     TemplatePack,
 )
+from company_tui.domain.updates import NOTHING_TO_REPORT, UpdateReport
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
 from company_tui.infrastructure.window_shape import (
     DEFAULT_PLAN,
@@ -170,6 +172,42 @@ The size it is against the size it should be, because "too small" without a
 number leaves the user dragging an edge and guessing whether they are there yet.
 """
 
+UPDATE_MARK = "▲"
+"""The glyph on the update badge. Geometric Shapes, like every other mark drawn
+here — see `tests/test_glyphs.py` for why a plausible-looking emoji is not an
+option, and `domain/updates.py` for why the domain formats the notice around a
+mark it is handed rather than holding one."""
+
+UPDATE_CONFIRM = "Install the update?"
+UPDATE_DETAIL = (
+    "{version} replaces {installed}.\n"
+    "The toolbox will close and the installer will take over."
+)
+UPDATE_ANSWER = "INSTALL AND CLOSE"
+"""What saying yes costs, spelled out.
+
+It closes the app — which is not what "install" implies on its own, and is the
+part somebody with a run going needs to know before they press it. The quit
+confirmation still happens underneath this one when runs are live, so the count
+is named there rather than repeated here.
+"""
+
+NOTHING_TO_INSTALL = "Nothing to install - no newer build has been downloaded."
+"""Ctrl+U pressed with no badge up.
+
+The key is only ever advertised on the badge, so a press without one is somebody
+guessing - and a deliberate keypress that does nothing at all reads as a broken
+key. One line where a workflow without a panel says things.
+"""
+
+UPDATE_FAILED = "The update could not be started: {problem}"
+"""Said in the activity log rather than in a dialog.
+
+A handover that could not be armed leaves the app exactly where it was, which is
+not a state anybody needs a modal about — and the app is still perfectly usable,
+which a dialog would imply it is not.
+"""
+
 T = TypeVar("T")
 
 
@@ -193,6 +231,11 @@ class TuiConsole(App):
         # binding, which yields when there is no selection to copy.
         ("ctrl+c", "leave", "Quit"),
         ("ctrl+b", "resume_runs", "Runs"),
+        # Does nothing at all until there is an installer downloaded and waiting,
+        # which is why it is not in any footer: a hint for a key that is dead most
+        # of the time is a control that lies. The badge carries the key instead,
+        # and the badge only exists when the key does something.
+        ("ctrl+u", "install_update", "Update"),
     ]
 
     CSS = """
@@ -225,6 +268,7 @@ class TuiConsole(App):
         workspace_label: str | None = None,
         memory: SessionMemory | None = None,
         workspace: str = "",
+        watch: UpdateWatch | None = None,
     ) -> None:
         super().__init__()
         self.application: Application | None = None
@@ -232,6 +276,10 @@ class TuiConsole(App):
         """A capability to open on instead of the menu. See Ui.choose_capability."""
         self.workspace_label = workspace_label
         self._memory = memory
+        self._watch = watch
+        """The launch-time update check, or None where there is nothing to check
+        with — the plain console has no chrome to put a badge in, and a test pilot
+        has no business asking GitHub anything."""
         self._workspace = workspace
         """Which project's tabs these are. One machine holds several, and the
         tabs of one are not the tabs of another."""
@@ -251,6 +299,10 @@ class TuiConsole(App):
         self._window: AppWindow | None = None
         self._window_watch: Timer | None = None
         self._window_notice = ""
+        self._update_notice = ""
+        self._update: UpdateReport = NOTHING_TO_REPORT
+        """What the launch check found. Empty until it has answered, and empty
+        forever if update checking is not configured."""
         self._plan: WindowPlan = DEFAULT_PLAN
         self._guard: SizeGuard | None = None
         self._leaving = False
@@ -279,6 +331,11 @@ class TuiConsole(App):
         # the pointer lands somewhere other than where it points.
         self._watch_window_shape()
         self._recall()
+        # Before `_start`, and deliberately not awaited: it is a worker, so the
+        # first paint does not wait for a network round trip. A launch that opened
+        # on a blank frame while GitHub was slow would be this feature costing
+        # more than it is worth.
+        self._look_for_update()
         self._start()
 
     # -------------------------------------------------------------- the tabs
@@ -364,6 +421,98 @@ class TuiConsole(App):
                 floor_height=self._plan.min_height,
             )
         )
+
+    # ------------------------------------------------------------- updating
+
+    @work
+    async def _look_for_update(self) -> None:
+        """Ask, once, in the background, and say nothing unless there is an answer.
+
+        Every failure is silence. Offline, rate-limited, a repository that does not
+        exist, a tag that does not parse — none of it is the user's problem at the
+        moment they opened a terminal, and all of it is reported properly by the
+        manual check, which is somebody actually asking. `UpdateWatch.look` never
+        raises, so this cannot take the mount path down.
+        """
+        if self._watch is None:
+            return
+        report = await self._watch.look()
+        self._update = report
+        self._say_about_update(report.notice(UPDATE_MARK))
+
+    def _say_about_update(self, notice: str) -> None:
+        """Put the notice in every header, and only when it has changed.
+
+        The same shape as `_say_about_window` for the same reason: a header
+        composed after this ran reads the value back off the app, so a notice
+        pushed only on change would be lost by the next screen.
+        """
+        if notice == self._update_notice:
+            return
+        self._update_notice = notice
+        for screen in self.screen_stack:
+            for header in screen.query(AppHeader):
+                header.show_update(notice)
+
+    @property
+    def update_notice(self) -> str:
+        """What a header composed after the fact should show. See `AppHeader`."""
+        return self._update_notice
+
+    def action_install_update(self) -> None:
+        self._install_update()
+
+    @work
+    async def _install_update(self) -> None:
+        """Hand the machine over to the installer, then get out of its way.
+
+        The order is the whole thing. `hand_over` arms a process that is waiting
+        for THIS process to exit before it starts the installer — so arming has to
+        come first, and quitting has to follow immediately. Reversed, there is
+        nothing left to arm it; skipped, the installer deletes the directory it is
+        running from. See `infrastructure/handover.py`.
+
+        The quit confirmation is asked underneath: an install with three runs
+        going is three directories abandoned, and that is the same price quitting
+        charges, so it is named by the same dialog rather than by a second copy.
+        """
+        if self._watch is None:
+            return
+        if not self._update.waiting:
+            # Pressed without a badge, or pressed after the manual card
+            # downloaded something during this launch. `look` answers out of the
+            # state file without a request when an installer is already fetched,
+            # so this is not a second network call in the common case.
+            report = await self._watch.look()
+            self._update = report
+            self._say_about_update(report.notice(UPDATE_MARK))
+        if not self._update.waiting:
+            self.write(NOTHING_TO_INSTALL)
+            return
+        answer = await self.push_screen_wait(
+            ConfirmScreen(
+                UPDATE_CONFIRM,
+                self.trail_label(),
+                detail=UPDATE_DETAIL.format(
+                    version=self._update.available.text or self._update.tag,
+                    installed=APP_VERSION,
+                ),
+                confirm=UPDATE_ANSWER,
+                key=AppHeader.UPDATE_HINT,
+            )
+        )
+        if not answer:
+            return
+        if not await self._confirm_quit():
+            return
+        problem = self._watch.hand_over(self._update)
+        if problem:
+            # Nothing was armed, so nothing is waiting for this process and the app
+            # carries on. Said where a workflow without a panel says things.
+            self.write(UPDATE_FAILED.format(problem=problem))
+            return
+        await self._shut_down()
+        self.exit()
 
     def _stop_watching_window(self) -> None:
         if self._window_watch is not None:

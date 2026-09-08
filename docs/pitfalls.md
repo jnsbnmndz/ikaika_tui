@@ -156,9 +156,81 @@ compositor do. Ask the object, do not assume the attribute.
 
 ---
 
-## 6. An argument list is not a list of arguments
+## 6. Replacing a program that is running
 
-### 6.1 A splatted array reaches a command positionally
+### 6.1 An installer cannot delete the executable it was started from
+
+`scripts/installer.nsi` upgrades by running the old uninstaller and then `RMDir /r` over
+the install directory. That directory holds `dti.exe`. Windows will not delete or
+overwrite a running executable, so an installer started while the toolbox is still alive
+reaches its first `File` instruction and stops with **"Error opening file for writing"** —
+over an install it has already half removed.
+
+The trap is that the obvious fix looks like it works:
+
+```python
+subprocess.Popen([installer])   # WRONG
+app.exit()
+```
+
+Most of the time the installer's own startup is slower than the app's shutdown and the
+race is won. `capabilities/updates.py` carried a paragraph saying so, and refused to run
+anything at all, which was the right answer until there was a real one.
+
+**Rule.** The handover is a **third** process that waits for this one by pid and only then
+starts the installer (`infrastructure/handover.py`). Arming comes first and quitting
+follows immediately — reversed, there is nothing left to arm it.
+`tests/test_auto_update.py` asserts that `Wait-Process` precedes `Start-Process` in the
+command, because that ordering is the entire difference between an upgrade and a corrupted
+install. See `docs/decisions/0004`.
+
+### 6.2 A remembered installer outlives the version it was for
+
+The launch check writes the downloaded installer's path to `updates.json` so a second
+launch costs no request. Then the user installs it, the app comes back up **as** that
+version — and the state file still names an installer, so the badge offers it again. And
+again, at every launch, forever.
+
+**Rule.** A remembered path is trusted only after three checks: something was fetched, the
+file is still there, and what it holds is still newer than what is running.
+`UpdateWatch._remembered` does all three and clears the state when the third fails.
+
+### 6.3 A test's placeholder path became a delete target
+
+`UpdateWatch` takes its download cache as a constructor argument, and the tests passed
+`Path(".")` — the working directory, which is the repository root. Harmless when written:
+the cache was only ever *read* from.
+
+Then `_discard` was added, to clear the stale installer after an update. It iterates the
+cache and unlinks what it finds. Every test that reached it emptied the repository root:
+`README.md`, `CLAUDE.md`, `VERSION`, `pyproject.toml`, `script.ps1`, `uv.lock` and
+`.gitignore`, leaving the directories behind. It happened **twice** — once on the run that
+introduced it, and again on the next `check-all`, before anyone worked out that running
+the tests was what did it.
+
+Three things made it worse than a lost afternoon. `.gitignore` going unmasked `certs/` and
+`.dti_configs/signing.env`, so the next `git add -A` would have committed the signing key
+and its password. `pyproject.toml` going took ruff's rule selection with it, so the lint
+began failing on rules this project does not enable — which is the exact failure that
+file's own comment describes. And the run reported `FAIL version — No VERSION file`, which
+reads as a bug in the version check rather than as the tests having deleted it.
+
+**Rule.** A destructive loop does not trust a path it was handed. `_discard` refuses any
+directory not named `updates` and deletes only `.exe` and `.part` — either guard alone
+would have prevented this. And no test points a real path at the working directory:
+`_scratch_cache` builds a temporary directory that is genuinely named like the cache, so
+the guard is not what makes the tests pass.
+
+`tests/test_auto_update.py::TheSweepDoesNotTrustItsPath` asserts both guards against a
+directory shaped like the one that got emptied — `VERSION` and `.gitignore` included —
+because "no test does that any more" is a promise about the tests, and this needs to be a
+property of the code.
+
+---
+
+## 7. An argument list is not a list of arguments
+
+### 7.1 A splatted array reaches a command positionally
 
 The release workflow built its switches up as an array and splatted it:
 
