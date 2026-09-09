@@ -15,6 +15,7 @@ from company_tui.application.updates import UpdateWatch
 from company_tui.domain import naming
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
+from company_tui.domain.recent import RecentPathsPort
 from company_tui.domain.script_config import (
     ScriptAction,
     ScriptCatalogue,
@@ -194,6 +195,13 @@ is named there rather than repeated here.
 """
 
 UPDATE_DECLINED = "Left alone - nothing was installed."
+
+UPDATE_RUNS = "\n{count} other run{s} will be stopped."
+"""Added to the install question when something else is going.
+
+The run doing the asking is not counted: it is about to end either way, and naming it
+turns the question into the app arguing with the button just pressed.
+"""
 NO_INSTALLER_AT = "There is no installer at {path} any more."
 
 NOTHING_TO_INSTALL = "Nothing to install - no newer build has been downloaded."
@@ -273,6 +281,7 @@ class TuiConsole(App):
         memory: SessionMemory | None = None,
         workspace: str = "",
         watch: UpdateWatch | None = None,
+        recent: RecentPathsPort | None = None,
     ) -> None:
         super().__init__()
         self.application: Application | None = None
@@ -280,6 +289,9 @@ class TuiConsole(App):
         """A capability to open on instead of the menu. See Ui.choose_capability."""
         self.workspace_label = workspace_label
         self._memory = memory
+        self._recent = recent
+        """The directories picked before, or None where there is nothing to remember
+        with. Kept under the user's home, which an installer update cannot reach."""
         self._watch = watch
         """The launch-time update check, or None where there is nothing to check
         with — the plain console has no chrome to put a badge in, and a test pilot
@@ -472,6 +484,17 @@ class TuiConsole(App):
 
         The path is checked before anything is asked. A dialog offering to install a
         file that is not there is a dialog whose only outcome is an error.
+
+        ONE QUESTION, NOT TWO
+        =====================
+        This asked the quit confirmation underneath the install one, the way `Ctrl+U`
+        does. From a keypress that is right - the runs it names are somebody's real
+        work. From inside a run panel it is not: the card IS a run, so the second
+        dialog asked whether to stop the very run doing the asking. Answering no to
+        that - which is the sane answer to "quit with a run going" when you asked to
+        install, not to quit - abandoned the install with nothing to say why.
+        So the cost of the OTHER runs is named in the one question, and the run that
+        is asking is left out of the count.
         """
         if self._watch is None:
             return "update installing is not configured"
@@ -479,17 +502,23 @@ class TuiConsole(App):
         if not target.is_file():
             return NO_INSTALLER_AT.format(path=installer)
 
+        detail = UPDATE_DETAIL.format(version=version, installed=APP_VERSION)
+        session = current_session()
+        others = [live for live in self._sessions.live() if live is not session]
+        if others:
+            detail += UPDATE_RUNS.format(
+                count=len(others), s="" if len(others) == 1 else "s"
+            )
+
         answer = await self.push_screen_wait(
             ConfirmScreen(
                 UPDATE_CONFIRM,
                 self.trail_label(),
-                detail=UPDATE_DETAIL.format(version=version, installed=APP_VERSION),
+                detail=detail,
                 confirm=UPDATE_ANSWER,
             )
         )
         if not answer:
-            return UPDATE_DECLINED
-        if not await self._confirm_quit():
             return UPDATE_DECLINED
 
         problem = self._watch.arm(target)
@@ -1476,9 +1505,19 @@ class TuiConsole(App):
         # made of, and putting it in TRAIL_STEPS would make going back to a menu
         # forget it.
         await self._claim_screen(current_session())
-        return await self.push_screen_wait(
-            PathScreen(start, prompt or "Choose a project")
+        chosen = await self.push_screen_wait(
+            PathScreen(
+                start,
+                prompt or "Choose a project",
+                recent=self._recent.recent() if self._recent is not None else (),
+            )
         )
+        # Recorded on the way out, and only for an answer: a dialog somebody escaped
+        # out of said nothing about where they work, and a history that filled up with
+        # cancelled navigation would be a history of nothing.
+        if chosen and self._recent is not None:
+            self._recent.remember(chosen)
+        return chosen
 
     async def choose_script_section(
         self,
