@@ -49,6 +49,7 @@ from company_tui.infrastructure.handover import (
 )
 from company_tui.infrastructure.update_state import FileUpdateState
 from company_tui.presentation.chrome import AppHeader
+from company_tui.presentation.screens import INSTALLING_DETAIL, InstallingScreen
 
 NOW = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
 
@@ -812,3 +813,61 @@ class TheBadge(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheInstallingScreen(unittest.IsolatedAsyncioTestCase):
+    """What the app puts up between saying yes to an update and going away.
+
+    The window used to vanish on the spot: everything after the click is correct
+    and none of it was visible, so the one moment the app was doing exactly what
+    it had been asked to do was the moment it looked like a crash.
+    """
+
+    class _App(App):
+        pass
+
+    async def _up(self, app: App, version: str = "0.2.0+14") -> InstallingScreen:
+        screen = InstallingScreen(version)
+        await app.push_screen(screen)
+        return screen
+
+    async def test_it_says_which_version_and_what_will_happen(self):
+        app = self._App()
+        async with app.run_test() as pilot:
+            screen = await self._up(app)
+            await pilot.pause()
+            said = str(screen.query_one("#installing", Static).render())
+            self.assertIn("0.2.0+14", said)
+            self.assertIn("Installing", said)
+            self.assertIn(
+                INSTALLING_DETAIL, str(screen.query_one("#detail", Static).render())
+            )
+
+    async def test_nothing_dismisses_it(self):
+        # By now the handover is armed and something is waiting on this pid, so
+        # there is nowhere to go back to - a key that appeared to cancel would be
+        # a control that lies. It is the only screen in the app with no way out.
+        app = self._App()
+        async with app.run_test() as pilot:
+            await self._up(app)
+            await pilot.pause()
+            for key in ("escape", "enter", "q", "space"):
+                await pilot.press(key)
+            await pilot.click()
+            await pilot.pause()
+            self.assertIsInstance(app.screen, InstallingScreen)
+
+    async def test_the_mark_turns_rather_than_sitting_still(self):
+        # This screen is up for as long as shutting down takes, which with a run
+        # mid-install is a subprocess tree to kill - and a still frame held for
+        # four seconds is the wedged window it exists to rule out.
+        app = self._App()
+        async with app.run_test() as pilot:
+            screen = await self._up(app)
+            await pilot.pause()
+            first = str(screen.query_one("#installing", Static).render())
+            screen._turn()
+            await pilot.pause()
+            self.assertNotEqual(
+                first, str(screen.query_one("#installing", Static).render())
+            )
