@@ -24,7 +24,7 @@ class ReactNativeTemplatePack(TemplatePack):
             key=behavior.PACK_KEY,
             name="React Native",
             version="0.2.0",
-            description="React Native app from the IKAIKA structure repo",
+            description="React Native app from the shared structure repo",
         )
 
     def options(self, target: ScaffoldTarget) -> tuple[Option, ...]:

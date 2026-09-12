@@ -1,0 +1,500 @@
+# Cuts a release: bumps the version, tags it, builds and signs the installer, publishes it.
+#
+# Every step is a call into script.ps1, the same commands run by hand:
+#
+#     .\script.ps1 check-all
+#     .\script.ps1 setup-signing -FetchOnly
+#     .\script.ps1 bump-version -Bump patch [-Released] [-WhatIf] -Yes
+#     .\script.ps1 build-app -Sign [-Released] [-Clean]
+#     .\script.ps1 build-installer -Sign [-Released]
+#
+# so a release can be rehearsed locally in full. What this file adds is the two things
+# that are genuinely CI's job and which bump-version deliberately refuses to do: pushing,
+# and publishing.
+#
+#
+# THE DEFAULT RUN PUBLISHES NOTHING
+#
+# `tag` is off by default, and it is the one input that decides whether anything leaves
+# the runner. With it off the whole outward-facing half is skipped: bump-version runs with
+# -WhatIf, so VERSION is not rewritten and nothing is committed or tagged, and the push and
+# publish steps do not run. What that leaves is a rehearsal - the gate, a real signed
+# build, a real installer - kept as a workflow artifact so there is something to have
+# rehearsed. `bump` still says what a release WOULD produce, and the build is of the
+# version already in the tree, because that is the version build-app is about to stamp.
+#
+# Defaulting to a rehearsal rather than to a release is the same reasoning as bump-version
+# never pushing: publishing is a decision somebody makes, not what happens when a form is
+# submitted with everything left alone.
+#
+# `installer` and `clean` are there because a rehearsal is worth having quickly. Both map
+# onto switches the scripts already have, so neither adds a behaviour that exists only in
+# CI. `tag` without `installer` is refused up front - the release is published with the
+# installer as its only asset.
+#
+#
+# && AND || IN AN EXPRESSION: THE NON-EMPTY SIDE GOES FIRST
+#
+#     ${{ inputs.sign && '-Sign' || '' }}        correct
+#     ${{ inputs.tag && '' || '-WhatIf' }}       ALWAYS yields -WhatIf
+#
+# These operators return an operand rather than a boolean, and '' is falsy - so a true
+# condition whose left result is empty falls straight through to the right one. Every
+# switch below is written with the token on the left and the empty string on the right,
+# and a condition needing the opposite sense is negated instead.
+#
+#
+# EVERY CALL IS LITERAL TOKENS, NEVER A SPLATTED ARRAY
+#
+# The lines above are what a person types, and that is the only shape that survives the
+# trip through script.ps1. This file built its argument lists as arrays and splatted them:
+#
+#     $bumpArgs = @('-Bump', 'minor', '-Yes')
+#     .\script.ps1 bump-version @bumpArgs        # WRONG, and it failed a whole release
+#
+# Array splatting in PowerShell is POSITIONAL. '-Bump' arrives as the VALUE of -Bump and
+# 'minor' then has nowhere left to go: "A positional parameter cannot be found that accepts
+# argument 'minor'". A hashtable splat does bind by name and still does not survive,
+# because script.ps1 forwards the automatic $args and everything in it has been flattened
+# to a value by then - `-Released:$false` comes back as a positional 'False'. Only tokens
+# typed at the call site make it, which is exactly what script.ps1's own header says.
+#
+# So an optional switch is decided in YAML, where the substitution leaves a literal token
+# behind, rather than in PowerShell, where it leaves a string in an array. Interpolating an
+# input into a command line is safe here and only here because every input is TYPED - a
+# choice of four words and two booleans, never free text. check-all now fails on either
+# wrong spelling; see docs/pitfalls.md 7.1.
+#
+#
+# fetch-depth: 0, AND THAT IS NOT OPTIONAL
+#
+# The build number rises globally and is read from the VERSION file AT each tag, with
+# `git show <tag>:VERSION`. A shallow clone has no tags and no history behind them, so
+# every tag contributes nothing and the next number comes out as "whatever VERSION says
+# plus one" - which is the reset the global numbering exists to prevent. An installer
+# compares that number, so a reset makes an upgrade look older than what is installed.
+#
+#
+# -released IS THE SUFFIX, AND IT IS WHAT MAKES A BUILD OFFICIAL
+#
+#     v1.2.0+8              a debug build
+#     v1.2.0+8-released     the official release, signed with the release certificate
+#
+# One version can carry both. The debug tags are what the source collected on its way
+# there; the suffixed one is what a release feed offers. The `+8` is the build number,
+# which is in the tag because that is the number an installer compares - and the suffix
+# stays last, because `Release.official` in domain/updates.py asks what a tag ends with. `released: false` publishes as a
+# prerelease, so the "latest release" the updater asks for is only ever an official one.
+#
+#
+# SIGNING FETCHES, IT NEVER GENERATES
+#
+# setup-signing -FetchOnly. Without that switch, a runner that cannot reach the share
+# link would answer by minting a brand-new self-signed certificate, so every release would
+# be signed by a different identity that exists only inside that runner - and users would
+# see the publisher change on every update. -FetchOnly makes that case fail instead.
+#
+# Three secrets, and what checks them is the one part of this that IS committed:
+#
+#     DTI_CERT_PASSWORD          opens both .pfx files
+#     DTI_CERT_SHARE_URL         where release.pfx is fetched from
+#     DTI_DEBUG_CERT_SHARE_URL   where debug.pfx is fetched from
+#
+# The links are secrets rather than committed configuration because a share link is the
+# capability to fetch the container, not a path to it - the rlkey in a Dropbox /scl/fi/
+# link is part of the credential - and a committed link cannot be rotated out of the
+# history of every clone that pulled it. .dti_configs/*.pfx.sha256 stays committed: it
+# proves the file that arrived is the right one, and it is the half that is safe to
+# publish. See docs/decisions/0003-a-share-link-is-a-secret.md.
+#
+# Both links, not one. setup-signing fetches both certificates, and a debug installer is
+# signed with its own identity so that testing never touches the release signature's trust.
+#
+#
+# EVERY ENV VAR HERE IS ONE SOMETHING ACTUALLY READS
+#
+# The three signing secrets are read by Get-CertPassword and Get-ShareUrl in
+# scripts/lib/signing.ps1, which is what earns them their place. Nothing else is passed.
+#
+# The sibling project turns its front ends off on a runner with IE_SCRIPTS_NO_GUI and
+# friends, since a bare invocation there opens a terminal app and hangs. This repository's
+# script.ps1 prints its listing and exits, and the only two commands that ask a question
+# take -Yes, which is passed below. A GENERIC_NO_PROMPT here would be config that nothing
+# reads - which reads as protection and is not.
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        # The description carries what `keep` means, because a dropdown option is one word
+        # and this one is the only entry that does not raise anything. It is the same
+        # branch Resolve-NextVersion has always had, which accepts `same` as well - the
+        # form offers one spelling of it rather than two identical choices.
+        description: 'Which part of the version to raise. keep = a new build number, same version name'
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major, keep]
+      released:
+        description: 'Official release (adds -released, publishes as latest)'
+        type: boolean
+        required: true
+        default: false
+      sign:
+        description: 'Sign the artifacts (needs the share link and the password secret)'
+        type: boolean
+        required: true
+        default: true
+      tag:
+        description: 'Tag, push and publish. Off = rehearsal, nothing leaves the runner'
+        type: boolean
+        required: true
+        default: false
+      installer:
+        description: 'Also wrap the frozen app in the NSIS installer'
+        type: boolean
+        required: true
+        default: true
+      clean:
+        description: "Clear PyInstaller's cache and work directory before freezing"
+        type: boolean
+        required: true
+        default: false
+
+# Never two releases at once: both would read the same tags, hand out the same build
+# number, and the second push would be rejected after a full build had already run.
+#
+# Keyed on `tag`, because that reasoning is entirely about runs which push. A rehearsal
+# claims nothing and pushes nothing, so it has no business queueing behind a release - or
+# holding one up. Two rehearsals still serialize with each other, which is a runner minute
+# rather than something worth an expression nobody can read.
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    permissions:
+      # To push the version commit and the tag, and to create the release.
+      contents: write
+
+    steps:
+      # First, and before the clone: an impossible combination costs seconds here and
+      # forty minutes three steps in. `gh release create` would fail on its own, but only
+      # after a full signed build AND a pushed tag - which is a version published that
+      # nobody can install, the one outcome the ordering further down exists to prevent.
+      - name: Refuse an impossible combination
+        if: ${{ inputs.tag && !inputs.installer }}
+        shell: pwsh
+        run: |
+          Write-Host 'tag = true needs installer = true.' -ForegroundColor Red
+          Write-Host 'The release is published with the installer as its only asset,' -ForegroundColor Yellow
+          Write-Host 'and with installer = false there would not be one.' -ForegroundColor Yellow
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          # See the header. Tags and their history, or the build number resets.
+          fetch-depth: 0
+
+      - name: Identify the committer
+        shell: pwsh
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      # Chocolatey is already on windows-latest, so this is a shell command rather than a
+      # marketplace action. The Windows SDK - and signtool with it - is preinstalled.
+      - name: Install NSIS
+        if: ${{ inputs.installer }}
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'choco install nsis failed' }
+
+      # WHERE THE CACHES ARE, ASKED RATHER THAN ASSUMED
+      #
+      # `%LOCALAPPDATA%\pip\Cache` is where pip keeps its downloads today and is not a
+      # contract - `pip cache dir` is. Asked with the RUNNER's python, before the
+      # virtualenv exists, and that is not a problem: pip's download cache is per USER,
+      # not per environment, so the path the runner's pip reports is the one the venv's
+      # pip will use. That is the whole reason this works at all.
+      #
+      # PyInstaller has no equivalent question to ask, so its documented location is used
+      # with a fallback. A cache path that comes back empty is simply not cached: `if` on
+      # the cache step, rather than a step that fails over a directory that does not
+      # exist yet.
+      - name: Locate the caches
+        id: caches
+        shell: pwsh
+        run: |
+          # try/catch, because CACHING MUST NEVER BE WHY A RUN FAILS. A missing python
+          # is setup-dev-env's to report - it has a sentence for it - and a caching step
+          # that dies first replaces that sentence with a CommandNotFoundException.
+          $pip = ''
+          try {
+              $answer = & python -m pip cache dir 2>$null
+              if ($LASTEXITCODE -eq 0) { $pip = "$answer".Trim() }
+          } catch {
+              $pip = ''
+          }
+          "pip=$pip" | Out-File $env:GITHUB_OUTPUT -Append
+
+          # In the key, not the path: a runner image that moves to a new python patch
+          # release should start a new cache rather than accumulate wheels for two
+          # interpreters in one.
+          $python = 'unknown'
+          try {
+              $answer = & python -c "import sys; sys.stdout.write('.'.join(map(str, sys.version_info[:3])))"
+              if ($LASTEXITCODE -eq 0 -and $answer) { $python = "$answer".Trim() }
+          } catch {
+              $python = 'unknown'
+          }
+          "python=$python" | Out-File $env:GITHUB_OUTPUT -Append
+
+          $pyinstaller = Join-Path $env:LOCALAPPDATA 'pyinstaller'
+          "pyinstaller=$pyinstaller" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # The DOWNLOAD cache, and deliberately not the virtualenv.
+      #
+      # A restored pip cache cannot make a run wrong - worst case it is ignored and
+      # everything is fetched again. A restored `.venv` can: it carries an interpreter and
+      # an editable install, and one built against a python the runner has since upgraded
+      # is a venv whose python.exe will not start. `setup-dev-env` would then fail on a
+      # cache hit and pass on a miss, which is the worst failure shape CI has.
+      #
+      # `restore-keys` matters more than the key here. Without it, changing one line of
+      # `uv.lock` means a completely cold cache and every wheel downloaded again; with it,
+      # the newest cache for this python is used as a starting point and only what actually
+      # changed is fetched.
+      - name: Cache the downloads
+        if: ${{ steps.caches.outputs.pip != '' }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.caches.outputs.pip }}
+          key: pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-build-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-build-
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-
+
+      # PyInstaller's own cache: the bootloader it links and the analysis it did last
+      # time. Keyed loosely on purpose - it is keyed on what is INSTALLED rather than on
+      # the source, because a source change is exactly what it is meant to re-analyse.
+      # Nothing here is correctness-critical; a stale entry costs a re-analysis.
+      - name: Cache the PyInstaller build cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.caches.outputs.pyinstaller }}
+          key: pyinstaller-${{ runner.os }}-py${{ steps.caches.outputs.python }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            pyinstaller-${{ runner.os }}-py${{ steps.caches.outputs.python }}-
+
+      - name: Set up the environment
+        shell: pwsh
+        run: .\script.ps1 setup-dev-env -Build -Lint
+
+      # The gate, before anything is tagged. A release built from source that does not
+      # pass its own checks is the one thing tagging is supposed to make impossible.
+      - name: Check everything
+        shell: pwsh
+        run: .\script.ps1 check-all
+
+      - name: Fetch the signing certificates
+        if: ${{ inputs.sign }}
+        shell: pwsh
+        env:
+          DTI_CERT_PASSWORD: ${{ secrets.DTI_CERT_PASSWORD }}
+          DTI_CERT_SHARE_URL: ${{ secrets.DTI_CERT_SHARE_URL }}
+          DTI_DEBUG_CERT_SHARE_URL: ${{ secrets.DTI_DEBUG_CERT_SHARE_URL }}
+        run: |
+          # Named here rather than left to the fetch, which cannot tell an unset secret
+          # from a link that has been revoked - and one of those is fixed in the settings
+          # page while the other means uploading a certificate again.
+          $needed = 'DTI_CERT_PASSWORD', 'DTI_CERT_SHARE_URL', 'DTI_DEBUG_CERT_SHARE_URL'
+          $missing = @($needed | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
+          if ($missing.Count) {
+            Write-Host "Not set on this repository: $($missing -join ', ')" -ForegroundColor Red
+            Write-Host 'Set them, or run this workflow with sign = false.' -ForegroundColor Yellow
+            exit 1
+          }
+          .\script.ps1 setup-signing -FetchOnly -Yes
+
+      # Commits VERSION and pyproject.toml and tags them. Local only - it prints the push
+      # line rather than running it, so the push below is this file's decision.
+      #
+      # -WhatIf when this run is not tagging: it still checks that the tag is free and
+      # prints what it would write, and writes nothing. The readback below then reports the
+      # version already in the tree, which is the right answer either way - it is the
+      # version build-app is about to stamp.
+      - name: Bump the version and tag it
+        id: bump
+        shell: pwsh
+        run: |
+          .\script.ps1 bump-version -Bump ${{ inputs.bump }} -Yes ${{ inputs.released && '-Released' || '' }} ${{ !inputs.tag && '-WhatIf' || '' }}
+          if ($LASTEXITCODE -ne 0) { throw 'bump-version failed' }
+
+          # Read back what it actually wrote rather than recomputing it here. Two places
+          # deciding what the version is, is two versions.
+          . .\scripts\lib\app-version.ps1
+          $version = Get-AppVersion
+          $text = Format-AppVersion $version
+          $tag = Get-TagName $version -Released:('${{ inputs.released }}' -eq 'true')
+          "version=$text"   | Out-File $env:GITHUB_OUTPUT -Append
+          "name=$($version.Name)" | Out-File $env:GITHUB_OUTPUT -Append
+          "tag=$tag"        | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Build the app
+        shell: pwsh
+        run: |
+          .\script.ps1 build-app ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }} ${{ inputs.clean && '-Clean' || '' }}
+          if ($LASTEXITCODE -ne 0) { throw 'build-app failed' }
+
+      - name: Build the installer
+        if: ${{ inputs.installer }}
+        shell: pwsh
+        run: |
+          .\script.ps1 build-installer ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }}
+          if ($LASTEXITCODE -ne 0) { throw 'build-installer failed' }
+
+      # AFTER the build. bump-version tags before building on purpose, so the number is
+      # claimed before anything is produced with it - but pushing a tag for a build that
+      # then failed publishes a version nobody can install.
+      - name: Push the commit and the tag
+        if: ${{ inputs.tag }}
+        shell: pwsh
+        run: |
+          git push origin HEAD "${{ steps.bump.outputs.tag }}"
+          if ($LASTEXITCODE -ne 0) { throw 'the push failed' }
+
+      # gh is preinstalled on the runner, so this is the CLI rather than a marketplace
+      # release action - the same command anybody can run against this repository.
+      #
+      # THE NOTES ARE GENERATED AND THEN PREFIXED, IN THAT ORDER
+      #
+      # `POST /releases/generate-notes` returns the changelog GitHub builds from the
+      # commits and pull requests since the previous release, and this composes the body
+      # itself: the four lines that matter for an installer first, then a rule, then the
+      # generated part. Ordering it here rather than passing `--generate-notes` to
+      # `gh release create`, because that flag generates the title and body and what
+      # happens to a `--notes` given alongside it is not written down anywhere - and a
+      # release path is not the place for a behaviour nobody documented.
+      #
+      # `.github/release.yml` groups what comes back. A failure to generate is not a
+      # failure to release: the body falls back to the four lines, which are the ones an
+      # installer actually needs.
+      - name: Publish the release
+        if: ${{ inputs.tag }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.bump.outputs.tag }}'
+          $text = '${{ steps.bump.outputs.version }}'
+          $official = '${{ inputs.released }}' -eq 'true'
+          $asset = Get-ChildItem 'dist' -Filter '*-setup*.exe' |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $asset) { throw 'no installer in dist to publish' }
+
+          $signedNote = if ('${{ inputs.sign }}' -eq 'true') {
+              'Signed with the ' + $(if ($official) { 'release' } else { 'debug' }) + ' certificate.'
+          } else {
+              'Unsigned - Windows will report an unknown publisher.'
+          }
+
+          $notes = @(
+            "Version $text",
+            '',
+            $signedNote,
+            'Per-user install under %LOCALAPPDATA%\Programs - no administrator prompt.',
+            'Installing over an existing copy removes the old one first.'
+          ) -join "`n"
+
+          $generated = ''
+          $answer = & gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" `
+              -f tag_name=$tag 2>$null
+          if ($LASTEXITCODE -eq 0 -and $answer) {
+              try { $generated = ($answer | ConvertFrom-Json).body } catch { $generated = '' }
+          }
+          if ($generated) {
+              $notes = "$notes`n`n---`n`n$generated"
+              Write-Host 'Release notes: generated changelog appended.'
+          } else {
+              Write-Host 'Release notes: nothing generated (first release, or the API declined).'
+          }
+
+          # Through a file rather than as an argument. The generated changelog carries
+          # newlines, backticks and whatever anybody wrote in a pull request title, and
+          # every one of those is something a command line can misread.
+          $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $notes | Out-File $notesFile -Encoding utf8
+
+          # --prerelease for a debug build, so "latest release" - which is what the
+          # updater asks GitHub for - is only ever an official one.
+          $releaseArgs = @('release', 'create', $tag, $asset.FullName,
+                           '--title', "$text", '--notes-file', $notesFile)
+          if (-not $official) { $releaseArgs += '--prerelease' }
+          & gh @releaseArgs
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
+
+          Write-Host "Published $tag with $($asset.Name)"
+
+          @(
+            "## Published $tag",
+            '',
+            "| | |",
+            "|---|---|",
+            "| Version | ``$text`` |",
+            "| Tag | [``$tag``]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag) |",
+            "| Kind | $(if ($official) { 'official release' } else { 'prerelease (debug build)' }) |",
+            "| Signed | $(if ('${{ inputs.sign }}' -eq 'true') { 'yes' } else { 'no' }) |",
+            "| Installer | ``$($asset.Name)`` ($([math]::Round($asset.Length / 1MB, 1)) MB) |",
+            "| Notes | $(if ($generated) { 'custom + generated changelog' } else { 'custom only' }) |"
+          ) -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      # The other half of the same either/or: a run that publishes nothing still has to
+      # leave the installer somewhere, or the rehearsal proved the build works and then
+      # threw away the only evidence. upload-artifact rather than gh here because there is
+      # no release to attach to - this is the run's own scratch space, and it expires by
+      # itself rather than accumulating in the release list beside the real ones.
+      #
+      # No artifact when the installer was skipped: the frozen folder is what build-app
+      # leaves behind, and uploading tens of megabytes of it to prove a freeze compiled is
+      # not worth the minutes.
+      - name: Keep the build from a rehearsal
+        if: ${{ !inputs.tag && inputs.installer }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: rehearsal-${{ steps.bump.outputs.version }}
+          path: dist/*-setup*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      # A rehearsal publishes nothing, so the summary is the only thing it leaves in the
+      # browser. It says what it would have done, which is the point of rehearsing.
+      #
+      # if: always() with a guard, so a FAILED rehearsal still reports which version and
+      # which step - a red run whose summary is blank is a run somebody has to read the
+      # log to understand.
+      - name: Say what the rehearsal did
+        if: ${{ always() && !inputs.tag }}
+        shell: pwsh
+        run: |
+          $version = '${{ steps.bump.outputs.version }}'
+          $tag = '${{ steps.bump.outputs.tag }}'
+          @(
+            '## Rehearsal - nothing was published',
+            '',
+            "| | |",
+            "|---|---|",
+            "| Version built | ``$(if ($version) { $version } else { 'the bump did not get that far' })`` |",
+            "| Tag it would have cut | ``$(if ($tag) { $tag } else { '-' })`` |",
+            "| Signed | $(if ('${{ inputs.sign }}' -eq 'true') { 'yes' } else { 'no' }) |",
+            "| Installer | $(if ('${{ inputs.installer }}' -eq 'true') { 'built, kept as a run artifact for 14 days' } else { 'skipped' }) |",
+            '',
+            'Nothing was committed, tagged, pushed or published. Re-run with **tag** ticked to publish.'
+          ) -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

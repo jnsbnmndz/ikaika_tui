@@ -8,9 +8,18 @@ class Application:
         self._console = console
         self._registry = registry
 
-    async def run(self) -> int:
+    async def run(self, start: str = "") -> int:
+        """The menu loop, optionally opening on one capability.
+
+        `start` is spent on the first pass and not remembered: coming back from that
+        capability has to reach the menu, or the rest of the toolbox is unreachable
+        to anyone who launched it this way.
+        """
         while True:
-            capability = await self._console.choose_capability(self._registry.all())
+            capability = await self._console.choose_capability(
+                self._registry.all(), start
+            )
+            start = ""
             if capability is None:
                 self._console.write("Goodbye.")
                 return 0

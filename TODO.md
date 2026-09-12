@@ -177,7 +177,9 @@ pointer, two columns from a `+` that starts a run. The `HoverLight` mixin from
   `IdentityRewrite` for the file that carries the project's name — `pubspec.yaml`
   for Flutter, `package.json` for React — and follow `templates/react_native/`.
 - **`build` only reports the Python version.** It does not build anything.
-- **`deploy` and `scripts` are placeholders.** Neither does anything yet.
+- **`deploy` is a placeholder.** It does nothing yet. `scripts` is not: it reads the
+  `ikaika.script.json` a project carries and runs what that declares
+  (`docs/decisions/0001-a-project-declares-its-own-commands.md`).
 - **Doctor never fails.** It reports a missing tool and still exits 0, so it
   cannot gate anything in CI. Deliberate for now; revisit if that changes.
 - **Other noisy commands want `QuietRun`.** `npm install` goes through it now.

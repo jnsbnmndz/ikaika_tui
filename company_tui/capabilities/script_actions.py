@@ -143,4 +143,4 @@ async def walk(
         return Walk(Ending.DONE, exit_code=result.exit_code)
 
 
-__all__ = ["Ending", "FAILED", "STOPPED_MESSAGE", "Walk", "walk"]
+__all__ = ["FAILED", "STOPPED_MESSAGE", "Ending", "Walk", "walk"]

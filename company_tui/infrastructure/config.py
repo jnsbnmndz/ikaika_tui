@@ -1,12 +1,12 @@
-"""Settings read from and written to `ikaika.toml`.
+"""Settings read from and written to the toolbox's own TOML file.
 
 Looked for beside the project first and in the user's home second, so a team can
 pin a template for one repository without changing what everyone else gets.
 
     [scaffold]
     workspace_root = "~/work"
-    bundle_prefix  = "com.ikaika"
-    scripts_root   = "~/.ikaika/scripts"
+    bundle_prefix  = "com.dti"
+    scripts_root   = "~/.dti/scripts"
 
     [templates.react_native]
     url = "https://github.com/JDM-Github/react_native_structure.git"
@@ -16,7 +16,12 @@ pin a template for one repository without changing what everyone else gets.
     url = "https://github.com/JDM-Github/react_native_scripts.git"
     ref = "v1.0.0"
 
-Nothing here is required. A malformed or unreadable file falls back to the
+    [updates]
+    repository = "owner/name"
+
+Either filename is read - the one before the rename included - and a file that
+already exists keeps its name. Nothing here is required. A malformed or
+unreadable file falls back to the
 defaults rather than stopping the toolbox: settings that cannot be parsed are a
 reason to warn, not a reason to be unable to scaffold anything.
 
@@ -28,6 +33,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from company_tui.domain import naming
 from company_tui.domain.config import (
     DEFAULT_BUNDLE_PREFIX,
     DEFAULT_SCRIPTS_ROOT,
@@ -37,14 +43,38 @@ from company_tui.domain.config import (
     Settings,
     TemplateSource,
 )
+from company_tui.domain.updates import (
+    CHANNEL_ANY,
+    CHANNEL_OFFICIAL,
+    CHANNELS,
+    DEFAULT_API_BASE,
+    DEFAULT_ASSET_PATTERN,
+    DEFAULT_REPOSITORY,
+    UpdateSource,
+)
 
-CONFIG_NAME = "ikaika.toml"
-HOME_CONFIG = Path.home() / ".ikaika" / CONFIG_NAME
+CONFIG_NAME = naming.CONFIG_NAME
+HOME_CONFIG = naming.store_dir() / CONFIG_NAME
+
+
+def settings_file(directory: Path) -> Path:
+    """This directory's settings file, whichever name it already goes by.
+
+    A file somebody has edited keeps its name: preferring the new one would read
+    an empty default over a real configuration and then write the answer
+    somewhere the old file is still sitting, saying something else.
+    """
+    for name in naming.config_names():
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return directory / CONFIG_NAME
 
 TEMPLATES_SECTION = "templates"
 SCRIPTS_SECTION = "scripts"
+UPDATES_SECTION = "updates"
 
-HEADER = "# IKAIKA developer toolbox settings."
+HEADER = f"# {naming.APP_TITLE} settings."
 
 
 def quote(value: str) -> str:
@@ -63,6 +93,33 @@ def render(settings: Settings) -> str:
         f"bundle_prefix = {quote(settings.bundle_prefix)}",
         f"scripts_root = {quote(settings.scripts_root)}",
     ]
+    # Only when it differs from the defaults. An [updates] table repeating the
+    # built-in values in every settings file is noise that reads as configuration,
+    # and the next person to change a default would leave every existing file
+    # pinned to the old one.
+    updates = settings.updates
+    update_lines = []
+    # `repository` is the one field where an EMPTY value has to be WRITTEN DOWN, and
+    # it is the mirror of the absent/empty distinction in `update_source` above. Empty
+    # means off; the default is not empty; a file that merely omitted the line reads as
+    # "nothing said" and gets the default back. So clearing the field in Advanced would
+    # switch update checking off until the next read and then quietly on again.
+    #
+    # Omitted only when it IS the default, which is the noise this block exists to avoid.
+    repository = updates.repository.strip()
+    if not repository:
+        update_lines.append('repository = ""')
+    elif repository != DEFAULT_REPOSITORY:
+        update_lines.append(f"repository = {quote(repository)}")
+    if updates.api_base.strip() and updates.api_base.strip() != DEFAULT_API_BASE:
+        update_lines.append(f"api_base = {quote(updates.api_base.strip())}")
+    if updates.channel != CHANNEL_OFFICIAL:
+        update_lines.append(f"channel = {quote(updates.channel)}")
+    if updates.asset_pattern.strip() and updates.asset_pattern.strip() != DEFAULT_ASSET_PATTERN:
+        update_lines.append(f"asset_pattern = {quote(updates.asset_pattern.strip())}")
+    if update_lines:
+        lines += ["", f"[{UPDATES_SECTION}]", *update_lines]
+
     for key in sorted(settings.templates):
         source = settings.templates[key]
         if not source.url:
@@ -91,8 +148,10 @@ def render(settings: Settings) -> str:
 
 class FileConfig(ConfigPort):
     def __init__(self, project: Path | None = None, user: Path | None = None) -> None:
-        self._project = project if project is not None else Path.cwd() / CONFIG_NAME
-        self._user = user if user is not None else HOME_CONFIG
+        self._project = project if project is not None else settings_file(Path.cwd())
+        self._user = (
+            user if user is not None else settings_file(naming.store_dir())
+        )
         self._settings: dict[str, Any] | None = None
         self._source: Path | None = None
         self.problem = ""
@@ -126,6 +185,47 @@ class FileConfig(ConfigPort):
             return True
         return entry.get("check", True) is not False
 
+    def update_source(self) -> UpdateSource:
+        section = self._section(UPDATES_SECTION)
+        # ABSENT AND EMPTY ARE DIFFERENT ANSWERS HERE, and this is the only field
+        # where that matters. A settings file with no `repository` line has not said
+        # anything, so it gets the default; one that says `repository = ""` has said
+        # "off", which is what clearing the field in Advanced writes. Collapsing the
+        # two - `.get("repository", "") or DEFAULT` - would turn update checking back
+        # on for the one person who deliberately turned it off.
+        configured = section.get("repository")
+        return UpdateSource(
+            repository=(
+                DEFAULT_REPOSITORY if configured is None else str(configured).strip()
+            ),
+            api_base=str(section.get("api_base", "")).strip() or DEFAULT_API_BASE,
+            channel=self._channel_of(section),
+            asset_pattern=str(section.get("asset_pattern", "")).strip()
+            or DEFAULT_ASSET_PATTERN,
+            # `is not False`, so a missing key and a malformed one both leave the
+            # check on. The same reading as `script_check` above: a setting nobody
+            # wrote is not a setting saying no.
+            check_on_launch=section.get("check_on_launch", True) is not False,
+        )
+
+    @staticmethod
+    def _channel_of(section: dict) -> str:
+        """The channel, falling back to the boolean this key replaced.
+
+        A settings file written before there were three channels says
+        `include_prereleases = true`, which meant "official or prereleases, whichever is
+        newest" - `any`, not `prerelease`. Reading it as prerelease-only would silently
+        stop offering official releases to somebody who never asked for that.
+
+        An unrecognised channel is the default rather than an error: this is one word in
+        a settings file, and refusing to start over a typo in it would be worse than
+        offering official releases to somebody who meant something else.
+        """
+        named = str(section.get("channel", "")).strip().lower()
+        if named in CHANNELS:
+            return named
+        return CHANNEL_ANY if section.get("include_prereleases") is True else CHANNEL_OFFICIAL
+
     def settings(self) -> Settings:
         scaffold = self._section("scaffold")
         return Settings(
@@ -137,6 +237,7 @@ class FileConfig(ConfigPort):
             scripts_root=str(scaffold.get("scripts_root", "")).strip()
             or DEFAULT_SCRIPTS_ROOT,
             scripts=self._pinned_sources(SCRIPTS_SECTION),
+            updates=self.update_source(),
             script_checks={
                 key: entry.get("check", True) is not False
                 for key, entry in self._section(SCRIPTS_SECTION).items()

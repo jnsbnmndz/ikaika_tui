@@ -10,7 +10,7 @@ place, identically for every stack.
 import sys
 from collections.abc import Mapping
 
-from company_tui.domain.identity import ProjectIdentity, new_manifest
+from company_tui.domain.identity import SCRIPT_MANIFEST, ProjectIdentity, new_manifest
 from company_tui.domain.project_name import ProjectName
 from company_tui.domain.scaffolding import display_path
 from company_tui.domain.template_pack import (
@@ -122,7 +122,11 @@ def _project_files(identity: ProjectIdentity) -> dict[str, str]:
         return template
 
     return {
-        "ikaika.script.json": new_manifest(identity),
+        # The CONSTANT, not the string. This was the old filename written
+        # verbatim, so the reference pack scaffolded every new project with a
+        # manifest named after the product's previous name - readable, because
+        # the resolvers accept it, and wrong, because it is what gets written.
+        SCRIPT_MANIFEST: new_manifest(identity),
         "pyproject.toml": fill(_PYPROJECT),
         "README.md": fill(_README),
         ".env.example": _ENVIRONMENT_EXAMPLE,

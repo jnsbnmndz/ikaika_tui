@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Sequence
 from contextlib import suppress
+from pathlib import Path
 from typing import TypeVar
 
 from textual import events, work
@@ -10,11 +11,24 @@ from textual.timer import Timer
 from textual.widgets import RichLog
 
 from company_tui.application.app import Application
+from company_tui.application.updates import UpdateWatch
+from company_tui.domain import naming
 from company_tui.domain.capability import Capability
 from company_tui.domain.options import Option, OptionValue
-from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate
+from company_tui.domain.recent import RecentPathsPort
+from company_tui.domain.script_config import (
+    ScriptAction,
+    ScriptCatalogue,
+    ScriptSection,
+    ScriptUpdate,
+)
 from company_tui.domain.session_memory import SessionMemory
-from company_tui.domain.template_pack import ScaffoldTarget, ScaffoldTargetOption, TemplatePack
+from company_tui.domain.template_pack import (
+    ScaffoldTarget,
+    ScaffoldTargetOption,
+    TemplatePack,
+)
+from company_tui.domain.updates import NOTHING_TO_REPORT, UpdateReport
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
 from company_tui.infrastructure.window_shape import (
     DEFAULT_PLAN,
@@ -25,9 +39,16 @@ from company_tui.infrastructure.window_shape import (
     current_window,
     window_plan,
 )
-from company_tui.presentation.branding import APP_NAME, APP_TAGLINE, APP_VERSION, IKAIKA_THEME, PEAK_ART
+from company_tui.presentation.branding import (
+    APP_NAME,
+    APP_TAGLINE,
+    APP_THEME,
+    APP_VERSION,
+    PEAK_ART,
+)
 from company_tui.presentation.card import MenuEntry
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, BusyLine
+from company_tui.presentation.path_screen import PathScreen
 from company_tui.presentation.run_screen import RunScreen
 from company_tui.presentation.screens import (
     TRAIL_SEPARATOR,
@@ -35,6 +56,7 @@ from company_tui.presentation.screens import (
     ConfirmScreen,
     ContinueScreen,
     InputScreen,
+    InstallingScreen,
     RunsScreen,
     SplashScreen,
 )
@@ -45,8 +67,24 @@ from company_tui.presentation.session import (
     Workflow,
     current_session,
 )
+from company_tui.presentation.ui import RefreshRunner
 
-TRAIL_STEPS = ("capability", "scaffold_target", "template_pack", "script_action")
+TRAIL_STEPS = (
+    "capability",
+    "scaffold_target",
+    "template_pack",
+    "script_section",
+    "script_action",
+)
+"""Every menu a workflow can walk, in the order it walks them.
+
+ORDER IS LOAD-BEARING: `_enter_step` forgets a step and everything AFTER it in
+this tuple, so a step listed too late leaves its own successors standing when the
+user goes back. And a step MISSING from here is worse than misplaced -
+`TRAIL_STEPS.index` raises, the exception is caught as a failed run, and the
+workflow dies into the session log while the menu loop calmly puts the top menu
+back. Which is what "script_section" did: Scripts opened, vanished, and left a
+card menu that looked like nothing had been asked for."""
 
 SCRIPT_UPDATE_ANSWERS: tuple[tuple[str, str, str, str], ...] = (
     (
@@ -110,6 +148,20 @@ nothing and reads as flicker. Waited out rather than measured beforehand,
 because whether reading a stack's scripts is instant or is a network round trip
 depends on what is in the store and on what settings say to check."""
 
+INSTALL_PAUSE = 1.2
+"""How long the installing screen is held before the app actually goes.
+
+`docs/decisions/0004` says arming comes first and quitting follows immediately,
+because what has been armed is waiting for exactly that. This does not break
+that rule so much as pay a fixed, named price against it: the waiter allows 120
+seconds and this spends one of them.
+
+A floor rather than a delay. Shutting down writes the tabs and takes every run
+down, which for a run mid-`npm install` is a subprocess tree and covers this on
+its own - but with nothing running it is instant, and a message that appears and
+disappears inside one frame is worse than no message at all: the user sees a
+flicker and cannot say what it was."""
+
 WINDOW_POLL_INTERVAL = 0.2
 """How often the window is measured.
 
@@ -137,6 +189,52 @@ The size it is against the size it should be, because "too small" without a
 number leaves the user dragging an edge and guessing whether they are there yet.
 """
 
+UPDATE_MARK = "▲"
+"""The glyph on the update badge. Geometric Shapes, like every other mark drawn
+here — see `tests/test_glyphs.py` for why a plausible-looking emoji is not an
+option, and `domain/updates.py` for why the domain formats the notice around a
+mark it is handed rather than holding one."""
+
+UPDATE_CONFIRM = "Install the update?"
+UPDATE_DETAIL = (
+    "{version} replaces {installed}.\n"
+    "The toolbox will close, update itself, and reopen."
+)
+UPDATE_ANSWER = "INSTALL AND RESTART"
+"""What saying yes costs, spelled out.
+
+It closes the app — which is not what "install" implies on its own, and is the
+part somebody with a run going needs to know before they press it. The quit
+confirmation still happens underneath this one when runs are live, so the count
+is named there rather than repeated here.
+"""
+
+UPDATE_DECLINED = "Left alone - nothing was installed."
+
+UPDATE_RUNS = "\n{count} other run{s} will be stopped."
+"""Added to the install question when something else is going.
+
+The run doing the asking is not counted: it is about to end either way, and naming it
+turns the question into the app arguing with the button just pressed.
+"""
+NO_INSTALLER_AT = "There is no installer at {path} any more."
+
+NOTHING_TO_INSTALL = "Nothing to install - no newer build has been downloaded."
+"""Ctrl+U pressed with no badge up.
+
+The key is only ever advertised on the badge, so a press without one is somebody
+guessing - and a deliberate keypress that does nothing at all reads as a broken
+key. One line where a workflow without a panel says things.
+"""
+
+UPDATE_FAILED = "The update could not be started: {problem}"
+"""Said in the activity log rather than in a dialog.
+
+A handover that could not be armed leaves the app exactly where it was, which is
+not a state anybody needs a modal about — and the app is still perfectly usable,
+which a dialog would imply it is not.
+"""
+
 T = TypeVar("T")
 
 
@@ -160,6 +258,11 @@ class TuiConsole(App):
         # binding, which yields when there is no selection to copy.
         ("ctrl+c", "leave", "Quit"),
         ("ctrl+b", "resume_runs", "Runs"),
+        # Does nothing at all until there is an installer downloaded and waiting,
+        # which is why it is not in any footer: a hint for a key that is dead most
+        # of the time is a control that lies. The badge carries the key instead,
+        # and the badge only exists when the key does something.
+        ("ctrl+u", "install_update", "Update"),
     ]
 
     CSS = """
@@ -192,11 +295,22 @@ class TuiConsole(App):
         workspace_label: str | None = None,
         memory: SessionMemory | None = None,
         workspace: str = "",
+        watch: UpdateWatch | None = None,
+        recent: RecentPathsPort | None = None,
     ) -> None:
         super().__init__()
         self.application: Application | None = None
+        self.start_capability = ""
+        """A capability to open on instead of the menu. See Ui.choose_capability."""
         self.workspace_label = workspace_label
         self._memory = memory
+        self._recent = recent
+        """The directories picked before, or None where there is nothing to remember
+        with. Kept under the user's home, which an installer update cannot reach."""
+        self._watch = watch
+        """The launch-time update check, or None where there is nothing to check
+        with — the plain console has no chrome to put a badge in, and a test pilot
+        has no business asking GitHub anything."""
         self._workspace = workspace
         """Which project's tabs these are. One machine holds several, and the
         tabs of one are not the tabs of another."""
@@ -216,6 +330,10 @@ class TuiConsole(App):
         self._window: AppWindow | None = None
         self._window_watch: Timer | None = None
         self._window_notice = ""
+        self._update_notice = ""
+        self._update: UpdateReport = NOTHING_TO_REPORT
+        """What the launch check found. Empty until it has answered, and empty
+        forever if update checking is not configured."""
         self._plan: WindowPlan = DEFAULT_PLAN
         self._guard: SizeGuard | None = None
         self._leaving = False
@@ -233,8 +351,8 @@ class TuiConsole(App):
             yield AppFooter([("Ctrl+Q", "Quit")])
 
     def on_mount(self) -> None:
-        self.register_theme(IKAIKA_THEME)
-        self.theme = "ikaika"
+        self.register_theme(APP_THEME)
+        self.theme = naming.APP_SLUG
         output = self.query_one("#output", RichLog)
         output.border_title = "Activity"
         # The window is opened at a size, measured, and put back onto the floor
@@ -244,6 +362,11 @@ class TuiConsole(App):
         # the pointer lands somewhere other than where it points.
         self._watch_window_shape()
         self._recall()
+        # Before `_start`, and deliberately not awaited: it is a worker, so the
+        # first paint does not wait for a network round trip. A launch that opened
+        # on a blank frame while GitHub was slow would be this feature costing
+        # more than it is worth.
+        self._look_for_update()
         self._start()
 
     # -------------------------------------------------------------- the tabs
@@ -330,6 +453,186 @@ class TuiConsole(App):
             )
         )
 
+    # ------------------------------------------------------------- updating
+
+    @work
+    async def _look_for_update(self) -> None:
+        """Ask, once, in the background, and say nothing unless there is an answer.
+
+        Every failure is silence. Offline, rate-limited, a repository that does not
+        exist, a tag that does not parse — none of it is the user's problem at the
+        moment they opened a terminal, and all of it is reported properly by the
+        manual check, which is somebody actually asking. `UpdateWatch.look` never
+        raises, so this cannot take the mount path down.
+        """
+        if self._watch is None:
+            return
+        report = await self._watch.look()
+        self._update = report
+        self._say_about_update(report.notice(UPDATE_MARK))
+
+    def _say_about_update(self, notice: str) -> None:
+        """Put the notice in every header, and only when it has changed.
+
+        The same shape as `_say_about_window` for the same reason: a header
+        composed after this ran reads the value back off the app, so a notice
+        pushed only on change would be lost by the next screen.
+        """
+        if notice == self._update_notice:
+            return
+        self._update_notice = notice
+        for screen in self.screen_stack:
+            for header in screen.query(AppHeader):
+                header.show_update(notice)
+
+    @property
+    def update_notice(self) -> str:
+        """What a header composed after the fact should show. See `AppHeader`."""
+        return self._update_notice
+
+    async def install_update(self, installer: str, version: str) -> str:
+        """`Ui.install_update`. Ask, then hand over from a worker of this app's own.
+
+        The worker matters. `_shut_down` cancels every session, and this is called from
+        inside one - so the confirmation and the handover run on the app rather than on
+        the caller, and the caller's cancellation is then just part of leaving.
+
+        The path is checked before anything is asked. A dialog offering to install a
+        file that is not there is a dialog whose only outcome is an error.
+
+        ONE QUESTION, NOT TWO
+        =====================
+        This asked the quit confirmation underneath the install one, the way `Ctrl+U`
+        does. From a keypress that is right - the runs it names are somebody's real
+        work. From inside a run panel it is not: the card IS a run, so the second
+        dialog asked whether to stop the very run doing the asking. Answering no to
+        that - which is the sane answer to "quit with a run going" when you asked to
+        install, not to quit - abandoned the install with nothing to say why.
+        So the cost of the OTHER runs is named in the one question, and the run that
+        is asking is left out of the count.
+        """
+        if self._watch is None:
+            return "update installing is not configured"
+        target = Path(installer)
+        if not target.is_file():
+            return NO_INSTALLER_AT.format(path=installer)
+
+        detail = UPDATE_DETAIL.format(version=version, installed=APP_VERSION)
+        session = current_session()
+        others = [live for live in self._sessions.live() if live is not session]
+        if others:
+            detail += UPDATE_RUNS.format(
+                count=len(others), s="" if len(others) == 1 else "s"
+            )
+
+        answer = await self.push_screen_wait(
+            ConfirmScreen(
+                UPDATE_CONFIRM,
+                self.trail_label(),
+                detail=detail,
+                confirm=UPDATE_ANSWER,
+            )
+        )
+        if not answer:
+            return UPDATE_DECLINED
+
+        problem = self._watch.arm(target)
+        if problem:
+            return problem
+        # From here the app is leaving, and the caller is one of the runs that leaving
+        # cancels. Started as a worker so that cancellation cannot take the shutdown
+        # with it.
+        self._leave_for_update(version)
+        return ""
+
+    @work
+    async def _leave_for_update(self, version: str) -> None:
+        await self._leaving_for_update(version)
+
+    async def _leaving_for_update(self, version: str) -> None:
+        """Say what is happening, hold it long enough to be read, then go.
+
+        Both ways of installing end here - the card's own dialog and `Ctrl+U` on
+        the badge - so there is one answer to what leaving for an update looks
+        like rather than two that can drift.
+
+        The screen goes up BEFORE the shutdown rather than after it. Shutting
+        down is the part that takes the time: it writes the tabs down and then
+        takes every run with it, and a run mid-`npm install` is a subprocess tree
+        to kill. Announced afterwards, the message would appear once there was
+        nothing left to wait for, which is the wrong end of the pause entirely.
+        """
+        await self.push_screen(InstallingScreen(version))
+        await asyncio.sleep(INSTALL_PAUSE)
+        await self._shut_down()
+        self.exit()
+
+    def action_install_update(self) -> None:
+        self._install_update()
+
+    @work
+    async def _install_update(self) -> None:
+        """Hand the machine over to the installer, then get out of its way.
+
+        The order is the whole thing. `hand_over` arms a process that is waiting
+        for THIS process to exit before it starts the installer — so arming has to
+        come first, and quitting has to follow immediately. Reversed, there is
+        nothing left to arm it; skipped, the installer deletes the directory it is
+        running from. See `infrastructure/handover.py`.
+
+        ONE QUESTION, NOT TWO
+        =====================
+        This asked `_confirm_quit` underneath the install one, so an install with
+        runs going put up a second dialog asking whether to quit. Two dialogs for
+        one decision is a menu to get through rather than a question to answer,
+        and the second one asks about quitting when what was pressed was install
+        - so the sane answer to "quit with runs going" abandoned the install, and
+        abandoned it SILENTLY, with the app sitting back on the menu looking like
+        the key had done nothing. `Ui.install_update` already folds the cost of
+        the runs into its one question; this is the same shape, arrived at for
+        the same reason, and the two now agree.
+        """
+        if self._watch is None:
+            return
+        if not self._update.waiting:
+            # Pressed without a badge, or pressed after the manual card
+            # downloaded something during this launch. `look` answers out of the
+            # state file without a request when an installer is already fetched,
+            # so this is not a second network call in the common case.
+            report = await self._watch.look()
+            self._update = report
+            self._say_about_update(report.notice(UPDATE_MARK))
+        if not self._update.waiting:
+            self.write(NOTHING_TO_INSTALL)
+            return
+        detail = UPDATE_DETAIL.format(
+            version=self._update.available.text or self._update.tag,
+            installed=APP_VERSION,
+        )
+        live = self._sessions.live()
+        if live:
+            detail += UPDATE_RUNS.format(count=len(live), s="" if len(live) == 1 else "s")
+        answer = await self.push_screen_wait(
+            ConfirmScreen(
+                UPDATE_CONFIRM,
+                self.trail_label(),
+                detail=detail,
+                confirm=UPDATE_ANSWER,
+                key=AppHeader.UPDATE_HINT,
+            )
+        )
+        if not answer:
+            return
+        problem = self._watch.hand_over(self._update)
+        if problem:
+            # Nothing was armed, so nothing is waiting for this process and the app
+            # carries on. Said where a workflow without a panel says things. Nothing
+            # is announced either - the installing screen goes up only once there is
+            # genuinely something waiting for this process to end.
+            self.write(UPDATE_FAILED.format(problem=problem))
+            return
+        await self._leaving_for_update(self._update.available.text or self._update.tag)
+
     def _stop_watching_window(self) -> None:
         if self._window_watch is not None:
             self._window_watch.stop()
@@ -412,7 +715,7 @@ class TuiConsole(App):
     async def _start(self) -> None:
         await self.push_screen_wait(SplashScreen())
         assert self.application is not None
-        self.result_code = await self.application.run()
+        self.result_code = await self.application.run(self.start_capability)
         await self._shut_down()
         self.exit()
 
@@ -585,6 +888,9 @@ class TuiConsole(App):
         title: str,
         options: Sequence[Option],
         trail: Sequence[str] = (),
+        refresh: RefreshRunner | None = None,
+        preview: object = None,
+        subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
         session = current_session()
         if session is None:
@@ -604,7 +910,14 @@ class TuiConsole(App):
         # A panel already open is one the user asked to keep for another run, so
         # it collects the next set of values rather than being replaced.
         if not session.panel_open:
-            session.load(title, options, trail or tuple(session.steps.values()))
+            session.load(
+                title,
+                options,
+                trail or tuple(session.steps.values()),
+                refresh,
+                preview,
+                subtitle,
+            )
         self._attach(session)
 
         values = await session.wait_for_values()
@@ -1110,7 +1423,17 @@ class TuiConsole(App):
     async def choose_capability(
         self,
         capabilities: Sequence[Capability],
+        preselect: str = "",
     ) -> Capability | None:
+        chosen = next((c for c in capabilities if c.info.key == preselect), None)
+        if chosen is not None:
+            # Recorded exactly as a real choice is, so the breadcrumb, the session's
+            # scope and the tab this lands in are the same either way. No screen is
+            # claimed because nothing has taken one yet - this only ever answers the
+            # first call.
+            self._enter_step("capability")
+            self._record("capability", chosen.info.name, chosen)
+            return chosen
         if self._leaving:
             # Nothing left to choose: the loop asking is on its way out, and a
             # menu pushed now would be mounted into a screen stack being torn
@@ -1220,6 +1543,63 @@ class TuiConsole(App):
         self._record("template_pack", packs[index].info.name, packs[index])
         return packs[index]
 
+    async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
+        # No step recorded: a folder is not one of the menus a run's breadcrumb is
+        # made of, and putting it in TRAIL_STEPS would make going back to a menu
+        # forget it.
+        await self._claim_screen(current_session())
+        chosen = await self.push_screen_wait(
+            PathScreen(
+                start,
+                prompt or "Choose a project",
+                recent=self._recent.recent() if self._recent is not None else (),
+            )
+        )
+        # Recorded on the way out, and only for an answer: a dialog somebody escaped
+        # out of said nothing about where they work, and a history that filled up with
+        # cancelled navigation would be a history of nothing.
+        if chosen and self._recent is not None:
+            self._recent.remember(chosen)
+        return chosen
+
+    async def choose_script_section(
+        self,
+        sections: Sequence[ScriptSection],
+        notice: str = "",
+    ) -> ScriptSection | None:
+        inherited = self._replay("script_section")
+        if isinstance(inherited, ScriptSection):
+            # Matched by key rather than by identity: the document is read off the
+            # disk again on the way back in, so a sibling tab repeating this step is
+            # holding an equal section, not the same one.
+            match = next((s for s in sections if s.key == inherited.key), None)
+            if match is not None:
+                self._record("script_section", match.name, match)
+                return match
+
+        await self._claim_screen(current_session())
+        trail = self._enter_step("script_section")
+        index = await self.push_screen_wait(
+            CardMenuScreen(
+                "Choose a group",
+                [
+                    # No detail passed: CardMenuScreen falls through to hints.py for a
+                    # key it knows, which is every domain this toolkit ships, and to the
+                    # card's own description for one it does not.
+                    self._entry(trail, section.key, section.name, section.summary)
+                    for section in sections
+                ],
+                subtitle="Read from this project's own script config.",
+                trail=trail,
+                notice=notice,
+                runs=self._sessions.summary(),
+            )
+        )
+        if index is None:
+            return None
+        self._record("script_section", sections[index].name, sections[index])
+        return sections[index]
+
     async def choose_script_action(
         self,
         actions: Sequence[ScriptAction],
@@ -1304,4 +1684,4 @@ class TuiConsole(App):
 
 async def _nothing() -> None:
     """A session with no workflow of its own behind it."""
-    return None
+    return

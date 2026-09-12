@@ -23,7 +23,14 @@ from company_tui.presentation.branding import (
     WORDMARK,
 )
 from company_tui.presentation.card import Card, MenuEntry
-from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, KeyHint
+from company_tui.presentation.chrome import (
+    BUSY_FRAMES,
+    BUSY_INTERVAL,
+    AppFooter,
+    AppFrame,
+    AppHeader,
+    KeyHint,
+)
 from company_tui.presentation.hints import hint_for
 from company_tui.presentation.session import RunSession
 
@@ -213,10 +220,9 @@ class CardMenuScreen(Screen[int | None]):
                 # binds the arrow keys to scrolling and would swallow them before
                 # the grid could move the focus. The focused card scrolls itself
                 # into view anyway.
-                with Container(id="cards-scroll"):
-                    with Grid(id="cards"):
-                        for index, entry in enumerate(self._entries):
-                            yield Card(entry, index)
+                with Container(id="cards-scroll"), Grid(id="cards"):
+                    for index, entry in enumerate(self._entries):
+                        yield Card(entry, index)
                 with Horizontal(id="menu-hint"):
                     yield Static(id="hint-key")
                     yield Static(id="hint-text")
@@ -584,6 +590,31 @@ class ConfirmScreen(DialogScreen[bool]):
             label.append(self._key, style="not bold")
         return label
 
+    def on_key(self, event: events.Key) -> None:
+        """The key printed on the affirmative is the affirmative.
+
+        IT WAS DRAWN AND NEVER BOUND
+
+        `_answer` puts the chord under the label so somebody who pressed `Ctrl+U`
+        to get here can see that pressing it again is the same answer. It said so
+        and it was not true: `BINDINGS` carries `escape` and nothing else, and a
+        `ModalScreen` stops the app's own copy of the chord reaching past it - so
+        the one key the dialog names was the one key that did nothing at all.
+        What that looks like is an update that will not install: the button says
+        Ctrl+U, Ctrl+U does nothing, and Enter is on CANCEL because neither answer
+        may look pre-selected.
+
+        Bound here rather than in `BINDINGS` because the key is per-question:
+        `ConfirmScreen` is one class and the chord belongs to whichever dialog was
+        reached by one. Everything else this app draws as a key is a `KeyHint`,
+        which reads its own label back into the key it presses and so cannot drift
+        from what it does; this label is the one that could, and did.
+        """
+        if self._key and event.key == self._key.lower():
+            event.stop()
+            event.prevent_default()
+            self.dismiss(True)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
 
@@ -859,3 +890,114 @@ class SplashScreen(ModalScreen[None]):
 
     def on_click(self) -> None:
         self.dismiss(None)
+
+
+INSTALLING_TITLE = "Installing {version}"
+INSTALLING_DETAIL = "This window closes and reopens on the new version."
+
+
+class InstallingScreen(ModalScreen[None]):
+    """What the app shows between saying yes to an update and going away.
+
+    THE WINDOW VANISHING IS THE PROBLEM THIS SOLVES
+
+    Pressing INSTALL AND RESTART used to close the app on the spot. Everything
+    after that is correct and none of it is visible: a detached waiter sits on
+    this pid, the installer runs silently, and a few seconds later a window
+    opens on the new version. What the user gets is their terminal disappearing
+    and something new appearing by itself, which is what a crash looks like and
+    what a program they did not start looks like - so the one moment the app is
+    doing exactly what it was asked to do is the one moment it looks like it is
+    not.
+
+    So the app says so, and says it on the way out rather than not at all.
+
+    IT IS THE SPLASH, DELIBERATELY
+
+    The same mark and the same wordmark the app opens on. The new build comes up
+    on `SplashScreen` moments later, so leaving on the same picture makes the
+    two windows read as one app restarting rather than as one closing and
+    another opening - which is the half of the jump the old process can still do
+    something about.
+
+    NOTHING DISMISSES IT
+
+    No bindings and no click handler. By the time this is on screen the handover
+    is armed, something else is waiting on this pid, and there is nowhere to go
+    back to - so a key that appeared to cancel would be a control that lies. It
+    is the only screen in the app with no way out, and that is the honest shape
+    for it.
+    """
+
+    BINDINGS = []
+
+    DEFAULT_CSS = """
+    InstallingScreen {
+        align: center middle;
+        background: $background;
+    }
+
+    InstallingScreen > Container {
+        width: 52;
+        height: auto;
+        align-horizontal: center;
+    }
+
+    /* Sized to the art and centred as one block - see SplashScreen, which has
+       the same arrangement for the same reason. */
+    InstallingScreen #mark {
+        width: auto;
+        height: auto;
+        color: $accent;
+    }
+
+    InstallingScreen #wordmark {
+        width: 100%;
+        margin-top: 1;
+        text-align: center;
+        text-style: bold;
+        color: $foreground;
+    }
+
+    InstallingScreen #installing {
+        width: 100%;
+        margin-top: 1;
+        text-align: center;
+        color: $secondary;
+    }
+
+    InstallingScreen #detail {
+        width: 100%;
+        text-align: center;
+        color: $text-muted;
+    }
+
+    """
+
+    def __init__(self, version: str) -> None:
+        super().__init__()
+        self._version = version
+        self._frame = 0
+
+    def compose(self) -> ComposeResult:
+        with Container():
+            with Center():
+                yield Static(SPLASH_MARK, id="mark")
+            yield Static(WORDMARK, id="wordmark")
+            yield Static(id="installing")
+            yield Static(INSTALLING_DETAIL, id="detail")
+
+    def on_mount(self) -> None:
+        # Turning rather than still. This screen is up for as long as shutting
+        # down takes, which is one moment with nothing running and several with
+        # a subprocess tree to kill - and a still frame held for four seconds is
+        # the wedged window the mark exists to rule out.
+        self._turn()
+        self.set_interval(BUSY_INTERVAL, self._turn)
+
+    def _turn(self) -> None:
+        glyph = BUSY_FRAMES[self._frame % len(BUSY_FRAMES)]
+        self.query_one("#installing", Static).update(
+            f"{glyph}  " + INSTALLING_TITLE.format(version=self._version)
+        )
+        self._frame += 1

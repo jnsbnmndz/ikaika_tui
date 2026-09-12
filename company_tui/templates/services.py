@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from company_tui.domain.config import ConfigPort
-from company_tui.domain.identity import NotAnIkaikaProject
+from company_tui.domain.identity import NotAProjectError
 from company_tui.domain.ports import FileSystemPort, ProcessRunner
 from company_tui.domain.project_name import ProjectName
 from company_tui.domain.scaffolding import (
@@ -183,7 +183,7 @@ async def run_generator(
     root = Path(".")
     try:
         identity = services.finalizer.require_project(root)
-    except (NotAnIkaikaProject, CannotStampIdentity) as error:
+    except (NotAProjectError, CannotStampIdentity) as error:
         return PackActionResult(
             available=True,
             message=f"{error} Run this from the root of the project you are adding to.",

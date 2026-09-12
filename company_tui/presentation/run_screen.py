@@ -45,12 +45,14 @@ from company_tui.domain.options import (
     Option,
     OptionKind,
     OptionValue,
+    RefreshOutcome,
     missing_required,
 )
 from company_tui.presentation.branding import TOGGLE_ON
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, KeyHint
 from company_tui.presentation.icons import TERMINAL_ART
 from company_tui.presentation.path_screen import PathScreen
+from company_tui.presentation.screens import ConfirmScreen
 from company_tui.presentation.session import (
     MARKERS,
     TRAIL_SEPARATOR,
@@ -121,6 +123,10 @@ class RunActionButton(Button):
         if state == "Run again":
             return f"↻  RUN {self._action_name} AGAIN"
         return state.upper()
+
+
+PREVIEW_ID = "will-run"
+"""The row showing the command line the current answers add up to."""
 
 
 class FieldToggle(Checkbox):
@@ -601,6 +607,19 @@ class RunScreen(Screen[None]):
         margin-bottom: 0;
     }
 
+    /* A fetched list and its Update button. The list takes what is left after the
+       button, which is the opposite of the default: a Select is width:100% and would
+       push the button past the edge of the pane, where it is laid out and invisible. */
+    RunScreen .field--fetched {
+        width: 100%;
+        height: auto;
+    }
+
+    RunScreen .field--fetched Select {
+        width: 1fr;
+        margin-bottom: 0;
+    }
+
     RunScreen .field--browse {
         width: auto;
         min-width: 10;
@@ -947,6 +966,11 @@ class RunScreen(Screen[None]):
         widgets: list[Widget] = [
             Static(self._session.title.upper(), classes="section--title")
         ]
+        # What the command is for, under its name and above its fields - the
+        # subheading the desktop form has always carried. Read from the document,
+        # so it cannot drift from the summary the menu showed a moment ago.
+        if self._session.subtitle:
+            widgets.append(Static(self._session.subtitle, classes="field--help"))
         for option in self._session.options:
             widget_id = self._widget_id(option)
 
@@ -974,17 +998,82 @@ class RunScreen(Screen[None]):
                 continue
 
             widgets.append(Static(self._label(option), classes="field--label"))
-            if option.kind is OptionKind.CHOICE and option.choices:
+            if option.kind is OptionKind.MULTI and option.choices:
+                # One box per value, because the question is how many, not which.
+                # The answer is read back off the boxes rather than kept beside
+                # them: a value assembled from the widgets cannot disagree with
+                # what the user can see is ticked.
+                picked = self._picked(option)
+                for index, choice in enumerate(option.choices):
+                    widgets.append(
+                        Horizontal(
+                            FieldToggle(
+                                value=choice in picked,
+                                id=self._multi_id(option, index),
+                            ),
+                            Static(choice, classes="field--toggle-label"),
+                            classes="field--toggle",
+                        )
+                    )
+            elif option.kind is OptionKind.NUMBER:
                 widgets.append(
-                    Select(
-                        [(choice, choice) for choice in option.choices],
-                        value=str(self._session.values.get(option.key, ""))
-                        or option.choices[0],
-                        allow_blank=False,
+                    Input(
+                        value=str(self._session.values.get(option.key, "")),
+                        type="number",
                         id=widget_id,
+                        classes="field--input",
                     )
                 )
-            elif option.kind is OptionKind.PATH:
+            elif option.kind is OptionKind.CHOICE and option.choices:
+                # Row zero NAMES the default and binds nothing, which is what
+                # makes an untouched form run the command as if no argument had
+                # been passed. A dropdown resting on a blank line lists what is
+                # possible while saying nothing about what will happen, so the
+                # row carries the default's name - as a label, never as a value.
+                #
+                # A stored value outside the option's own choices would raise
+                # InvalidSelectValueError on mount and take the app down, so it
+                # falls back to that row here as well as being dropped in
+                # `session.load`. Two guards; nothing here is worth crashing over.
+                stored = str(self._session.values.get(option.key, ""))
+                chooser = Select(
+                    [(choice, choice) for choice in option.choices],
+                    value=stored if stored in option.choices else Select.NULL,
+                    allow_blank=True,
+                    prompt=f"(default: {option.default})" if option.default else "",
+                    id=widget_id,
+                )
+                if option.refresh and self._session.refresh_runner is not None:
+                    # Only on a list the command FETCHED, which is what carrying a
+                    # refresh means. A declared set cannot change while the form is
+                    # open, so a button there would never do anything.
+                    #
+                    # `field--fetched`, not `field--path`: that class shrinks a
+                    # `.field--input` to make room for its button, and a Select is not
+                    # one - so it kept its full width and pushed the button clean off
+                    # the pane. The button was there, laid out, and never visible.
+                    widgets.append(
+                        Horizontal(
+                            chooser,
+                            Button(
+                                option.refresh.label,
+                                id=self._refresh_id(option),
+                                classes="field--browse",
+                                flat=True,
+                            ),
+                            classes="field--fetched",
+                        )
+                    )
+                    # Under the row rather than beside the button: a third thing in
+                    # that Horizontal is width the dropdown does not get.
+                    widgets.append(
+                        Static(
+                            "", id=self._refresh_status_id(option), classes="field--help"
+                        )
+                    )
+                else:
+                    widgets.append(chooser)
+            elif option.kind in (OptionKind.PATH, OptionKind.FILE):
                 # Still typeable: browsing is the shortcut, not the only way in,
                 # and a path pasted from somewhere else should not need a walk
                 # through a tree to be accepted.
@@ -1014,6 +1103,19 @@ class RunScreen(Screen[None]):
                 )
             if option.help:
                 widgets.append(Static(option.help, classes="field--help"))
+
+        # What the run will actually be, kept current as the form is filled in.
+        # The form and the command line are the same thing, and this is the row
+        # that says so: anything picked here once can be typed next time.
+        if self._session.preview_runner is not None:
+            widgets.append(Static("Will run", classes="field--label"))
+            widgets.append(
+                Static(
+                    self._session.command_preview(),
+                    id=PREVIEW_ID,
+                    classes="field--info",
+                )
+            )
         return widgets
 
     @staticmethod
@@ -1030,6 +1132,156 @@ class RunScreen(Screen[None]):
     @staticmethod
     def _widget_id(option: Option) -> str:
         return f"field-{option.key}"
+
+    @staticmethod
+    def _refresh_id(option: Option) -> str:
+        return f"refresh-{option.key}"
+
+    @staticmethod
+    def _refresh_status_id(option: Option) -> str:
+        return f"refreshed-{option.key}"
+
+    async def _refresh(self, key: str) -> None:
+        """Re-fetch one choice's values, asking first if acting would change something.
+
+        The order is the whole point: preview, then confirm, then act. The refresh
+        behind this button may delete things - the branch list is brought up to
+        date by removing local branches whose remote is gone - and a button that
+        did that on a single click would be a button nobody could safely press.
+        An empty preview means there is nothing to ask about, so a refresh with
+        nothing to remove costs no dialog.
+        """
+        option = self._option_named(key)
+        runner = self._session.refresh_runner
+        if option is None or option.refresh is None or runner is None:
+            return
+
+        button = self._one(self._refresh_id(option), Button)
+        status = self._one(self._refresh_status_id(option), Static)
+        idle = str(button.label) if button else option.refresh.label
+        if button is not None:
+            button.disabled = True
+            button.label = "..."
+        if status is not None:
+            status.update("checking...")
+
+        try:
+            await self._ask_and_refresh(option, runner, status)
+        except Exception as error:  # noqa: BLE001 - reported, never swallowed
+            # The worker runs with exit_on_error=False, so an escape from here is
+            # silence: the button springs back and nothing says why. That is the
+            # same shape as the failure in docs/pitfalls.md 1.1.
+            if status is not None:
+                status.update(f"failed: {error}")
+        finally:
+            if button is not None:
+                button.disabled = False
+                button.label = idle
+
+    async def _ask_and_refresh(self, option: Option, runner, status) -> None:
+        """Preview, confirm if there is anything to confirm, then act.
+
+        Everything it does is written into the terminal as well as onto the line
+        beside the button. The line has room for four words; the terminal is
+        where this run's history is, and a list that was brought up to date - or
+        a delete that was declined - belongs in it beside the run it was done
+        for.
+        """
+        asked = await runner(option, True)
+        if asked.message:
+            # The first line is the question; the rest is what saying yes
+            # costs, which ConfirmScreen shows under it.
+            head, _, rest = asked.message.partition("\n")
+            detail = rest.strip()
+            agreed = await self.app.push_screen_wait(
+                ConfirmScreen(
+                    head,
+                    trail=self._session.title,
+                    detail=detail,
+                    confirm="UPDATE",
+                )
+            )
+            if not agreed:
+                if status is not None:
+                    status.update("left alone")
+                self._session.write(f"-{option.key}: left alone", marker="warn")
+                return
+        if status is not None:
+            status.update("fetching...")
+        self._session.write(f"Updating -{option.key}...", marker="step")
+
+        outcome = await runner(option, False)
+        self._apply_refresh(option, outcome)
+
+        said = outcome.message or f"{len(outcome.choices)} value(s)"
+        if status is not None:
+            status.update(said if outcome.ok else outcome.message or "failed")
+        self._session.write(said, marker="ok" if outcome.ok else "error")
+        if outcome.ok and outcome.choices:
+            self._session.write(
+                f"-{option.key} now offers: {', '.join(outcome.choices)}",
+                marker="output",
+            )
+
+    def _apply_refresh(self, option: Option, outcome: RefreshOutcome) -> None:
+        """Put the new values on the dropdown, keeping the selection if it survived.
+
+        An empty list is IGNORED. A refresh that failed, or that a network could
+        not answer, must not be the thing that empties a field the user had
+        already answered.
+        """
+        if not outcome.choices:
+            return
+        chooser = self._one(self._widget_id(option), Select)
+        if chooser is None:
+            return
+        was = str(chooser.value) if chooser.value is not Select.NULL else ""
+        chooser.set_options((choice, choice) for choice in outcome.choices)
+        chooser.value = was if was in outcome.choices else outcome.choices[0]
+        self._store(self._widget_id(option), str(chooser.value))
+
+    def _one(self, widget_id: str, kind):
+        for widget in self.query(f"#{widget_id}"):
+            if isinstance(widget, kind):
+                return widget
+        return None
+
+    @staticmethod
+    def _multi_id(option: Option, index: int) -> str:
+        """One box's id. Indexed rather than named after the value it carries -
+        a choice read off a disk can hold anything, and a Textual id may not."""
+        return f"multi-{option.key}-{index}"
+
+    @staticmethod
+    def _multi_key(widget_id: str | None) -> str | None:
+        if not widget_id or not widget_id.startswith("multi-"):
+            return None
+        return widget_id.removeprefix("multi-").rsplit("-", 1)[0]
+
+    def _option_named(self, key: str) -> Option | None:
+        return next((o for o in self._session.options if o.key == key), None)
+
+    def _picked(self, option: Option) -> set[str]:
+        """What this option's stored answer says is ticked."""
+        stored = str(self._session.values.get(option.key, ""))
+        return {part.strip() for part in stored.split(",") if part.strip()}
+
+    def _multi_value(self, key: str) -> str:
+        """The ticked values, comma-joined, in the order the document declared.
+
+        Comma-joined rather than a list because that is what a command line
+        already reads a list in, and what the dispatcher on the other side
+        splits back out - one shape crossing the boundary instead of two.
+        """
+        option = self._option_named(key)
+        if option is None:
+            return ""
+        chosen = []
+        for index, choice in enumerate(option.choices):
+            for box in self.query(f"#{self._multi_id(option, index)}"):
+                if box.value:
+                    chosen.append(choice)
+        return ",".join(chosen)
 
     @staticmethod
     def _browse_id(option: Option) -> str:
@@ -1222,10 +1474,26 @@ class RunScreen(Screen[None]):
             self._store(event.input.id, event.value)
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        key = self._multi_key(event.checkbox.id)
+        if key is not None:
+            # Every box of this option, not just the one that moved: the answer
+            # is the set, and storing one box's value would store a boolean where
+            # a list belongs.
+            self._store(f"field-{key}", self._multi_value(key))
+            return
         self._store(event.checkbox.id, event.value)
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        self._store(event.select.id, str(event.value))
+        # The blank row is "leave it out", so it stores nothing rather than the
+        # words on it - reading that row back would pass "(default: development)"
+        # as a branch name.
+        #
+        # Select.NULL, NOT Select.BLANK. In this Textual, BLANK is literally
+        # `False`, so `is Select.BLANK` never matches an unselected Select and the
+        # label would have been stored as the answer. NULL is the sentinel the
+        # widget actually holds and the one the constructor accepts.
+        blank = event.value is Select.NULL
+        self._store(event.select.id, "" if blank else str(event.value))
 
     def _store(self, widget_id: str | None, value: OptionValue) -> None:
         if not widget_id or not widget_id.startswith("field-"):
@@ -1239,6 +1507,8 @@ class RunScreen(Screen[None]):
             if option.kind is OptionKind.INFO and option.template:
                 for row in self.query(f"#{self._widget_id(option)}"):
                     row.update(option.render(self._session.values))
+        for row in self.query(f"#{PREVIEW_ID}"):
+            row.update(self._session.command_preview())
 
     # -------------------------------------------------------------------- run
 
@@ -1288,6 +1558,14 @@ class RunScreen(Screen[None]):
             self._clear_terminal()
         elif event.button.id and event.button.id.startswith("browse-"):
             self._browse(event.button.id.removeprefix("browse-"))
+        elif event.button.id and event.button.id.startswith("refresh-"):
+            # As a worker, because it asks a question and runs a subprocess: a
+            # handler that awaited either would hold the interface while it did.
+            self.run_worker(
+                self._refresh(event.button.id.removeprefix("refresh-")),
+                group="refresh",
+                exit_on_error=False,
+            )
 
     # ---------------------------------------------------------- the terminal
 
@@ -1341,13 +1619,26 @@ class RunScreen(Screen[None]):
         restate it exactly as if it had been typed.
         """
         field = self.query_one(f"#field-{key}", Input)
+        option = self._option_named(key)
+        # A file field browses for a file. Offering a directory tree with the files
+        # hidden to somebody looking for a manifest is offering them nothing - which
+        # is the difference the desktop form draws with "Choose file..." against
+        # "Choose folder...".
+        wants_file = option is not None and option.kind is OptionKind.FILE
 
         def chosen(path: str | None) -> None:
             if path:
                 field.value = path
             field.focus()
 
-        self.app.push_screen(PathScreen(field.value, self._session.label), chosen)
+        self.app.push_screen(
+            PathScreen(
+                field.value,
+                "Choose a file" if wants_file else "Choose a directory",
+                files=wants_file,
+            ),
+            chosen,
+        )
 
     def action_primary(self) -> None:
         """Whatever the one button says right now."""
@@ -1477,11 +1768,11 @@ class RunScreen(Screen[None]):
 
 
 __all__ = [
-    "TRAIL_SEPARATOR",
+    "EMPTY_TITLE",
+    "REQUIRED_MARK",
     "STDIN_ACTIVE",
     "STDIN_IDLE",
-    "REQUIRED_MARK",
-    "EMPTY_TITLE",
-    "needed_text",
+    "TRAIL_SEPARATOR",
     "RunScreen",
+    "needed_text",
 ]

@@ -1,0 +1,74 @@
+# Asks whether any action used in this repository is behind, and FAILS when one is.
+#
+# One call into script.ps1, like every other workflow here. What it runs is
+# `scripts/check-actions.ps1`, which reads every `uses:` off the checkout, asks GitHub for
+# each action's latest release, and writes a table into the run summary.
+#
+# The second half of keeping them current. Dependabot (.github/dependabot.yml) is the half
+# that opens pull requests; this is the half that says so out loud when one was never
+# merged, or when Dependabot has been switched off in the repository settings. A pull
+# request nobody opened is indistinguishable from nothing being out of date, and a version
+# check whose only output is a pull request has no way at all to report that it has
+# stopped running - which is docs/pitfalls.md 3, in a place no test can reach.
+#
+#
+# IT WAS A THIRD-PARTY ACTION, AND THAT IS EXACTLY HOW IT FAILED
+#
+# saadmk11/github-actions-version-updater, pinned to a SHA, in check-only mode. It is a
+# Docker CONTAINER action, so every run builds its image from the Dockerfile at that SHA -
+# and that Dockerfile says `FROM python:3.12-slim-bullseye`. Debian bullseye's
+# repositories have been archived, so `apt-get update` inside the build fails, so the
+# image cannot be built, so the job failed before doing anything at all: "Docker build
+# failed with exit code 1", after two backoffs and three attempts.
+#
+# Nothing here could fix it. Upstream's main branch carries the same line and v0.9.0 is
+# still the newest tag, so there was no version to bump to - and a container action pinned
+# by SHA cannot be patched from the outside. What it did was four API calls and a string
+# comparison. See docs/pitfalls.md 8.1.
+#
+#
+# AND IT NEEDS NO SECRET AT ALL NOW
+#
+# That action wanted a Personal Access Token with `workflow` scope, because it listed this
+# repository's workflows through the API. The script reads them off the checkout instead,
+# and every version lookup is a public read - so the default GITHUB_TOKEN is enough, and
+# there is no long-lived credential here able to rewrite the workflow that signs releases.
+# ACTIONS_AUDIT_TOKEN is no longer read by anything and can be deleted.
+
+name: actions-audit
+
+on:
+  schedule:
+    # Monday, a few hours after Dependabot's own run, so a bump it opened that morning is
+    # already on a branch and this does not report what is currently under review.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+# Read-only, and only the checkout uses it. The version lookups are public reads.
+permissions:
+  contents: read
+
+concurrency:
+  group: actions-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    # windows-latest like everything else here. script.ps1 and the libraries it dot-sources
+    # are written with Windows path separators, and the twenty seconds a Linux runner would
+    # save is not worth a second dialect of the same script.
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # GH_TOKEN so the lookups go through gh authenticated: unauthenticated GitHub allows
+      # sixty requests an hour per address, and a shared runner address is not the place to
+      # spend that. The script falls back to unauthenticated HTTPS when gh is absent, which
+      # is how the same command runs on a laptop.
+      - name: Check every action reference
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .\script.ps1 check-actions

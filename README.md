@@ -1,40 +1,57 @@
-# IKAIKA Developer Toolbox
+# Developer Toolbox Inventory
 
-**IKAIKA** · v0.0.0+1 — a scalable Python terminal application for company development workflows. The first capability boundary covers scaffolding, while the same application can grow into build, compile, test, deploy, environment, and maintenance workflows.
+A scalable Python terminal application for development workflows. The first capability boundary covered scaffolding; the same application now also builds, deploys, runs a project's own commands, and maintains itself.
+
+The version is not written here. It lives in `VERSION` at the repository root, one line, `x.y.z+n` — a version quoted in a README is one that goes stale the first time nobody remembers to change it, and this one had been reading `v0.0.0+1` for some time. `presentation/branding.py` reads that file; `domain/naming.py` holds every name the product answers to.
 
 Scaffold and Build both drill down through the same two questions: *what* do you want to do, then *which stack* do you want to do it for. Each stack is a versioned template pack; Flutter and React are wired in as "not available yet" placeholders, and Python is a fully working reference pack that creates a real project on disk (with a preview and confirmation prompt) and runs a real build check.
 
-`python -m company_tui` (no arguments) opens a real interactive terminal UI built with [Textual](https://textual.textualize.io/), branded for IKAIKA: an animated splash screen, a navy-and-gold theme drawn from the company logo, card-based menus you can click through or navigate with the arrow keys, and a persistent "Activity" output log. `list` and `doctor` stay plain, synchronous, scriptable stdout with no terminal takeover, so they still work well in scripts and CI.
+`python -m company_tui` (no arguments) opens a real interactive terminal UI built with [Textual](https://textual.textualize.io/): an animated splash screen, a navy-and-gold theme, card-based menus you can click through or navigate with the arrow keys, and a persistent "Activity" output log. `list` and `doctor` stay plain, synchronous, scriptable stdout with no terminal takeover, so they still work well in scripts and CI.
 
 ## Run
 
 Python 3.11 or newer is required.
 
 ```sh
-python -m company_tui        # interactive Textual UI
-python -m company_tui list   # plain stdout, scriptable
-python -m company_tui doctor # plain stdout, scriptable
+python -m company_tui                  # interactive Textual UI
+python -m company_tui --start scripts  # open straight on a capability
+python -m company_tui list             # plain stdout, scriptable
+python -m company_tui doctor           # plain stdout, scriptable
+python -m company_tui check            # the gate: tests, list and doctor
+python -m company_tui --version        # the same version the header shows
 ```
 
-Install the `company` command locally when needed:
+`--help` lays the four commands out rather than printing argparse's bare
+`{tui,list,doctor,check}`, and both the program name and the description come out of
+`domain/naming.py` — they were the literal `"company"` and `"Company developer toolbox"`
+long after nothing answered to that name.
+
+Install the console command locally when needed. Two names are installed for one entry point — `dti` is what the product is called, and `company` is kept so anything already invoking it keeps working:
 
 ```sh
 python -m pip install -e .
-company
+dti
 ```
+
+The installer puts the install directory on PATH, so an installed copy is started by typing `dti` in any new terminal — see below.
 
 Run the tests:
 
 ```sh
 python -m unittest discover
+python -m company_tui check              # and everything else the gate covers
+python -m company_tui check --install-hook   # as a pre-push hook
 ```
+
+The version is `VERSION` at the repository root — one line, `x.y.z+n`, read by
+`presentation/branding.py`. A release rewrites that file and nothing restates it.
 
 ## Structure
 
 ```text
 company_tui/
 ├── application/      orchestration, capability registry, template pack registry
-├── capabilities/     independently executable product features (scaffold, build, doctor)
+├── capabilities/     independently executable product features (scaffold, build, deploy, scripts, settings, doctor, app_setup, updates, advanced)
 ├── domain/           stable models and interfaces
 ├── infrastructure/   operating system and external tool adapters
 ├── presentation/     Ui protocol, PlainConsole (stdout), TuiConsole (Textual app + screens + chrome)
@@ -53,9 +70,9 @@ Every interactive step in the domain/application/capability layers is `async` �
 
 ## Branding
 
-- `presentation/branding.py` holds the IKAIKA name, tagline, version, and `IKAIKA_THEME` — a Textual `Theme` with colors drawn from the company logo (`project-estimator/images/Ika-ika_logo.png` in the wider IKAIKA workspace): a deep navy primary, a warm gold accent, near-black navy background. `TuiConsole` registers and activates it on mount.
-- `presentation/chrome.py` is the frame every screen is composed inside: `AppFrame` (outer border), `AppHeader` (logo mark, name, tagline, version, and the working directory as a status), and `AppFooter` (key hints on the left, `IKAIKA Engineering` on the right). It fills the terminal by default; `FRAME_WIDTH`/`FRAME_HEIGHT` at the top of the module can be set to viewport units to float the app as a smaller centred panel instead.
-- Every key hint is also a button: hovering one lights it in the accent colour and clicking it presses the key it names, so `Esc`, `Ctrl+R`, `⌃T` and the rest work with the mouse as well as the keyboard. Hints that name a range rather than one key (`↑↓/←→`, `1–6`) stay quiet, as does a key that would do nothing at that moment. Tabs light up under the pointer for the same reason — you can see what a click is about to hit before you make it.
+- `presentation/branding.py` holds the tagline, the version and `APP_THEME` — a Textual `Theme`: a deep navy primary, a warm gold accent, near-black navy background. `TuiConsole` registers and activates it on mount. The name itself is not here: it comes from `domain/naming.py`, which is the single place every name derives from `APP_SLUG`, so the wordmark and the theme name cannot drift from it. `SPLASH_MARK` is a deliberately abstract placeholder — it used to be one company's logo, which is exactly what a generic toolbox should not open with; regenerate it from an image with `python -m tools.blockify <image>.png --rows 13 --name SPLASH_MARK`. Every name the product answers to lives in `domain/naming.py`, derived from `APP_SLUG` — which is `dti` rather than the whole name because it ends up in a filename, a directory under your home, and the command you type.
+- `presentation/chrome.py` is the frame every screen is composed inside: `AppFrame` (outer border), `AppHeader` (logo mark, name, tagline, version, and the working directory as a status), and `AppFooter` (key hints on the left, `APP_SIGNATURE` on the right). It fills the terminal by default; `FRAME_WIDTH`/`FRAME_HEIGHT` at the top of the module can be set to viewport units to float the app as a smaller centred panel instead.
+- Every key hint is also a button: hovering one lights it in the accent colour and clicking it presses the key it names, so `Esc`, `Ctrl+R`, `⌃T` and the rest work with the mouse as well as the keyboard. Hints that name a range rather than one key (`↑↓/←→`, `1–9`) stay quiet, as does a key that would do nothing at that moment. Tabs light up under the pointer for the same reason — you can see what a click is about to hit before you make it.
 - The run panel says what it wants before you press anything: required fields carry a gold `*`, a line under the form names whatever is still missing, and the terminal half says it is empty rather than just being empty. Press Run without filling something in and that same line goes red with the cursor already on the field it is about.
 - Every context has its own tabs. React Native's runs are in React Native's strip, Flutter's in Flutter's, each numbered from one — start a scaffold, back out, pick another stack, and you arrive on an empty first tab with the first run still going where you left it. Menu cards say what is behind them (`2 running`), counted down the whole branch, so a run left going is never somewhere you have to guess at.
 - A tab stays after its run ends. Walk back into the stack and it is there — the output, the time it ran, and the form still holding what you typed, ready to send again. `⌃W` closes one when you are done with it.
@@ -67,6 +84,346 @@ Every interactive step in the domain/application/capability layers is `async` �
 - `presentation/hints.py` maps the same keys to the longer one-line detail shown at the bottom of the menu for whichever entry has focus (`hint_for(key, fallback)`), so a card description can stay short without losing the explanation.
 - `TuiConsole` tracks a breadcrumb of the choices it has served and shows it above each menu title (`Scaffold › New Project`) and as the border title of the input and confirm dialogs, so a workflow you walked away from still says where you are. Cancelling a step re-asks the step before it instead of dropping out of the workflow; only backing out of the first step ends it, which `Capability.execute()` reports as `CANCELLED`.
 - `presentation/card.py: Card` is the clickable, keyboard-focusable, animated building block behind every menu — a numbered badge, line art, a name, a description, and a `[n]` hotkey. It has no fill in any state — a double accent border marks the focused card, and hovering focuses the card under the mouse so there is only ever one highlight. Cards are height-capped so a maximised terminal doesn't stretch them, and lay out in a grid at most three wide — a fourth entry wraps to a second row instead of squeezing the first. Below 30 rows (or when the row would be too narrow) the same card renders as a single compact row instead; only CSS decides which.
+
+## Building and releasing
+
+Everything goes through one entry point, and GitHub Actions calls the same file rather
+than restating the steps in YAML — a workflow that lists its own steps is a second,
+silently diverging answer to what a release is.
+
+```powershell
+.\script.ps1                                  # what commands there are
+.\script.ps1 <command> -Help                  # one command's own switches
+
+.\script.ps1 setup-dev-env -Build -Lint       # make a machine able to build
+.\script.ps1 check-all                        # the gate; -InstallHook wires it to pre-push
+.\script.ps1 setup-signing                    # the release and debug certificates
+.\script.ps1 bump-version -Bump patch         # rewrite VERSION, commit, tag
+.\script.ps1 build-app -Sign                  # freeze it with PyInstaller
+.\script.ps1 build-installer -Sign            # wrap it in an NSIS installer
+```
+
+Commands are **discovered**, not listed: a `.ps1` in `scripts\` is a command named
+after its file, so the listing and the folder cannot disagree.
+
+### The version, and why the build number matters
+
+`VERSION` holds `x.y.z+n` and `pyproject.toml` is rewritten to match. The build number
+rises **globally**, across version names, and comes from the **tags** rather than from
+`VERSION`: `1.1.9+7` is followed by `1.2.0+8`, never `1.2.0+1`. An installer compares
+that number, so a reset makes an upgrade look older than what is already installed.
+A number a tag has already claimed is never handed out twice, and that is checked
+before anything is built.
+
+Which means a release has to be **tagged**. `bump-version` commits and tags but pushes
+nothing — publishing is a decision, and a build tool that pushes on your behalf is one
+nobody can rehearse.
+
+### The release workflow publishes nothing by default
+
+It is dispatched by hand from the Actions tab, and `tag` — the one input that decides
+whether anything leaves the runner — is **off**:
+
+| Input | Default | What it does |
+|---|---|---|
+| `bump` | `patch` | which part of the version to raise; `keep` takes a new build number and leaves the name alone |
+| `released` | off | adds `-released` to the tag and publishes as latest rather than as a prerelease |
+| `sign` | on | sign the artifacts; needs the three signing secrets |
+| `tag` | **off** | commit, tag, push, publish. Off runs `bump-version -WhatIf` and skips the push and the publish |
+| `installer` | on | also wrap the frozen app in the NSIS installer |
+| `clean` | off | clear PyInstaller's cache and work directory first |
+
+So a default run is a **rehearsal**: the gate, a real signed build, a real installer,
+kept as a workflow artifact for a fortnight — and nothing tagged, pushed or published.
+`bump` still reports what a release *would* produce, and the build carries the version
+already in the tree, because that is the version `build-app` stamps.
+
+That default is the same reasoning as `bump-version` not pushing. Publishing is a
+decision somebody makes, not what happens when a form is submitted with everything left
+alone. `tag` with `installer` off is refused before the clone, because the release is
+published with the installer as its only asset.
+
+### `-released` is what makes a build official
+
+    v1.2.0+8              a debug build
+    v1.2.0+8-released     the official release
+
+One version can carry both: the same source is tagged debug while it is being tested
+and released once it ships. Both share one build number, because the number belongs to
+the source — and it is *in the tag*, because that is the number an installer compares.
+A tag carrying only `x.y.z` can be told apart from another build of the same version
+only by fetching the `VERSION` file committed at it, which is a clone away from anything
+reading a release feed. The suffix stays **last**: `Release.official` asks what a tag
+ends with, so `v1.2.0-released+8` — semver's ordering — would read as a debug build and
+never be offered at all. The release workflow publishes debug builds as prereleases, so
+`Check for Updates` — which asks for the latest official release — cannot offer one.
+
+### Signing
+
+Two certificates, a release identity and a debug one. A debug installer is signed too,
+so a test build is not an Unknown Publisher either, but with its own certificate, so
+nothing about a test build touches the trust the real release signature depends on.
+
+`setup-signing` uses the certificate already present if it matches its committed
+checksum, otherwise fetches it from the shared link, and only generates one when there
+is genuinely nothing to fetch — generating is a *new identity*, and every installer
+signed with the old one stops matching it. CI runs it with `-FetchOnly`, which refuses
+to generate at all.
+
+| What | Where | Committed? |
+|---|---|---|
+| The private keys | `certs/*.pfx` | **no** |
+| The password | `.dti_configs/signing.env` | **no** |
+| The share links | `.dti_configs/signing.env` | **no** |
+| Their checksums | `.dti_configs/*.pfx.sha256` | yes, deliberately |
+| The publisher subject | `.dti_configs/share.env` | yes |
+
+The checksums are the point of that split: a `.pfx` arrives over a link from a machine
+nobody here controls, and a same-named file is not the same file — the committed sidecar
+is the only thing that can tell the difference.
+
+The links were committed once, on the grounds that the password is not there and so the
+file cannot be opened. They are secrets now, for reasons unrelated to how strong the
+password is: a share link *is* the capability to fetch the file — the `rlkey` in a Dropbox
+`/scl/fi/` link is part of the credential, not a path — and a committed link cannot be
+rotated, because it stays in the history of every clone that ever pulled it. `check-all`
+fails if one reappears in `share.env`, and `setup-signing` moves it out.
+
+A new machine therefore needs the password and both links out of band. CI reads the same
+three values from repository secrets:
+
+| Secret | Holds |
+|---|---|
+| `DTI_CERT_PASSWORD` | the password that opens both `.pfx` files |
+| `DTI_CERT_SHARE_URL` | one Dropbox link to `release.pfx` |
+| `DTI_DEBUG_CERT_SHARE_URL` | one Dropbox link to `debug.pfx` |
+
+Locally the same three live in `.dti_configs/signing.env`, which is gitignored:
+
+```env
+windows.certPassword=…
+share.cert=https://www.dropbox.com/scl/fi/…/release.pfx?rlkey=…&dl=0
+share.debugCert=https://www.dropbox.com/scl/fi/…/debug.pfx?rlkey=…&dl=0
+```
+
+Paste a Dropbox link exactly as the web app gives it to you — `dl=0` and all. The fetch
+rewrites the parameter to `dl=1` in place, keeps the `rlkey`, and rejects the download if
+a web page arrives instead of a certificate, which is what a revoked link answers with.
+
+Nothing fails when a certificate is missing: the build says the artifacts are unsigned
+and carries on. Unsigned means an Unknown Publisher warning, not a broken installer.
+
+### The installer
+
+NSIS, per-user under `%LOCALAPPDATA%\Programs`, so it needs no administrator prompt — a
+developer tool that demands one is a tool people install once and stop updating. An
+upgrade runs the old uninstaller first: a PyInstaller folder's contents change between
+versions, and copying a new build over an old one leaves whatever the new one no longer
+ships sitting on the import path.
+
+It also adds the install directory to your **user** PATH, so the app starts by typing
+`dti` in any terminal opened afterwards. Pass `/NOPATH` to skip that. An already-open
+terminal keeps the environment it started with — that is Windows, not the
+installer, and the finish page says so.
+
+### A debug build installs beside the release, not over it
+
+Everything that identifies an install derives from one define, so the two cannot collide:
+
+| | release | debug (prerelease) |
+|---|---|---|
+| Directory | `%LOCALAPPDATA%\Programs\dti` | `…\Programs\dti-debug` |
+| Add/Remove entry | Developer Toolbox Inventory | Developer Toolbox Inventory **(debug)** |
+| Settings key | `…\dti` | `…\dti-debug` |
+| Command | `dti` | `dti-debug` |
+| On PATH | yes, unless `/NOPATH` | yes, unless `/NOPATH` |
+
+That is not tidiness. `UNINSTALL_KEY` used to be shared, and the upgrade path reads it —
+so installing a debug build ran the *release* build's uninstaller, took its PATH entry
+with it, and installed the debug tree into the release's directory. One name, two
+products, and the second silently ate the first.
+
+**The debug build installs its executable under its own name**, `dti-debug.exe`, so both
+can be on PATH without a collision. It was kept off PATH entirely at first, because two
+executables called `dti.exe` means the command is whichever directory comes first — an
+order that changes whenever anything else edits PATH, is invisible from the prompt, and
+whose wrong answer looks exactly like the right one. Renaming removes the collision
+instead of avoiding it: `dti` is the release, `dti-debug` is the debug build.
+
+The rename happens after the files are copied, and is safe for a PyInstaller onedir build
+because the bootloader locates `_internal` by the executable's *directory* rather than by
+its name — checked by renaming a frozen build and starting it, not assumed.
+
+The installer also offers **components**: Start Menu shortcut (on), Desktop shortcut
+(off), and Add to PATH (on). The choices are recorded and restored, so an update skips the
+page and a silent in-app update keeps what you picked. `/NOSHORTCUTS`, `/NOPATH` and
+`/PATH` still override from the command line.
+
+The store under `~/.dti` is **shared** between them, because the app derives it from its
+own name rather than from which build it is. So settings, remembered tabs and cloned
+script repositories are common to both — which is also why neither uninstaller removes
+it, on top of it holding work nobody should delete to tidy up.
+
+### Release notes are generated, then prefixed
+
+`POST /releases/generate-notes` returns the changelog GitHub builds from the commits and
+pull requests since the previous release, and the workflow composes the body itself: the
+four lines that matter for an installer first — version, whether it is signed, where it
+installs — then a rule, then the generated part. `.github/release.yml` groups what comes
+back.
+
+Composed in that order here rather than by passing `--generate-notes` to
+`gh release create`, because that flag generates the title *and* body and what happens to
+a `--notes` given alongside it is not documented. A release path is not the place for a
+behaviour nobody wrote down. A failure to generate is not a failure to release: the body
+falls back to the four lines, which are the ones somebody installing actually needs.
+
+Every workflow also writes a **run summary**, so a run can be understood from the
+Actions tab without opening a log. `check-all` writes its own result table — in the
+script, where the results are, rather than in YAML that would re-derive them from parsed
+stdout and go stale. A release summarises the version, tag, kind, whether it was signed
+and which installer went up; a rehearsal says what it *would* have done, and says it even
+when the run failed, because a red run with a blank summary is one somebody has to read
+the log to understand.
+
+### An update is not an install, and says so
+
+When a version is already recorded, "Choose Install Location" is not shown. The answer is
+already settled — `$INSTDIR` comes back out of the settings key — and browsing elsewhere
+would leave the old copy installed, on PATH, and first in line. The page header reads
+*Updating … Replacing 0.0.1+2 with 0.0.1+3*, the window is retitled Update, and the
+details log names the transition.
+
+What an uninstall deliberately leaves is `~/.dti`, and it now says so in its details
+rather than leaving you to find out. The one thing there that is genuinely rubbish is the
+downloaded installer cache, and neither installer can tell a stale one from the copy
+currently being offered — so the app sweeps it itself, at the only moment anything knows
+the difference.
+
+The exe inside the package is called `dti.exe`, not `dti-0.1.0+2.exe`. The FOLDER
+under `dist/` carries the version so two builds can sit side by side; the command does
+not, because a command whose name changes every release is no use on PATH and makes a
+Start Menu shortcut that breaks on every upgrade.
+
+**The PATH edit is not done in NSIS**, and that is worth knowing before anyone
+simplifies it. NSIS is built with a fixed string limit — `makensis /HDRINFO`
+reports `NSIS_MAX_STRLEN=1024` — and `ReadRegStr` truncates *silently* at it.
+Writing that truncated value back is the well-known way an installer destroys
+somebody's PATH, and it is not hypothetical: on the machine this was built for, the
+user PATH was already 723 characters and the merged machine+user value 1117, past the
+limit before this installer adds anything. So `scripts/lib/path-entry.ps1` does it
+through .NET, which has no such limit and broadcasts `WM_SETTINGCHANGE` itself. It
+reads and writes the **User** scope only — writing the merged `$env:Path` into
+user scope is the other classic bug, and it doubles the length every time.
+
+### Updating itself
+
+The app asks the release feed once as it starts, and says nothing unless the answer is
+useful. If there is a newer build it downloads the installer, and the header grows a
+badge — `▲ 0.0.2+4 ready · Ctrl+U`. Pressing that asks once, closes the toolbox, and
+hands over to the installer.
+
+The handover is the whole feature. `installer.nsi` upgrades by running the old
+uninstaller and then `RMDir /r` over the install directory, which holds the running
+`dti.exe` — and Windows will not delete a running executable. So the installer is
+started by a **third** process that waits for this one to exit first:
+
+```powershell
+powershell -Command "Wait-Process -Id <pid>; Start-Process '<installer>'"
+```
+
+Detached, so it outlives the app. Windows PowerShell 5.1 rather than `pwsh`, which is the
+one place in this repository that cannot assume PowerShell 7 — 7 is something a developer
+installed, and this runs wherever the app was installed. `docs/decisions/0004` is why, and
+`docs/pitfalls.md` 6.1 is what happens without it.
+
+Everything about the check follows from nobody having asked for it: it runs as a worker so
+the first paint never waits on the network, every failure is silence, and it asks at most
+once every `CHECK_INTERVAL_HOURS` — unauthenticated GitHub allows sixty requests an hour,
+and spending those on somebody restarting the app is how the manual check ends up
+rate-limited when they actually want it. A launch with an installer already downloaded
+makes no request at all.
+
+It is **on out of the box**: `[updates] repository` defaults to `jnsbnmndz/ikaika_tui`,
+which is where this build's own releases are published. That was empty once, on the
+grounds that the code has no business guessing which fork somebody runs — and the thing
+that argument protected turned out to be worse, because a toolbox shipping with update
+checking switched off is one where the feature exists and does nothing until somebody
+finds the screen that turns it on. A fork changes one line in Advanced, which is a
+smaller cost than everybody else having to.
+
+Two switches turn it off, and both keep working: `[updates] check_on_launch = false`
+stops the launch check while leaving the card, and clearing the repository in Advanced
+stops both. **Absent and empty are different answers** in the settings file — a file with
+no `repository` line has said nothing and gets the default, one that says
+`repository = ""` has said *off*. Which is why saving an empty repository writes that
+empty value down rather than omitting it the way every other default is omitted;
+otherwise clearing the field would switch checking off until the next read and then
+quietly back on.
+
+**Check for Updates** is still the card
+that reports everything properly — asset size, release notes, why the check failed — and
+what it downloads is recorded in the same place, so `Ctrl+U` installs that too.
+
+### What CI caches, and what it deliberately does not
+
+The **download** caches: pip's, and PyInstaller's on the release workflow. Keyed on
+`uv.lock` + `pyproject.toml` and the runner's python version, with `restore-keys` — which
+matter more than the key, because without them a one-line change to the lock means a
+completely cold cache and every wheel fetched again.
+
+The paths are *asked for*, not written down. `%LOCALAPPDATA%\pip\Cache` is where pip keeps
+its downloads today and is not a contract; `pip cache dir` is. It is asked with the
+runner's python, before the virtualenv exists, and that works because pip's download cache
+is per **user** rather than per environment — the path the runner's pip reports is the one
+the venv's pip will use.
+
+**Not the virtualenv.** A restored pip cache cannot make a run wrong: worst case it is
+ignored and everything is fetched again. A restored `.venv` can — it carries an
+interpreter and an editable install, and one built against a python the runner has since
+upgraded is a venv whose `python.exe` will not start. That fails on a cache *hit* and
+passes on a miss, which is the worst failure shape CI has.
+
+And caching is never why a run fails. The discovery step catches its own errors and
+reports an empty path; the cache step is skipped when the path is empty. A missing python
+is `setup-dev-env`'s to report — it has a sentence for it — and a caching step that died
+first would replace that sentence with a stack trace.
+
+### Keeping the actions current, in two halves
+
+`.github/dependabot.yml` opens the pull requests. `.\script.ps1 check-actions` — run
+weekly by `.github/workflows/actions-audit.yml` — reads every `uses:` off the checkout,
+asks GitHub for each action's latest release, and **fails** when one has moved on. Both,
+because they answer different questions: one proposes the bump, the other notices when
+the proposal was never merged, or when Dependabot itself has been switched off. A version
+check whose only output is a pull request has no way to say it has stopped running.
+
+The audit **was** a third-party action, `saadmk11/github-actions-version-updater`, and
+that is exactly how it failed. It is a Docker *container* action, so every run builds its
+image from the Dockerfile at the pinned SHA — and that Dockerfile says
+`FROM python:3.12-slim-bullseye`. Debian bullseye's repositories have since been
+archived, so `apt-get update` inside the build fails, so the image cannot be built, so
+the job failed before doing anything: *Docker build failed with exit code 1*, three
+attempts, two backoffs. Upstream's `main` carries the same line and v0.9.0 is still the
+newest tag, so there was nothing to bump to — and a container action pinned by SHA cannot
+be patched from outside. What it did was four API calls and a string comparison.
+
+Doing it here costs less than depending on somebody else's base image aging out, and it
+removed the credential with it. That action wanted a PAT with `workflow` scope, because
+it listed this repository's workflows through the API; the script reads them off the
+checkout, and every version lookup is a public read, so the default `GITHUB_TOKEN` is
+enough. **`ACTIONS_AUDIT_TOKEN` is no longer read by anything and can be deleted.**
+
+What counts as behind: a tag pin is current while the newest release shares its major, so
+`v7` covers `v7.0.1` and stops covering anything at `v8`. A SHA pin is read through the
+`# vX.Y.Z` comment beside it rather than by resolving the SHA — and a SHA pin with no
+comment is reported as `unknown`, because it is unauditable by anything, including a
+person. A lookup that fails is `unknown` too, and neither fails the job: a version check
+that guesses is worse than one that abstains.
+
+The same command runs on a laptop. It uses `gh` when it is there, so a run inside Actions
+is authenticated rather than spending the sixty-an-hour unauthenticated budget, and falls
+back to plain HTTPS otherwise.
 
 ## Template packs
 

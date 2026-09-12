@@ -1,0 +1,118 @@
+# Runs the same checks a laptop runs, by running the same file.
+#
+# Every step below is one call into script.ps1. Nothing about what "passing" means is
+# written in this file, because a workflow that lists its own steps is a second answer to
+# that question - and it is the answer nobody can reproduce locally. Add a check by
+# editing scripts/check-all.ps1; this file does not change.
+#
+# Marketplace actions: actions/checkout only. Everything else is the runner's own
+# chocolatey, its Windows SDK, and pwsh - which is what "the actions just read the pwsh
+# scripts" means.
+
+name: check
+
+# WHEN THIS RUNS, AND WHY IT IS NOT EVERY PUSH
+#
+# It was `push: branches: ['**']` plus `pull_request`, which is the worst of both: a push
+# to a branch with an open pull request triggered BOTH, so every push to a PR branch cost
+# two full Windows runs answering the same question.
+#
+# Now: pull requests, and pushes to main. Not pull requests alone, because main is what
+# releases are cut from and much of this repository arrives as direct commits - a gate
+# that never runs on main is a gate that does not cover the branch that matters. A
+# feature branch with no pull request open is checked by `.\script.ps1 check-all` on the
+# machine doing the work, which is the same file this runs and is what -InstallHook wires
+# into git as a pre-push hook.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first: the older run is answering a
+# question nobody is asking any more.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # WHERE THE CACHES ARE, ASKED RATHER THAN ASSUMED
+      #
+      # `%LOCALAPPDATA%\pip\Cache` is where pip keeps its downloads today and is not a
+      # contract - `pip cache dir` is. Asked with the RUNNER's python, before the
+      # virtualenv exists, and that is not a problem: pip's download cache is per USER,
+      # not per environment, so the path the runner's pip reports is the one the venv's
+      # pip will use. That is the whole reason this works at all.
+      #
+      # A path that comes back empty is simply not cached - hence the `if` on the cache
+      # step below, rather than a step that fails over a directory that does not exist.
+      - name: Locate the caches
+        id: caches
+        shell: pwsh
+        run: |
+          # try/catch, because CACHING MUST NEVER BE WHY A RUN FAILS. A missing python
+          # is setup-dev-env's to report - it has a sentence for it - and a caching step
+          # that dies first replaces that sentence with a CommandNotFoundException.
+          $pip = ''
+          try {
+              $answer = & python -m pip cache dir 2>$null
+              if ($LASTEXITCODE -eq 0) { $pip = "$answer".Trim() }
+          } catch {
+              $pip = ''
+          }
+          "pip=$pip" | Out-File $env:GITHUB_OUTPUT -Append
+
+          # In the key, not the path: a runner image that moves to a new python patch
+          # release should start a new cache rather than accumulate wheels for two
+          # interpreters in one.
+          $python = 'unknown'
+          try {
+              $answer = & python -c "import sys; sys.stdout.write('.'.join(map(str, sys.version_info[:3])))"
+              if ($LASTEXITCODE -eq 0 -and $answer) { $python = "$answer".Trim() }
+          } catch {
+              $python = 'unknown'
+          }
+          "python=$python" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # The DOWNLOAD cache, and deliberately not the virtualenv.
+      #
+      # A restored pip cache cannot make a run wrong - worst case it is ignored and
+      # everything is fetched again. A restored `.venv` can: it carries an interpreter and
+      # an editable install, and one built against a python the runner has since upgraded
+      # is a venv whose python.exe will not start. `setup-dev-env` would then fail on a
+      # cache hit and pass on a miss, which is the worst failure shape CI has.
+      #
+      # `restore-keys` matters more than the key here. Without it, changing one line of
+      # `uv.lock` means a completely cold cache and every wheel downloaded again; with it,
+      # the newest cache for this python is used as a starting point and only what actually
+      # changed is fetched.
+      - name: Cache the downloads
+        if: ${{ steps.caches.outputs.pip != '' }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.caches.outputs.pip }}
+          key: pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-lint-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-lint-
+            pip-${{ runner.os }}-py${{ steps.caches.outputs.python }}-
+
+      # No setup-python and no setup-uv. setup-dev-env creates the virtualenv with
+      # whichever of uv or python is present, and the runner has python - so the fallback
+      # path is the one CI exercises, which is worth knowing works.
+      #
+      # It is also the path the cache above serves: with no uv on the runner it installs
+      # through pip, and pip is what reads that directory.
+      - name: Set up the environment
+        shell: pwsh
+        run: .\script.ps1 setup-dev-env -Lint
+
+      - name: Check everything
+        shell: pwsh
+        run: .\script.ps1 check-all

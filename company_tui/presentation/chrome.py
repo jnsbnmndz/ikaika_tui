@@ -138,9 +138,27 @@ class AppHeader(Widget):
     AppHeader #header-window.-empty {{
         display: none;
     }}
+
+    /* A newer build, already downloaded, waiting to be run. $success rather than
+       $warning: the window notice is something wrong that the user has to fix, and
+       this is something ready that they may ignore. Two notices in one margin need
+       to be tellable apart at a glance or the second one trains people to stop
+       reading the first. */
+    AppHeader #header-update {{
+        width: auto;
+        height: 1;
+        margin-left: 2;
+        color: $success;
+        text-style: bold;
+    }}
+
+    AppHeader #header-update.-empty {{
+        display: none;
+    }}
     """
 
     RUNS_HINT = "Ctrl+B"
+    UPDATE_HINT = "Ctrl+U"
 
     def __init__(self, workspace: str | None = None) -> None:
         super().__init__()
@@ -161,6 +179,12 @@ class AppHeader(Widget):
         )
         window = self._resolve_window()
         yield Static(window, id="header-window", classes="" if window else "-empty")
+        update = self._resolve_update()
+        yield Static(
+            self._update_text(update),
+            id="header-update",
+            classes="" if update else "-empty",
+        )
 
     def show_runs(self, summary: str) -> None:
         """Say how many runs are going, or say nothing at all."""
@@ -174,9 +198,25 @@ class AppHeader(Widget):
             badge.update(notice)
             badge.set_class(not notice, "-empty")
 
+    def show_update(self, notice: str) -> None:
+        """Say a newer build is downloaded and how to run it, or say nothing."""
+        for badge in self.query("#header-update"):
+            badge.update(self._update_text(notice))
+            badge.set_class(not notice, "-empty")
+
     @classmethod
     def _runs_text(cls, summary: str) -> str:
         return f"{summary} · {cls.RUNS_HINT}" if summary else ""
+
+    @classmethod
+    def _update_text(cls, notice: str) -> str:
+        """The notice with the key that acts on it, the way the runs badge does.
+
+        The key is in the badge rather than in a footer hint because the notice can
+        appear on any screen - it is chrome, not a menu - and a hint that came and
+        went as the user walked would be a control that moves.
+        """
+        return f"{notice} · {cls.UPDATE_HINT}" if notice else ""
 
     def _resolve_runs(self) -> str:
         return getattr(self.app, "runs_summary", "") or ""
@@ -189,6 +229,12 @@ class AppHeader(Widget):
         the window next happened to move.
         """
         return getattr(self.app, "window_notice", "") or ""
+
+    def _resolve_update(self) -> str:
+        """Read at compose time as well as on change, exactly as the window notice
+        is: every step of a workflow composes a fresh header, and an update found
+        once at launch would otherwise vanish at the first menu."""
+        return getattr(self.app, "update_notice", "") or ""
 
     def _resolve_workspace(self) -> str:
         if self._workspace:

@@ -1,9 +1,9 @@
-# IKAIKA developer toolbox settings.
+# Developer Toolbox Inventory settings.
 
 [scaffold]
 workspace_root = "."
-bundle_prefix = "com.ikaika"
-scripts_root = "~/.ikaika/scripts"
+bundle_prefix = "com.dti"
+scripts_root = "~/.dti/scripts"
 
 [templates.react_native]
 url = "https://github.com/JDM-Github/react_native_structure.git"
