@@ -19,6 +19,9 @@ from company_tui.capabilities.updates import (
 from company_tui.domain import naming
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.updates import (
+    BUILD_DEBUG,
+    BUILD_RELEASE,
+    BUILD_UNKNOWN,
     CHANNEL_ANY,
     CHANNEL_OFFICIAL,
     CHANNEL_PRERELEASE,
@@ -30,6 +33,7 @@ from company_tui.domain.updates import (
     ReleaseFeedError,
     ReleaseFeedPort,
     UpdateSource,
+    build_kind,
     choose,
     parse_version,
 )
@@ -442,6 +446,76 @@ class DownloadingAndInstalling(unittest.TestCase):
         self.assertTrue(any("Ctrl+U" in line for line in console.lines))
 
 
+class EachLineUpdatesItself(unittest.TestCase):
+    """A release that cannot replace this build is never offered.
+
+    A debug build and a release build are two separate INSTALLS - own directory,
+    own uninstall entry, own command - so a debug installer does not update a
+    release install, it installs beside it. Offered anyway it is not a bad update
+    but a silent no-op: the installer succeeds, a second app appears, the running
+    build is the version it always was, and the same offer comes back at every
+    launch. That is what this stops.
+    """
+
+    OFFICIAL = Release(tag="v1.0.0+9-released", prerelease=False)
+    DEBUG = Release(tag="v1.1.0+20", prerelease=True)
+
+    def _choose(self, build, channel=CHANNEL_ANY, releases=None):
+        return choose(
+            releases if releases is not None else (self.OFFICIAL, self.DEBUG),
+            UpdateSource(repository="a/b", channel=channel),
+            build,
+        )
+
+    def test_a_release_build_is_never_offered_a_debug_build(self):
+        # Even though the debug build carries the higher version: debug builds are
+        # cut far more often, so on `any` this is the usual case, not the corner.
+        self.assertEqual(self.OFFICIAL, self._choose(BUILD_RELEASE))
+
+    def test_a_debug_build_is_never_offered_an_official_release(self):
+        self.assertEqual(self.DEBUG, self._choose(BUILD_DEBUG))
+
+    def test_the_channel_cannot_overrule_the_line(self):
+        # An installed build has exactly one line that can replace it, so the
+        # setting has nothing left to choose - and a setting that could choose
+        # wrongly here is the loop this whole class exists to close.
+        for channel in (CHANNEL_OFFICIAL, CHANNEL_PRERELEASE, CHANNEL_ANY):
+            self.assertEqual(self.OFFICIAL, self._choose(BUILD_RELEASE, channel), channel)
+            self.assertEqual(self.DEBUG, self._choose(BUILD_DEBUG, channel), channel)
+
+    def test_nothing_on_this_line_is_offered_nothing(self):
+        # Rather than falling back to the other line, which is the bug.
+        self.assertIsNone(self._choose(BUILD_DEBUG, releases=(self.OFFICIAL,)))
+        self.assertIsNone(self._choose(BUILD_RELEASE, releases=(self.DEBUG,)))
+
+    def test_a_source_checkout_still_follows_the_channel(self):
+        # Nothing was installed there and nothing can be replaced, so the question
+        # the channel asks is genuinely open and it keeps the last word.
+        self.assertEqual(self.DEBUG, self._choose(BUILD_UNKNOWN, CHANNEL_ANY))
+        self.assertEqual(self.OFFICIAL, self._choose(BUILD_UNKNOWN, CHANNEL_OFFICIAL))
+        self.assertEqual(self.DEBUG, self._choose(BUILD_UNKNOWN, CHANNEL_PRERELEASE))
+
+
+class ReadingTheLineOffTheCommand(unittest.TestCase):
+    """`build_kind`, which is the whole of how the app knows which line it is on."""
+
+    def test_the_debug_command_is_the_debug_line(self):
+        self.assertEqual(BUILD_DEBUG, build_kind("dti-debug.exe"))
+        self.assertEqual(BUILD_DEBUG, build_kind(r"C:\Programs\dti-debug\dti-debug.exe"))
+
+    def test_the_plain_command_is_the_release_line(self):
+        self.assertEqual(BUILD_RELEASE, build_kind("dti.exe"))
+        self.assertEqual(BUILD_RELEASE, build_kind(r"C:\Programs\dti\dti.exe"))
+
+    def test_nothing_is_no_line_at_all(self):
+        # `python -m company_tui`: the executable is the interpreter, which is a
+        # build of nothing, and there is no install to replace either.
+        self.assertEqual(BUILD_UNKNOWN, build_kind(""))
+
+    def test_the_case_of_the_name_does_not_decide_it(self):
+        self.assertEqual(BUILD_DEBUG, build_kind("DTI-Debug.exe"))
+
+
 class RunningAnInstallerFromDisk(unittest.TestCase):
     """The file chooser: a setup program picked by hand, with no feed involved.
 
@@ -684,6 +758,9 @@ class TheCheck(unittest.TestCase):
         self.assertTrue(any("dti-0.2.0-setup" in line for line in lines))
 
     def test_only_prereleases_says_which_switch_would_change_that(self):
+        # From a source checkout the CHANNEL is still what decides, so Advanced is
+        # the right place to send somebody. See the build-kind tests for the
+        # installed case, where it is not and the sentence does not say it is.
         feed = _Feed((Release(tag="v9.9.9", prerelease=True),))
         message, ok, _ = self._run(UpdateSource(repository="a/b"), feed)
         self.assertTrue(ok)

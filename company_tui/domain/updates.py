@@ -34,7 +34,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from company_tui.domain import naming
 
@@ -98,6 +98,53 @@ CHANNEL_LABELS = {
 interface, because the manual card, the Advanced form and the settings summary all name
 them and three copies of a word is two too many."""
 RELEASED_SUFFIX = "-released"
+
+BUILD_RELEASE = "release"
+BUILD_DEBUG = "debug"
+BUILD_UNKNOWN = ""
+CHANNEL_FOR_BUILD = {BUILD_RELEASE: CHANNEL_OFFICIAL, BUILD_DEBUG: CHANNEL_PRERELEASE}
+"""Which line a build belongs to, and which channel is that line.
+
+A debug build and a release build are two separate INSTALLS by design - own
+directory, own uninstall entry, own command (`docs/pitfalls.md` and the
+`INSTALL_SLUG` note in CLAUDE.md). That is what stops a build somebody is testing
+from replacing the copy they work in, and it is also why an update has a line: a
+debug installer CANNOT update a release install, because it does not touch it. It
+installs beside it.
+
+Offered anyway, that is not a bad update, it is a silent no-op with a badge that
+never clears: the installer runs, reports success, puts a second app on the
+machine, and the running build is the version it always was - so the same offer
+comes back at the next launch, and the next. That happened, for days, and looked
+like the updater was broken rather than like it was working on somebody else's
+install.
+
+So the line is settled by what is RUNNING, not by a setting. `BUILD_UNKNOWN` is
+the source checkout, where nothing was installed and there is nothing to replace;
+there the channel has the last word, as it always did.
+"""
+
+DEBUG_SUFFIX = "-debug"
+"""What the debug build's command is called, against `naming.COMMAND`.
+
+The NSI writes `${APP_NAME}-debug.exe` for a debug build so both can sit on PATH
+without one shadowing the other, which makes the name this process was started
+under the one thing on the machine that says which line it is. Read from the exe
+rather than from the registry: the registry says what an INSTALLER did, and the
+question here is what is running.
+"""
+
+
+def build_kind(command: str) -> str:
+    """Which line the running build belongs to, from the name it runs under.
+
+    Empty in, empty out: `sys.executable` is the interpreter under
+    `python -m company_tui`, and an interpreter is not a build of anything.
+    """
+    stem = PurePath(command).stem.lower() if command else ""
+    if not stem:
+        return BUILD_UNKNOWN
+    return BUILD_DEBUG if stem.endswith(DEBUG_SUFFIX) else BUILD_RELEASE
 
 _VERSION_SHAPE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?")
 _REPOSITORY_SHAPE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
@@ -221,6 +268,19 @@ class Release:
         return not self.prerelease and self.tag.endswith(RELEASED_SUFFIX)
 
     @property
+    def kind(self) -> str:
+        """Which line this release belongs to. See `CHANNEL_FOR_BUILD`."""
+        return BUILD_RELEASE if self.official else BUILD_DEBUG
+
+    def replaces(self, build: str) -> bool:
+        """Whether installing this would replace a build of that kind.
+
+        True for `BUILD_UNKNOWN`, which is the source checkout: there is no
+        install to replace there, so nothing is ruled out on those grounds.
+        """
+        return not build or self.kind == build
+
+    @property
     def version(self) -> "Version":
         return parse_version(self.tag)
 
@@ -323,8 +383,19 @@ class ReleaseFeedError(RuntimeError):
     """The feed could not be read. Carries what to tell the person who asked."""
 
 
-def wanted(release: Release, channel: str) -> bool:
-    """Whether this release belongs to that channel.
+def wanted(release: Release, channel: str, build: str = BUILD_UNKNOWN) -> bool:
+    """Whether this release is worth offering to a build of that kind.
+
+    THE LINE COMES FIRST, AND THE CHANNEL CANNOT OVERRULE IT
+
+    A release that cannot replace this build is never offered, whatever the
+    channel says - see `CHANNEL_FOR_BUILD` for what that cost when it could. And
+    once the line is known there is nothing left for the channel to choose: an
+    installed build has exactly one line that can replace it, so `official`,
+    `prerelease` and `any` all mean the same thing to it. The setting is not
+    ignored so much as answered; what it is still for is the source checkout,
+    where nothing was installed, nothing can be replaced, and the question is
+    genuinely open.
 
     `prerelease` asks how it was PUBLISHED and `official` asks that plus how it was
     tagged, which is why the two are not each other's negation: a release marked neither
@@ -332,6 +403,10 @@ def wanted(release: Release, channel: str) -> bool:
     other than the workflow, and belongs to `any` alone. Being conservative there is the
     same reading `Release.official` already takes.
     """
+    if not release.replaces(build):
+        return False
+    if build:
+        return True
     if channel == CHANNEL_ANY:
         return True
     if channel == CHANNEL_PRERELEASE:
@@ -339,7 +414,9 @@ def wanted(release: Release, channel: str) -> bool:
     return release.official
 
 
-def choose(releases: tuple[Release, ...], source: UpdateSource) -> Release | None:
+def choose(
+    releases: tuple[Release, ...], source: UpdateSource, build: str = BUILD_UNKNOWN
+) -> Release | None:
     """The newest release worth offering on this source's channel.
 
     The feed's own order is not trusted. GitHub returns releases by creation
@@ -347,7 +424,7 @@ def choose(releases: tuple[Release, ...], source: UpdateSource) -> Release | Non
     then come first - so this sorts by version and only falls back to feed order
     for releases whose tags do not parse.
     """
-    usable = [release for release in releases if wanted(release, source.channel)]
+    usable = [release for release in releases if wanted(release, source.channel, build)]
     if not usable:
         return None
     parsed = [release for release in usable if release.version.valid]

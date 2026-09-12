@@ -292,6 +292,40 @@ fix could only reach a machine through the very installer that is failing.
 `-File` obeys it. A script file without it is refused on a default machine, which lands
 back on 6.4's symptom exactly - an app that closed and never came back.
 
+### 6.6 An update that installs a different app succeeds forever
+
+`[updates] channel = any` offered whichever release was newest. Debug builds are cut far
+more often than official ones and carry higher build numbers, so on a release install that
+was almost always a **debug** build — and a debug build is a separate install by design:
+own directory, own uninstall entry, own command (`INSTALL_SLUG`, and 6.x above on why that
+split exists).
+
+So the update worked. The installer ran, exited 0, reported success, put `dti-debug`
+on the machine — and `dti` was the version it had always been. The badge came back at the
+next launch offering the same build, and the one after that, and every one after that.
+
+Every part of it looked right, which is why it took a morning to see. The feed answered,
+the comparison said newer, the download finished, the handover armed, the installer
+succeeded and the app relaunched. The only wrong thing was *which install it updated*, and
+nothing in the loop was in a position to notice: the running version is read from the
+build, and the build never changed.
+
+**Rule.** The line comes first and the channel cannot overrule it. `wanted()` refuses any
+release that could not replace the running build (`Release.replaces`), and the build reads
+its own line off the command it runs under — `dti.exe` is the release line, `dti-debug.exe`
+the debug line (`build_kind`, from `sys.executable`, frozen only). An installed build has
+exactly one line that can replace it, so `official`, `prerelease` and `any` all mean the
+same thing to it; the setting still decides in a source checkout, where nothing was
+installed and nothing can be replaced. `tests/test_updates.py::EachLineUpdatesItself`
+asserts that a release build is never offered the newer debug build on any of the three
+channels, and that nothing on this line is offered **nothing** rather than falling back to
+the other one.
+
+The form says so rather than leaving it implied: the Channel row reads
+*"prereleases only (debug builds) - this is the debug build"*, because a channel that is
+set to one thing and read as another is the kind of quiet disagreement this whole file is
+about.
+
 ---
 
 ## 7. An argument list is not a list of arguments

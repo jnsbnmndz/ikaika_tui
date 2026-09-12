@@ -44,6 +44,8 @@ from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.updates import (
+    BUILD_UNKNOWN,
+    CHANNEL_FOR_BUILD,
     CHANNEL_LABELS,
     AssetDownloadPort,
     Release,
@@ -111,6 +113,7 @@ class UpdatesCapability(Capability):
         version: str,
         downloads: AssetDownloadPort,
         state: UpdateStatePort | None = None,
+        build: str = BUILD_UNKNOWN,
     ) -> None:
         self._console = console
         self._config = config
@@ -125,6 +128,9 @@ class UpdatesCapability(Capability):
         # whole comparison rests on, and a capability that reads it from a module
         # global cannot be tested against a version it is not running.
         self._version = version
+        self._build = build
+        """Which line this build is on, so a release that could not replace it is
+        never offered. Empty from a source checkout - see `domain.updates.build_kind`."""
 
     @property
     def info(self) -> CapabilityInfo:
@@ -156,6 +162,20 @@ class UpdatesCapability(Capability):
                 continue
             return 0 if ok else FAILED
 
+    def _channel_label(self, source: UpdateSource) -> str:
+        """What the form says the channel is, which is not always what it is set to.
+
+        An installed build has exactly one line that can replace it, so the
+        setting has nothing left to choose and saying "official releases only" to
+        somebody running the debug build would be naming a channel that is not
+        the one being read. The line is named instead, and named as a fact about
+        what is running rather than as a setting they should go and change.
+        """
+        if self._build in CHANNEL_FOR_BUILD:
+            channel = CHANNEL_FOR_BUILD[self._build]
+            return f"{CHANNEL_LABELS[channel]} - this is the {self._build} build"
+        return CHANNEL_LABELS.get(source.channel, source.channel)
+
     def _options(self, source: UpdateSource) -> tuple[Option, ...]:
         return (
             Option(
@@ -174,7 +194,7 @@ class UpdatesCapability(Capability):
                 key="channel",
                 label="Channel",
                 kind=OptionKind.INFO,
-                default=CHANNEL_LABELS.get(source.channel, source.channel),
+                default=self._channel_label(source),
             ),
             Option(
                 key=ANYWAY_KEY,
@@ -266,16 +286,23 @@ class UpdatesCapability(Capability):
             return (f"{source.repository} has published no releases yet.", True)
 
         self._console.write(f"{len(releases)} release(s) published.")
-        latest = choose(releases, source)
+        latest = choose(releases, source, self._build)
         if latest is None:
             # Every release was a prerelease and prereleases are not wanted. Not
             # a failure: the honest answer is that nothing is on offer, and
             # saying which switch would change that is more use than an error.
+            # Named by the line actually being read, not by the setting. For a
+            # debug build with no prerelease published, "nothing on the official
+            # releases only channel" would be a true sentence about a channel
+            # nothing consulted.
+            # Advanced is worth naming only where the setting is still what
+            # decides. For an installed build the line does, and sending somebody
+            # to change a setting that cannot help is worse than saying nothing.
+            where = "" if self._build else " Advanced is where that is changed."
             return (
                 (
                     f"{source.repository} has published nothing on the "
-                    f"{CHANNEL_LABELS.get(source.channel, source.channel)} "
-                    "channel. Advanced is where that is changed."
+                    f"{self._channel_label(source)} channel.{where}"
                 ),
                 True,
             )

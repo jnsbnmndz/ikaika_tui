@@ -1,6 +1,6 @@
 # 4. The toolbox can install its own update, through a process that outlives it
 
-> **Status: ACCEPTED (2026-09-08), amended 2026-09-12 (section 2.3: the handover's flags and its script).** Supersedes the "IT DOES NOT INSTALL ANYTHING" paragraph that `company_tui/capabilities/updates.py` carried. The launch check is `application/updates.py`; the handover is `infrastructure/handover.py`; the badge and the `Ctrl+U` action are in `presentation/chrome.py` and `presentation/tui_console.py`.
+> **Status: ACCEPTED (2026-09-08), amended 2026-09-12 (section 2.3: the handover's flags and its script; section 3: an update has a line).** Supersedes the "IT DOES NOT INSTALL ANYTHING" paragraph that `company_tui/capabilities/updates.py` carried. The launch check is `application/updates.py`; the handover is `infrastructure/handover.py`; the badge and the `Ctrl+U` action are in `presentation/chrome.py` and `presentation/tui_console.py`.
 
 ## 1. Context
 
@@ -128,6 +128,12 @@ key, and the badge only exists when the key does something.
 
 ## 3. Consequences
 
+- **An update has a line, and the line is what is running** (amended 2026-09-12). A debug
+  build cannot update a release install — it installs beside it — so offering one is a
+  silent no-op with a badge that never clears. `wanted()` refuses any release that could
+  not replace the running build, and `build_kind` reads that off the command name. For an
+  installed build the channel has nothing left to choose; it still decides in a source
+  checkout. `docs/pitfalls.md` 6.6.
 - `[updates] check_on_launch` turns it off. On by default and harmless when nothing else is
   set — the launch check reads a public release feed and offers a badge nobody has to
   press. `repository` now defaults to this build's own repository (it shipped empty at
