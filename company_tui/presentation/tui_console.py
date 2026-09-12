@@ -580,9 +580,17 @@ class TuiConsole(App):
         nothing left to arm it; skipped, the installer deletes the directory it is
         running from. See `infrastructure/handover.py`.
 
-        The quit confirmation is asked underneath: an install with three runs
-        going is three directories abandoned, and that is the same price quitting
-        charges, so it is named by the same dialog rather than by a second copy.
+        ONE QUESTION, NOT TWO
+        =====================
+        This asked `_confirm_quit` underneath the install one, so an install with
+        runs going put up a second dialog asking whether to quit. Two dialogs for
+        one decision is a menu to get through rather than a question to answer,
+        and the second one asks about quitting when what was pressed was install
+        - so the sane answer to "quit with runs going" abandoned the install, and
+        abandoned it SILENTLY, with the app sitting back on the menu looking like
+        the key had done nothing. `Ui.install_update` already folds the cost of
+        the runs into its one question; this is the same shape, arrived at for
+        the same reason, and the two now agree.
         """
         if self._watch is None:
             return
@@ -597,21 +605,23 @@ class TuiConsole(App):
         if not self._update.waiting:
             self.write(NOTHING_TO_INSTALL)
             return
+        detail = UPDATE_DETAIL.format(
+            version=self._update.available.text or self._update.tag,
+            installed=APP_VERSION,
+        )
+        live = self._sessions.live()
+        if live:
+            detail += UPDATE_RUNS.format(count=len(live), s="" if len(live) == 1 else "s")
         answer = await self.push_screen_wait(
             ConfirmScreen(
                 UPDATE_CONFIRM,
                 self.trail_label(),
-                detail=UPDATE_DETAIL.format(
-                    version=self._update.available.text or self._update.tag,
-                    installed=APP_VERSION,
-                ),
+                detail=detail,
                 confirm=UPDATE_ANSWER,
                 key=AppHeader.UPDATE_HINT,
             )
         )
         if not answer:
-            return
-        if not await self._confirm_quit():
             return
         problem = self._watch.hand_over(self._update)
         if problem:
