@@ -1,6 +1,6 @@
 # 4. The toolbox can install its own update, through a process that outlives it
 
-> **Status: ACCEPTED (2026-09-08).** Supersedes the "IT DOES NOT INSTALL ANYTHING" paragraph that `company_tui/capabilities/updates.py` carried. The launch check is `application/updates.py`; the handover is `infrastructure/handover.py`; the badge and the `Ctrl+U` action are in `presentation/chrome.py` and `presentation/tui_console.py`.
+> **Status: ACCEPTED (2026-09-08), amended 2026-09-12 (section 2.3: the handover's flags and its script).** Supersedes the "IT DOES NOT INSTALL ANYTHING" paragraph that `company_tui/capabilities/updates.py` carried. The launch check is `application/updates.py`; the handover is `infrastructure/handover.py`; the badge and the `Ctrl+U` action are in `presentation/chrome.py` and `presentation/tui_console.py`.
 
 ## 1. Context
 
@@ -65,14 +65,34 @@ at every launch forever.
 ### 2.3 The handover is a third process, and that is the whole feature
 
 ```
-powershell -Command "Wait-Process -Id <pid>; Start-Process '<installer>'"
+powershell -ExecutionPolicy Bypass -File <script> -WaitPid <pid> -Installer <path>
 ```
 
-Detached, so it survives this process and its console. It waits for *this* pid and only
-then starts the installer, which is the ordering that makes the difference between an
-upgrade and a corrupted install. `tests/test_auto_update.py` asserts that ordering
-directly, because it is the one line where being nearly right is worse than not having the
-feature.
+It waits for *this* pid and only then starts the installer, which is the ordering that
+makes the difference between an upgrade and a corrupted install. `tests/test_auto_update.py`
+asserts that ordering directly, because it is the one line where being nearly right is
+worse than not having the feature.
+
+**`CREATE_NO_WINDOW`, never `DETACHED_PROCESS`** (amended 2026-09-12). The first version
+said "detached, so it survives this process and its console", which is the right
+requirement and the wrong flag: `powershell.exe` with no console at all exits 0 having run
+nothing, while `Popen` reports success - so the app announced an armed handover and quit
+with nothing waiting for it. `CREATE_NO_WINDOW` gives the child a console of its own that
+is never shown, which is what the requirement actually asked for. See `docs/pitfalls.md`
+6.4; it is the reason this feature shipped not working.
+
+**A generated script, not a command string** (amended 2026-09-12). The waiter was one
+`-Command` line with the pid and both paths pasted into it, which made the paths into
+program text, put two escaping layers between Python and PowerShell, and left nothing on
+disk to read when it failed - at the one moment when the app that would have reported it
+is deliberately gone. It is now a `.ps1` written to `%TEMP%` at runtime with a `param()`
+block, so values travel as arguments, and it logs what it did beside itself: removed on
+success, kept on failure. `docs/pitfalls.md` 6.5.
+
+Generated at runtime rather than shipped, deliberately. `scripts/lib/path-entry.ps1` is a
+real file that `build-installer.ps1` passes to `makensis` and the NSI writes into
+`$PLUGINSDIR`; doing the same here would put the updater into the build and the release,
+where a fix could only reach a machine through the very installer that is failing.
 
 **Windows PowerShell, not `pwsh`.** Every script in this repository requires PowerShell 7;
 this is the one place that must not, because 7 is something a developer installed and this

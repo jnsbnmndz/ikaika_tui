@@ -14,10 +14,13 @@ launch proposing the version it already is.
 """
 
 import asyncio
+import os
+import subprocess
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from textual.app import App
 from textual.widgets import Static
@@ -38,12 +41,11 @@ from company_tui.domain.updates import (
     due,
     parse_version,
 )
+from company_tui.infrastructure import handover as handover_module
 from company_tui.infrastructure.handover import (
-    RELAUNCH,
+    SCRIPT,
     SILENT,
-    WAITER,
     WindowsHandover,
-    quote,
 )
 from company_tui.infrastructure.update_state import FileUpdateState
 from company_tui.presentation.chrome import AppHeader
@@ -426,77 +428,142 @@ class HandingOver(unittest.TestCase):
         self.assertEqual([Path("C:/cache/dti-setup.exe")], handover.armed)
 
 
-class TheWaiterCommand(unittest.TestCase):
-    """The one line that decides whether an upgrade corrupts the install.
+class TheWaiterScript(unittest.TestCase):
+    """The one script that decides whether an upgrade corrupts the install.
 
     It has to wait for THIS process and then start the installer, in that order. The
     installer runs `RMDir /r` over the directory holding the running executable, so a
-    command that starts it without waiting is the bug the whole file exists to avoid.
+    script that starts it without waiting is the bug the whole file exists to avoid.
+
+    The rest of these are about the thing that replaced a `-Command` string: nothing is
+    interpolated into the script, so every path travels as an argument and quoting stops
+    being a correctness question.
     """
 
-    def _command(self, relaunch: str = "") -> str:
-        return WAITER.format(
-            pid=4321,
-            timeout=120,
-            silent=SILENT,
-            installer="C:/x/setup.exe",
-            relaunch=relaunch,
-        )
+    def _handover(self, folder: str) -> WindowsHandover:
+        # Never the real %TEMP%: a test that wrote there would leave a .ps1 behind on
+        # every run. See docs/pitfalls.md 6.3 for why a path argument here gets a test.
+        return WindowsHandover(timeout=120, folder=Path(folder))
 
     def test_it_waits_before_it_starts(self):
-        command = self._command()
         self.assertLess(
-            command.index("Wait-Process"),
-            command.index("Start-Process"),
+            SCRIPT.index("Wait-Process"),
+            SCRIPT.index("Start-Process"),
             "starting the installer before this process exits is the corrupting order",
         )
-        self.assertIn("-Id 4321", command)
-        self.assertIn("-Timeout 120", command)
 
     def test_it_installs_silently_and_waits_for_the_installer(self):
         # The whole point of an in-app update: no wizard, and -Wait so what follows
         # happens after the install rather than alongside it.
-        command = self._command()
-        self.assertIn(f"-ArgumentList '{SILENT}'", command)
-        self.assertIn("-Wait", command)
+        self.assertIn(f"-ArgumentList '{SILENT}'", SCRIPT)
+        self.assertIn("-Wait -PassThru", SCRIPT)
 
-    def test_a_silent_failure_reruns_the_installer_visibly(self):
+    def test_a_failure_reruns_the_installer_visibly(self):
         # A SILENT FAILURE IS WORSE THAN A WIZARD: the user sees the app close and
-        # nothing come back. A non-zero exit runs it again without /S so its own error
-        # dialog explains itself.
-        command = self._command()
-        self.assertIn("$done.ExitCode -ne 0", command)
-        visible = command.rindex("Start-Process -FilePath 'C:/x/setup.exe' }")
-        self.assertGreater(visible, command.index(SILENT), "the retry must drop /S")
+        # nothing come back. The retry runs it again without /S so its own error dialog
+        # explains itself.
+        visible = SCRIPT.rindex("Start-Process -FilePath $Installer -ErrorAction")
+        self.assertGreater(visible, SCRIPT.index(SILENT), "the retry must drop /S")
 
-    def test_a_frozen_build_is_restarted_afterwards(self):
-        command = self._command(RELAUNCH.format(exe="C:/Programs/dti/dti.exe"))
-        self.assertIn("C:/Programs/dti/dti.exe", command)
-        self.assertGreater(
-            command.index("dti.exe"),
-            command.index("setup.exe"),
-            "the new build starts after the installer, not before",
-        )
+    def test_a_start_that_threw_is_told_from_a_non_zero_exit(self):
+        # The old one-liner could not tell them apart. $ErrorActionPreference was
+        # SilentlyContinue, so a Start-Process that threw left $done null, and
+        # `$null -ne 0` took the same branch as an installer that ran and refused -
+        # two different failures, one behaviour, and no record of which happened.
+        self.assertIn("the installer could not be started", SCRIPT)
+        self.assertIn("the installer exited with", SCRIPT)
 
-    def test_running_from_source_restarts_nothing(self):
-        # sys.executable is the interpreter there, and relaunching it would open a bare
-        # Python prompt over somebody's terminal.
-        self.assertNotIn("elseif", self._command())
+    def test_the_log_survives_a_failure_and_the_script_never_does(self):
+        # By the time this runs the app is gone, so the log is the only account there
+        # is - and it is worth nothing if it is deleted on the path that needs it.
+        self.assertIn("if ($installed) { Remove-Item -LiteralPath $Log", SCRIPT)
+        self.assertIn("Remove-Item -LiteralPath $PSCommandPath", SCRIPT)
 
-    def test_a_quote_in_the_path_cannot_end_the_string(self):
-        # Doubling is how a literal quote survives a PowerShell single-quoted string.
-        # Unescaped, a path holding one ends the argument and the rest becomes code.
-        self.assertEqual("it''s", quote("it's"))
+    def test_nothing_is_interpolated_into_it(self):
+        # The point of the whole change. A path pasted into the script is program text,
+        # and a quote in one ends the string and runs the rest as PowerShell.
+        with TemporaryDirectory() as folder:
+            written = self._handover(folder)._write_script()
+            self.assertEqual(SCRIPT, written.read_text(encoding="utf-8-sig"))
 
-    def test_a_path_with_shell_metacharacters_is_left_alone(self):
-        # Single quotes mean no expansion, so `$` and a backtick are literal - and this
-        # repository lives under a folder named "GitHub(jnsbnmndz)".
-        awkward = "C:/GitHub(jnsbnmndz)/$env/a`b/setup.exe"
-        self.assertEqual(awkward, quote(awkward))
+    def test_the_values_travel_as_arguments(self):
+        with TemporaryDirectory() as folder:
+            handover = self._handover(folder)
+            argv = handover._argv(Path(folder) / "w.ps1", Path(folder) / "setup.exe")
+            self.assertEqual(str(os.getpid()), argv[argv.index("-WaitPid") + 1])
+            self.assertEqual("120", argv[argv.index("-Timeout") + 1])
+
+    def test_an_awkward_path_reaches_the_script_untouched(self):
+        # The inverse of the `quote()` this replaced. Nothing is escaped, because the
+        # path is never code - and this repository lives under a folder literally named
+        # "GitHub(jnsbnmndz)".
+        awkward = Path("C:/it's/GitHub(jnsbnmndz)/$env/setup.exe")
+        with TemporaryDirectory() as folder:
+            argv = self._handover(folder)._argv(Path(folder) / "w.ps1", awkward)
+        passed = argv[argv.index("-Installer") + 1]
+        self.assertIn("it's", passed)
+        self.assertNotIn("it''s", passed, "doubling a quote is what a script argument is not")
+        self.assertIn("$env", passed)
+
+    def test_the_script_is_run_with_the_policy_bypassed(self):
+        # -File OBEYS the execution policy where -Command ignored it. Without this the
+        # script is refused on a default machine, and what the user sees is an app that
+        # closed and never came back.
+        with TemporaryDirectory() as folder:
+            script = Path(folder) / "w.ps1"
+            argv = self._handover(folder)._argv(script, Path(folder) / "setup.exe")
+        self.assertEqual("Bypass", argv[argv.index("-ExecutionPolicy") + 1])
+        self.assertEqual(str(script), argv[argv.index("-File") + 1])
 
     def test_a_missing_installer_is_refused_rather_than_armed(self):
-        problem = WindowsHandover().hand_over(Path("C:/nowhere/setup.exe"))
-        self.assertTrue(problem, "arming a waiter for a file that is gone quits for nothing")
+        with TemporaryDirectory() as folder:
+            handover = self._handover(folder)
+            self.assertTrue(
+                handover.hand_over(Path(folder) / "gone.exe"),
+                "arming a waiter for a file that is gone quits for nothing",
+            )
+            self.assertEqual([], list(Path(folder).iterdir()), "a refusal writes nothing")
+
+    @unittest.skipUnless(os.name == "nt", "the handover refuses before this on other systems")
+    def test_the_waiter_gets_a_console_of_its_own(self):
+        # THE BUG THIS FILE WAS REWRITTEN FOR. DETACHED_PROCESS gives powershell.exe no
+        # console, and a console application with no console comes up, finds nothing to
+        # attach to, and exits 0 without running a line - while the parent's Popen
+        # reports success, so the app said the handover was armed and quit. There was
+        # never a waiter, so there was never an installer.
+        #
+        # A test cannot start a real waiter, because a real waiter installs something.
+        # What it can do is refuse by name the one flag known to produce a process that
+        # does nothing at all.
+        with TemporaryDirectory() as folder:
+            installer = Path(folder) / "setup.exe"
+            installer.write_bytes(b"")
+            with patch.object(handover_module.subprocess, "Popen") as popen:
+                self.assertEqual("", self._handover(folder).hand_over(installer))
+        flags = popen.call_args.kwargs["creationflags"]
+        self.assertTrue(flags & subprocess.CREATE_NO_WINDOW, "it needs a console of its own")
+        self.assertFalse(
+            flags & subprocess.DETACHED_PROCESS,
+            "detached is a waiter that exits 0 having done nothing",
+        )
+        self.assertTrue(
+            flags & subprocess.CREATE_NEW_PROCESS_GROUP,
+            "a Ctrl+C on the way out must not reach what is meant to outlive us",
+        )
+
+    @unittest.skipUnless(os.name == "nt", "the handover refuses before this on other systems")
+    def test_a_waiter_that_could_not_start_leaves_nothing_behind(self):
+        # Nothing is waiting for this process, so the app carries on - and the script
+        # would sit in %TEMP% for good, since the only thing that deletes it is the run
+        # that never happened.
+        with TemporaryDirectory() as folder:
+            installer = Path(folder) / "setup.exe"
+            installer.write_bytes(b"")
+            handover = self._handover(folder)
+            with patch.object(handover_module.subprocess, "Popen", side_effect=OSError("nope")):
+                problem = handover.hand_over(installer)
+            self.assertIn("could not be started", problem)
+            self.assertEqual([installer], list(Path(folder).iterdir()))
 
 
 class AssetNames(unittest.TestCase):
