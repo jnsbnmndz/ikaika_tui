@@ -590,6 +590,31 @@ class ConfirmScreen(DialogScreen[bool]):
             label.append(self._key, style="not bold")
         return label
 
+    def on_key(self, event: events.Key) -> None:
+        """The key printed on the affirmative is the affirmative.
+
+        IT WAS DRAWN AND NEVER BOUND
+
+        `_answer` puts the chord under the label so somebody who pressed `Ctrl+U`
+        to get here can see that pressing it again is the same answer. It said so
+        and it was not true: `BINDINGS` carries `escape` and nothing else, and a
+        `ModalScreen` stops the app's own copy of the chord reaching past it - so
+        the one key the dialog names was the one key that did nothing at all.
+        What that looks like is an update that will not install: the button says
+        Ctrl+U, Ctrl+U does nothing, and Enter is on CANCEL because neither answer
+        may look pre-selected.
+
+        Bound here rather than in `BINDINGS` because the key is per-question:
+        `ConfirmScreen` is one class and the chord belongs to whichever dialog was
+        reached by one. Everything else this app draws as a key is a `KeyHint`,
+        which reads its own label back into the key it presses and so cannot drift
+        from what it does; this label is the one that could, and did.
+        """
+        if self._key and event.key == self._key.lower():
+            event.stop()
+            event.prevent_default()
+            self.dismiss(True)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
 
