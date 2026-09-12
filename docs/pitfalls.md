@@ -226,6 +226,106 @@ directory shaped like the one that got emptied — `VERSION` and `.gitignore` in
 because "no test does that any more" is a promise about the tests, and this needs to be a
 property of the code.
 
+### 6.4 A detached PowerShell is a waiter that does nothing at all
+
+The handover spawns `powershell.exe` and quits. It was spawned with `DETACHED_PROCESS`,
+for a reason that sounds right: without a flag the waiter belongs to this console, and the
+console goes away with the process it is waiting for.
+
+**`powershell.exe` started with `DETACHED_PROCESS` exits 0 without running a line.**
+Detached means no console at all, and PowerShell is a console application - it comes up,
+finds nothing to attach to, and leaves. Immediately, and with a success code.
+
+Every check around it passed. `Popen` succeeded, so `hand_over` returned `""`, so the app
+reported an armed handover and shut itself down - which is the one thing it must do when
+something is waiting for it. Nothing was waiting for it. The user pressed `Ctrl+U`, said
+yes twice, watched the app close, and nothing ever came back. That is the whole of "the
+in-app update does not work": not a failing installer, but an installer that was never
+started, by a process that was never really there.
+
+It is host-independent and reproduces in four lines, which is worth knowing because the
+feature otherwise cannot be tested without installing something:
+
+```python
+subprocess.Popen(["powershell.exe", "-Command", "'x' | Out-File C:/t/out.txt"],
+                 creationflags=subprocess.DETACHED_PROCESS)   # no file, exit 0
+subprocess.Popen(["powershell.exe", "-Command", "'x' | Out-File C:/t/out.txt"],
+                 creationflags=subprocess.CREATE_NO_WINDOW)   # works
+```
+
+It applies to `-Command` and `-File` alike, so it survived the rewrite that replaced the
+one with the other and had to be found separately.
+
+**Rule.** `CREATE_NO_WINDOW`, never `DETACHED_PROCESS`. The child gets a console of its
+**own** that is never shown, which is what "outlives this console" actually required;
+`CREATE_NEW_PROCESS_GROUP` stays, so a Ctrl+C on the way out does not reach it.
+`tests/test_auto_update.py::TheWaiterScript::test_the_waiter_gets_a_console_of_its_own`
+asserts the flags by name - a test cannot run a real waiter, because a real waiter
+installs something, but it can refuse the flag that produces a process that does nothing.
+
+### 6.5 A handover that leaves no trace cannot be diagnosed
+
+The waiter was one `-Command` string with the pid, the installer path and the exe pasted
+into it. Three problems in one line, and the third is the one that cost the most.
+
+The paths were **code**: a quote in a path ends a PowerShell single-quoted string and the
+rest of it runs, so the module carried a `quote()` and a test about apostrophes for a
+value that was never meant to be program text. There were **two escaping layers**, because
+Python joins an argv back into one Windows command line and `powershell.exe` then
+re-parses it by rules that are not Python's. And it **kept no record**: the decision to
+re-run the installer visibly was `$done.ExitCode -ne 0`, which is true both when the
+installer refused and when it never started - `$ErrorActionPreference` was
+`SilentlyContinue`, so a `Start-Process` that threw left `$done` null and `$null -ne 0`
+took the same branch. Two different failures, one behaviour, and nothing written down.
+
+By the time any of it matters the app is gone, so there is nobody left to report to.
+
+**Rule.** The waiter is a `.ps1` **generated at runtime** into `%TEMP%`, with a `param()`
+block; every value reaches it as an argument, so `SCRIPT` is a constant with no
+placeholders and quoting stops being a correctness question. It logs what it did beside
+itself, deletes the log only when the install actually succeeded, and removes itself
+either way. Generated rather than shipped: `scripts/lib/path-entry.ps1` is `File`d in by
+the NSI, and doing that here would put the updater in the build and the release, where a
+fix could only reach a machine through the very installer that is failing.
+
+**And `-ExecutionPolicy Bypass` is not optional.** `-Command` ignores the execution policy;
+`-File` obeys it. A script file without it is refused on a default machine, which lands
+back on 6.4's symptom exactly - an app that closed and never came back.
+
+### 6.6 An update that installs a different app succeeds forever
+
+`[updates] channel = any` offered whichever release was newest. Debug builds are cut far
+more often than official ones and carry higher build numbers, so on a release install that
+was almost always a **debug** build — and a debug build is a separate install by design:
+own directory, own uninstall entry, own command (`INSTALL_SLUG`, and 6.x above on why that
+split exists).
+
+So the update worked. The installer ran, exited 0, reported success, put `dti-debug`
+on the machine — and `dti` was the version it had always been. The badge came back at the
+next launch offering the same build, and the one after that, and every one after that.
+
+Every part of it looked right, which is why it took a morning to see. The feed answered,
+the comparison said newer, the download finished, the handover armed, the installer
+succeeded and the app relaunched. The only wrong thing was *which install it updated*, and
+nothing in the loop was in a position to notice: the running version is read from the
+build, and the build never changed.
+
+**Rule.** The line comes first and the channel cannot overrule it. `wanted()` refuses any
+release that could not replace the running build (`Release.replaces`), and the build reads
+its own line off the command it runs under — `dti.exe` is the release line, `dti-debug.exe`
+the debug line (`build_kind`, from `sys.executable`, frozen only). An installed build has
+exactly one line that can replace it, so `official`, `prerelease` and `any` all mean the
+same thing to it; the setting still decides in a source checkout, where nothing was
+installed and nothing can be replaced. `tests/test_updates.py::EachLineUpdatesItself`
+asserts that a release build is never offered the newer debug build on any of the three
+channels, and that nothing on this line is offered **nothing** rather than falling back to
+the other one.
+
+The form says so rather than leaving it implied: the Channel row reads
+*"prereleases only (debug builds) - this is the debug build"*, because a channel that is
+set to one thing and read as another is the kind of quiet disagreement this whole file is
+about.
+
 ---
 
 ## 7. An argument list is not a list of arguments

@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from company_tui.application.app import Application
@@ -16,6 +17,7 @@ from company_tui.capabilities.updates import UpdatesCapability
 from company_tui.domain import naming
 from company_tui.domain.destinations import DestinationLocks
 from company_tui.domain.scaffolding import ProjectFinalizer
+from company_tui.domain.updates import BUILD_UNKNOWN, build_kind
 from company_tui.infrastructure.config import FileConfig
 from company_tui.infrastructure.filesystem import LocalFileSystem
 from company_tui.infrastructure.handover import WindowsHandover
@@ -33,6 +35,25 @@ from company_tui.templates.python.pack import PythonTemplatePack
 from company_tui.templates.react.pack import ReactTemplatePack
 from company_tui.templates.react_native.pack import ReactNativeTemplatePack
 from company_tui.templates.services import PackServices
+
+
+def running_build() -> str:
+    """Which line this process is: the release build, the debug build, or neither.
+
+    The ONE place `sys.executable` is read for this, and read rather than
+    configured because it is a fact about what is running, not a preference. A
+    debug build is installed under its own command name (`dti-debug.exe`) so both
+    can sit on PATH without shadowing each other, which makes that name the thing
+    on the machine that says which line this is.
+
+    Frozen only. Under `python -m company_tui` the executable is the interpreter,
+    which is a build of nothing - and there is no install to replace either, so
+    the honest answer is that there is no line. `domain.updates.wanted` reads that
+    as "the channel decides", which is what the source checkout had all along.
+    """
+    if not getattr(sys, "frozen", False):
+        return BUILD_UNKNOWN
+    return build_kind(sys.executable)
 
 
 def _build_capability_registry(console: Ui) -> CapabilityRegistry:
@@ -85,6 +106,9 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
                 # it. Passed in so the comparison has a single source and can be
                 # tested against a version this process is not.
                 version=APP_VERSION,
+                # Which line this build is on, so an installer that could
+                # not replace it is never offered. See `build_kind`.
+                build=running_build(),
                 # The same two the launch check uses. One downloader, so there is
                 # one answer to "what is a finished download"; one store, so a
                 # manual download is an install the chrome can offer.
@@ -117,6 +141,7 @@ def _build_update_watch() -> UpdateWatch:
         # holds it.
         version=APP_VERSION,
         cache=naming.store_dir() / CACHE_DIRECTORY,
+        build=running_build(),
     )
 
 

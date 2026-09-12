@@ -44,6 +44,8 @@ from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort
 from company_tui.domain.options import Option, OptionKind, OptionValues
 from company_tui.domain.updates import (
+    BUILD_UNKNOWN,
+    CHANNEL_FOR_BUILD,
     CHANNEL_LABELS,
     AssetDownloadPort,
     Release,
@@ -64,8 +66,34 @@ DOWNLOAD_KEY = "download"
 FOLDER_KEY = "folder"
 INSTALL_KEY = "install"
 ANYWAY_KEY = "anyway"
+LOCAL_KEY = "local"
+INSTALLER_KEY = "installer"
 
 NOT_CONFIGURED = "not configured - set it in Advanced"
+
+NO_FILE_CHOSEN = "No installer chosen - browse for one, or untick the box to use the feed."
+NO_SUCH_FILE = "There is no file at {path}."
+NOT_AN_INSTALLER = "{name} is not a setup program - it has to be a .exe."
+"""Refused rather than attempted.
+
+The handover runs what it is given with `/S`, which is NSIS's silent switch and
+nothing else's. An `.msi` handed the same argument does not install quietly, it
+fails obscurely from inside msiexec - so the wrong kind of file is better said
+here, where the sentence can name it, than three processes away.
+"""
+
+UNKNOWN_BUILD_WARNING = (
+    "Chosen by hand, so nothing here knows what version it holds or which "
+    "install it replaces. A debug build installs beside the release one."
+)
+"""Said before the app is asked to run it.
+
+A release build and a debug build are two separate installs by design - own
+directory, own uninstall entry, own command - so an installer picked off disk may
+not replace the copy running this. That is exactly what makes this useful for
+testing and exactly what makes it confusing when it is not expected, which is why
+it is a line in the terminal rather than a footnote in the help.
+"""
 
 INSTALL_HINT = "Ctrl+U installs it and closes the toolbox."
 """Said after a download, because the download is not the end of it any more.
@@ -85,6 +113,7 @@ class UpdatesCapability(Capability):
         version: str,
         downloads: AssetDownloadPort,
         state: UpdateStatePort | None = None,
+        build: str = BUILD_UNKNOWN,
     ) -> None:
         self._console = console
         self._config = config
@@ -99,6 +128,9 @@ class UpdatesCapability(Capability):
         # whole comparison rests on, and a capability that reads it from a module
         # global cannot be tested against a version it is not running.
         self._version = version
+        self._build = build
+        """Which line this build is on, so a release that could not replace it is
+        never offered. Empty from a source checkout - see `domain.updates.build_kind`."""
 
     @property
     def info(self) -> CapabilityInfo:
@@ -130,6 +162,20 @@ class UpdatesCapability(Capability):
                 continue
             return 0 if ok else FAILED
 
+    def _channel_label(self, source: UpdateSource) -> str:
+        """What the form says the channel is, which is not always what it is set to.
+
+        An installed build has exactly one line that can replace it, so the
+        setting has nothing left to choose and saying "official releases only" to
+        somebody running the debug build would be naming a channel that is not
+        the one being read. The line is named instead, and named as a fact about
+        what is running rather than as a setting they should go and change.
+        """
+        if self._build in CHANNEL_FOR_BUILD:
+            channel = CHANNEL_FOR_BUILD[self._build]
+            return f"{CHANNEL_LABELS[channel]} - this is the {self._build} build"
+        return CHANNEL_LABELS.get(source.channel, source.channel)
+
     def _options(self, source: UpdateSource) -> tuple[Option, ...]:
         return (
             Option(
@@ -148,7 +194,7 @@ class UpdatesCapability(Capability):
                 key="channel",
                 label="Channel",
                 kind=OptionKind.INFO,
-                default=CHANNEL_LABELS.get(source.channel, source.channel),
+                default=self._channel_label(source),
             ),
             Option(
                 key=ANYWAY_KEY,
@@ -190,9 +236,36 @@ class UpdatesCapability(Capability):
                 default=str(Path.home() / "Downloads"),
                 help="Only used when downloading.",
             ),
+            Option(
+                key=LOCAL_KEY,
+                label="Run an installer I already have",
+                kind=OptionKind.BOOLEAN,
+                default=False,
+                help=(
+                    "Runs a setup program you point at instead of asking the "
+                    "feed. Nothing above applies - no check and no download - so "
+                    "a build that has not been published can be installed the "
+                    "same way a released one is. It is how an update is tested "
+                    "before anyone else gets it."
+                ),
+            ),
+            Option(
+                key=INSTALLER_KEY,
+                label="Installer to run",
+                kind=OptionKind.FILE,
+                default="",
+                help="Only used when the box above is ticked.",
+            ),
         )
 
     async def _check(self, values: OptionValues) -> tuple[str, bool]:
+        # Before the source is looked at, and deliberately: running an installer
+        # off disk asks the feed nothing, so it must not need one configured. A
+        # machine with no repository set is exactly the one somebody is handed a
+        # build to test on.
+        if values.get(LOCAL_KEY):
+            return await self._install_file(values)
+
         source = self._config.update_source()
         problem = source.problem
         if problem:
@@ -213,16 +286,23 @@ class UpdatesCapability(Capability):
             return (f"{source.repository} has published no releases yet.", True)
 
         self._console.write(f"{len(releases)} release(s) published.")
-        latest = choose(releases, source)
+        latest = choose(releases, source, self._build)
         if latest is None:
             # Every release was a prerelease and prereleases are not wanted. Not
             # a failure: the honest answer is that nothing is on offer, and
             # saying which switch would change that is more use than an error.
+            # Named by the line actually being read, not by the setting. For a
+            # debug build with no prerelease published, "nothing on the official
+            # releases only channel" would be a true sentence about a channel
+            # nothing consulted.
+            # Advanced is worth naming only where the setting is still what
+            # decides. For an installed build the line does, and sending somebody
+            # to change a setting that cannot help is worse than saying nothing.
+            where = "" if self._build else " Advanced is where that is changed."
             return (
                 (
                     f"{source.repository} has published nothing on the "
-                    f"{CHANNEL_LABELS.get(source.channel, source.channel)} "
-                    "channel. Advanced is where that is changed."
+                    f"{self._channel_label(source)} channel.{where}"
                 ),
                 True,
             )
@@ -294,6 +374,41 @@ class UpdatesCapability(Capability):
 
         self._console.write(INSTALL_HINT)
         return (f"Downloaded {target.name} ({megabytes:.1f} MB) to {folder}", True)
+
+    async def _install_file(self, values: OptionValues) -> tuple[str, bool]:
+        """Hand over an installer the user picked, with no feed involved at all.
+
+        The point of it is testing: a build that has not been published cannot be
+        reached by a channel, a version comparison or a download, and every one of
+        those is in the way of finding out whether it installs. This is the same
+        last step with all of that taken off the front.
+
+        It is NOT recorded through `_remember`. What that store holds is the
+        answer the feed gave and the file fetched for it, which the badge and the
+        launch check both read - and a file chosen by hand is neither. Written
+        down, it would be offered at the next launch as though it were the
+        published update.
+        """
+        raw = str(values.get(INSTALLER_KEY, "")).strip()
+        if not raw:
+            return (NO_FILE_CHOSEN, False)
+        target = Path(raw).expanduser()
+        if not target.is_file():
+            return (NO_SUCH_FILE.format(path=target), False)
+        if target.suffix.lower() != ".exe":
+            return (NOT_AN_INSTALLER.format(name=target.name), False)
+
+        self._console.write(f"Installer: {target}")
+        self._console.write(UNKNOWN_BUILD_WARNING)
+        # Named by its filename, because that is all that is known about it. The
+        # confirmation says what it is replacing, and a made-up version number
+        # there would be worse than the name the user just picked.
+        problem = await self._console.install_update(str(target), target.name)
+        if problem:
+            return (f"{target.name} was not installed: {problem}", False)
+        # Reached only if the app declined to leave after all; the shutdown does
+        # not return.
+        return (f"Installing {target.name}.", True)
 
     async def _install(
         self, release: Release, target: Path, megabytes: float

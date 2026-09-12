@@ -48,6 +48,7 @@ from pathlib import Path
 
 from company_tui.domain.config import ConfigPort
 from company_tui.domain.updates import (
+    BUILD_UNKNOWN,
     NOTHING_TO_REPORT,
     AssetDownloadPort,
     HandoverPort,
@@ -92,8 +93,10 @@ class UpdateWatch:
         handover: HandoverPort,
         version: str,
         cache: Path,
+        build: str = BUILD_UNKNOWN,
     ) -> None:
         self._config = config
+        self._build = build
         self._feed = feed
         self._downloads = downloads
         self._state = state
@@ -176,7 +179,7 @@ class UpdateWatch:
             return UpdateReport(problem=str(error))
 
         now = datetime.now(UTC).isoformat()
-        latest = choose(releases, source)
+        latest = choose(releases, source, self._build)
         if latest is None:
             return self._nothing_newer(now)
 

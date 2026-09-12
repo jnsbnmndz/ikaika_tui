@@ -56,6 +56,7 @@ from company_tui.presentation.screens import (
     ConfirmScreen,
     ContinueScreen,
     InputScreen,
+    InstallingScreen,
     RunsScreen,
     SplashScreen,
 )
@@ -146,6 +147,20 @@ that appears and vanishes at every choice the user makes — motion that says
 nothing and reads as flicker. Waited out rather than measured beforehand,
 because whether reading a stack's scripts is instant or is a network round trip
 depends on what is in the store and on what settings say to check."""
+
+INSTALL_PAUSE = 1.2
+"""How long the installing screen is held before the app actually goes.
+
+`docs/decisions/0004` says arming comes first and quitting follows immediately,
+because what has been armed is waiting for exactly that. This does not break
+that rule so much as pay a fixed, named price against it: the waiter allows 120
+seconds and this spends one of them.
+
+A floor rather than a delay. Shutting down writes the tabs and takes every run
+down, which for a run mid-`npm install` is a subprocess tree and covers this on
+its own - but with nothing running it is instant, and a message that appears and
+disappears inside one frame is worse than no message at all: the user sees a
+flicker and cannot say what it was."""
 
 WINDOW_POLL_INTERVAL = 0.2
 """How often the window is measured.
@@ -527,11 +542,28 @@ class TuiConsole(App):
         # From here the app is leaving, and the caller is one of the runs that leaving
         # cancels. Started as a worker so that cancellation cannot take the shutdown
         # with it.
-        self._leave_for_update()
+        self._leave_for_update(version)
         return ""
 
     @work
-    async def _leave_for_update(self) -> None:
+    async def _leave_for_update(self, version: str) -> None:
+        await self._leaving_for_update(version)
+
+    async def _leaving_for_update(self, version: str) -> None:
+        """Say what is happening, hold it long enough to be read, then go.
+
+        Both ways of installing end here - the card's own dialog and `Ctrl+U` on
+        the badge - so there is one answer to what leaving for an update looks
+        like rather than two that can drift.
+
+        The screen goes up BEFORE the shutdown rather than after it. Shutting
+        down is the part that takes the time: it writes the tabs down and then
+        takes every run with it, and a run mid-`npm install` is a subprocess tree
+        to kill. Announced afterwards, the message would appear once there was
+        nothing left to wait for, which is the wrong end of the pause entirely.
+        """
+        await self.push_screen(InstallingScreen(version))
+        await asyncio.sleep(INSTALL_PAUSE)
         await self._shut_down()
         self.exit()
 
@@ -548,9 +580,17 @@ class TuiConsole(App):
         nothing left to arm it; skipped, the installer deletes the directory it is
         running from. See `infrastructure/handover.py`.
 
-        The quit confirmation is asked underneath: an install with three runs
-        going is three directories abandoned, and that is the same price quitting
-        charges, so it is named by the same dialog rather than by a second copy.
+        ONE QUESTION, NOT TWO
+        =====================
+        This asked `_confirm_quit` underneath the install one, so an install with
+        runs going put up a second dialog asking whether to quit. Two dialogs for
+        one decision is a menu to get through rather than a question to answer,
+        and the second one asks about quitting when what was pressed was install
+        - so the sane answer to "quit with runs going" abandoned the install, and
+        abandoned it SILENTLY, with the app sitting back on the menu looking like
+        the key had done nothing. `Ui.install_update` already folds the cost of
+        the runs into its one question; this is the same shape, arrived at for
+        the same reason, and the two now agree.
         """
         if self._watch is None:
             return
@@ -565,30 +605,33 @@ class TuiConsole(App):
         if not self._update.waiting:
             self.write(NOTHING_TO_INSTALL)
             return
+        detail = UPDATE_DETAIL.format(
+            version=self._update.available.text or self._update.tag,
+            installed=APP_VERSION,
+        )
+        live = self._sessions.live()
+        if live:
+            detail += UPDATE_RUNS.format(count=len(live), s="" if len(live) == 1 else "s")
         answer = await self.push_screen_wait(
             ConfirmScreen(
                 UPDATE_CONFIRM,
                 self.trail_label(),
-                detail=UPDATE_DETAIL.format(
-                    version=self._update.available.text or self._update.tag,
-                    installed=APP_VERSION,
-                ),
+                detail=detail,
                 confirm=UPDATE_ANSWER,
                 key=AppHeader.UPDATE_HINT,
             )
         )
         if not answer:
             return
-        if not await self._confirm_quit():
-            return
         problem = self._watch.hand_over(self._update)
         if problem:
             # Nothing was armed, so nothing is waiting for this process and the app
-            # carries on. Said where a workflow without a panel says things.
+            # carries on. Said where a workflow without a panel says things. Nothing
+            # is announced either - the installing screen goes up only once there is
+            # genuinely something waiting for this process to end.
             self.write(UPDATE_FAILED.format(problem=problem))
             return
-        await self._shut_down()
-        self.exit()
+        await self._leaving_for_update(self._update.available.text or self._update.tag)
 
     def _stop_watching_window(self) -> None:
         if self._window_watch is not None:
