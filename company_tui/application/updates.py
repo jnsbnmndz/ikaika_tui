@@ -142,12 +142,35 @@ class UpdateWatch:
     def _remembered(self, state: UpdateState, installed) -> UpdateReport | None:
         """The answer from a previous launch, when it is still the answer.
 
-        Three things have to hold: something was fetched, the file is still there, and it
-        is still newer than what is running. The third is what stops a badge surviving
-        the install it was offering - the app comes back up as the version that installer
-        held, and without this check the state file would keep offering it to itself.
+        Four things have to hold: something was fetched, it is on this build's line,
+        the file is still there, and it is still newer than what is running. The last
+        is what stops a badge surviving the install it was offering - the app comes
+        back up as the version that installer held, and without this check the state
+        file would keep offering it to itself.
+
+        THE LINE IS CHECKED HERE TOO, BECAUSE THIS FILE IS SHARED
+
+        `updates.json` is not keyed by build. There is one copy of it under the
+        user's home and BOTH installs read it - which is deliberate for the
+        timestamp, and a hole for the installer path: the debug build fetches a
+        debug installer and records it, the release build starts, finds a newer
+        version recorded and offers it. Installing that puts a second app on the
+        machine and leaves the release build exactly where it was, which is
+        `docs/pitfalls.md` 6.6 arriving through the back door, past the guard in
+        `choose` that was supposed to have closed it.
+
+        The line comes off the recorded tag, which is the half of `Release.official`
+        that survives being written down.
+
+        This is the belt. The braces is that the file is keyed by line as well, so
+        a build does not normally see the other one's record at all - which also
+        stops the release build's own check overwriting what the debug build had
+        fetched. This check still earns its place: it covers a file written before
+        the split, and refusing is free.
         """
         if not state.fetched:
+            return None
+        if not Release(tag=state.tag).replaces(self._build):
             return None
         installer = Path(state.installer)
         if not installer.is_file():

@@ -25,7 +25,7 @@ from company_tui.infrastructure.processes import LocalProcessRunner
 from company_tui.infrastructure.recent_file import FileRecentPaths
 from company_tui.infrastructure.release_feed import HttpAssetDownload, HttpReleaseFeed
 from company_tui.infrastructure.session_file import FileSessionMemory
-from company_tui.infrastructure.update_state import FileUpdateState
+from company_tui.infrastructure.update_state import FileUpdateState, state_path
 from company_tui.presentation.branding import APP_VERSION
 from company_tui.presentation.plain_console import PlainConsole
 from company_tui.presentation.tui_console import TuiConsole
@@ -113,7 +113,10 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
                 # one answer to "what is a finished download"; one store, so a
                 # manual download is an install the chrome can offer.
                 downloads=HttpAssetDownload(),
-                state=FileUpdateState(),
+                # This line's own record. Both installs read the store, and
+                # one file between them is two builds fighting over it - see
+                # `infrastructure/update_state.py`.
+                state=FileUpdateState(state_path(running_build())),
             ),
             AdvancedCapability(console=console, config=config),
         )
@@ -135,7 +138,8 @@ def _build_update_watch() -> UpdateWatch:
         config=FileConfig(),
         feed=HttpReleaseFeed(),
         downloads=HttpAssetDownload(),
-        state=FileUpdateState(),
+        # This line's own record, the same file the manual card writes.
+        state=FileUpdateState(state_path(running_build())),
         handover=WindowsHandover(),
         # The same version the manual check compares, from the one file that
         # holds it.

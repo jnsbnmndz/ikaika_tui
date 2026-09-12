@@ -8,9 +8,23 @@ launch-time update check is the last thing in this app that should be able to st
 starting.
 
 NOT keyed by workspace, unlike the tabs. The tabs of one project are not the tabs of
-another, but there is one copy of this toolbox on the machine and one update for it - and
-keyed by directory, opening the app in a second checkout would re-download the same
-installer under a second key.
+another, but one update is one update - and keyed by directory, opening the app in a
+second checkout would re-download the same installer under a second key.
+
+KEYED BY LINE, THOUGH, BECAUSE "ONE COPY ON THE MACHINE" IS NOT TRUE
+
+That was the original reasoning and it was wrong: a debug build and a release build are
+two separate installs by design, and somebody testing a prerelease has BOTH. Sharing one
+file, they fought over it. The debug build recorded the installer it had fetched; the
+release build started, found a newer version recorded and offered it - which installs a
+second app and leaves the release build exactly where it was (`docs/pitfalls.md` 6.6,
+reached past the guard in `choose` that was meant to close it). And going the other way,
+the release build's own check overwrote the record, so the debug build re-downloaded
+thirty megabytes it already had.
+
+So the debug build gets `updates-debug.json` and everything else keeps `updates.json`.
+The release build's existing file is therefore still its own, which is why the split
+needs no migration.
 """
 
 from __future__ import annotations
@@ -20,9 +34,25 @@ from contextlib import suppress
 from pathlib import Path
 
 from company_tui.domain import naming
-from company_tui.domain.updates import UpdateState, UpdateStatePort
+from company_tui.domain.updates import (
+    BUILD_DEBUG,
+    BUILD_UNKNOWN,
+    UpdateState,
+    UpdateStatePort,
+)
 
 STATE_PATH = naming.store_dir() / "updates.json"
+DEBUG_STATE_PATH = naming.store_dir() / "updates-debug.json"
+
+
+def state_path(build: str = BUILD_UNKNOWN) -> Path:
+    """Where this build's record lives. See the header.
+
+    The source checkout shares the release build's file, and harmlessly: it can
+    install nothing, so the worst it does is record an answer the release build
+    would have got anyway.
+    """
+    return DEBUG_STATE_PATH if build == BUILD_DEBUG else STATE_PATH
 
 VERSION = 1
 """Written into the file, checked before anything is read out of it.

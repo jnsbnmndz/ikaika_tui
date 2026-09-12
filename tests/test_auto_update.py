@@ -28,6 +28,9 @@ from textual.widgets import Static
 from company_tui.application.updates import CACHE_DIRECTORY, UpdateWatch, _safe_name
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
 from company_tui.domain.updates import (
+    BUILD_DEBUG,
+    BUILD_RELEASE,
+    BUILD_UNKNOWN,
     CHECK_INTERVAL_HOURS,
     AssetDownloadPort,
     HandoverPort,
@@ -47,9 +50,13 @@ from company_tui.infrastructure.handover import (
     SILENT,
     WindowsHandover,
 )
-from company_tui.infrastructure.update_state import FileUpdateState
+from company_tui.infrastructure.update_state import FileUpdateState, state_path
 from company_tui.presentation.chrome import AppHeader
-from company_tui.presentation.screens import INSTALLING_DETAIL, InstallingScreen
+from company_tui.presentation.screens import (
+    INSTALLING_DETAIL,
+    ConfirmScreen,
+    InstallingScreen,
+)
 
 NOW = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
 
@@ -329,7 +336,7 @@ class Looking(unittest.TestCase):
 
 
 class RememberingWhatWasFetched(unittest.TestCase):
-    def _watch(self, feed, state, *, version="0.0.1+1"):
+    def _watch(self, feed, state, *, version="0.0.1+1", build=BUILD_UNKNOWN):
         return UpdateWatch(
             config=_Config(UpdateSource(repository="a/b")),
             feed=feed,
@@ -338,7 +345,44 @@ class RememberingWhatWasFetched(unittest.TestCase):
             handover=_Handover(),
             version=version,
             cache=_scratch_cache(self),
+            build=build,
         )
+
+    def _recorded(self, tag):
+        """A state file naming a real installer, as a finished download leaves it."""
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        installer = Path(folder.name) / "dti-setup.exe"
+        installer.write_bytes(b"installer")
+        return _State(
+            UpdateState(checked_at=_stamp(0), tag=tag, installer=str(installer))
+        )
+
+    def test_a_download_from_the_other_line_is_not_offered(self):
+        # updates.json is ONE file and both installs read it. The debug build
+        # fetches a debug installer and records it; without this the release build
+        # starts, sees a newer version recorded and offers it - which installs a
+        # second app and leaves the release build where it was. docs/pitfalls.md
+        # 6.6, arriving past the guard in `choose` that was meant to close it.
+        state = self._recorded("v9.9.9+9")
+        watch = self._watch(_Feed(()), state, build=BUILD_RELEASE)
+        self.assertFalse(asyncio.run(watch.look()).waiting)
+
+    def test_a_download_from_this_line_still_is(self):
+        state = self._recorded("v9.9.9+9-released")
+        watch = self._watch(_Feed(()), state, build=BUILD_RELEASE)
+        self.assertTrue(asyncio.run(watch.look()).waiting)
+
+    def test_each_line_keeps_its_own_record(self):
+        # The refusal above is the belt; this is the braces, and it is what stops
+        # the two builds fighting over one file. Shared, the release build's own
+        # check overwrote the debug build's record and cost it a re-download of
+        # thirty megabytes it already had.
+        self.assertEqual(state_path(BUILD_RELEASE), state_path(BUILD_UNKNOWN))
+        self.assertNotEqual(state_path(BUILD_DEBUG), state_path(BUILD_RELEASE))
+        # The release build keeps the name the file already has, so the split
+        # needs no migration.
+        self.assertEqual("updates.json", state_path(BUILD_RELEASE).name)
 
     def test_an_installer_already_here_needs_no_request_at_all(self):
         with TemporaryDirectory() as folder:
@@ -871,3 +915,63 @@ class TheInstallingScreen(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(
                 first, str(screen.query_one("#installing", Static).render())
             )
+
+
+class TheKeyPrintedOnTheAnswer(unittest.IsolatedAsyncioTestCase):
+    """`ConfirmScreen(key=...)` draws a chord under the affirmative. It must press it.
+
+    It was drawn and never bound. `BINDINGS` carried `escape` and nothing else,
+    and a `ModalScreen` stops the app's own copy of the chord reaching past it -
+    so the one key the dialog named was the one key that did nothing. What that
+    looked like was an update that would not install: the button says Ctrl+U,
+    Ctrl+U does nothing, and Enter is on CANCEL because neither answer may look
+    pre-selected.
+    """
+
+    class _App(App):
+        pass
+
+    async def _ask(self, app, key):
+        answer = {}
+        async def run():
+            answer["said"] = await app.push_screen_wait(
+                ConfirmScreen("Install the update?", confirm="INSTALL AND RESTART", key=key)
+            )
+        app.run_worker(run())
+        return answer
+
+    async def test_the_chord_on_the_button_answers_yes(self):
+        app = self._App()
+        async with app.run_test() as pilot:
+            answer = await self._ask(app, "Ctrl+U")
+            for _ in range(4):
+                await pilot.pause()
+            self.assertIsInstance(app.screen, ConfirmScreen)
+            await pilot.press("ctrl+u")
+            for _ in range(4):
+                await pilot.pause()
+            self.assertTrue(answer.get("said"), "the key the dialog prints must confirm")
+
+    async def test_escape_still_cancels(self):
+        app = self._App()
+        async with app.run_test() as pilot:
+            answer = await self._ask(app, "Ctrl+U")
+            for _ in range(4):
+                await pilot.pause()
+            await pilot.press("escape")
+            for _ in range(4):
+                await pilot.pause()
+            self.assertIs(False, answer.get("said"))
+
+    async def test_a_dialog_with_no_chord_is_unaffected(self):
+        # Most of them have none, and a key press there must go where it always did.
+        app = self._App()
+        async with app.run_test() as pilot:
+            answer = await self._ask(app, "")
+            for _ in range(4):
+                await pilot.pause()
+            await pilot.press("ctrl+u")
+            for _ in range(4):
+                await pilot.pause()
+            self.assertNotIn("said", answer, "nothing should have answered it")
+            self.assertIsInstance(app.screen, ConfirmScreen)
