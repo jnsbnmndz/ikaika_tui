@@ -34,7 +34,7 @@ RAW = "  "
 PREVIEW_LIMIT = 12
 """How many names a preview lists before it starts counting instead."""
 
-PACKAGE_TOKEN = "{package}"
+PACKAGE_TOKEN = "{package}"  # noqa: S105 - a placeholder, not a password
 """Stands in, in a generator's default folder, for the project's own package name."""
 
 QUIET_TAIL = 20

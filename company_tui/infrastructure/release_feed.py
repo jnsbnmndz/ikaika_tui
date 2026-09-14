@@ -4,6 +4,7 @@ import asyncio
 import fnmatch
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,23 @@ from company_tui.domain.updates import (
     ReleaseFeedPort,
     UpdateSource,
 )
+
+ALLOWED_SCHEMES = ("http", "https")
+"""What a release URL may be, checked before it is opened."""
+
+
+def require_http(url: str) -> None:
+    """Refuse anything `urlopen` would accept that is not a web request.
+
+    `api_base` is guarded by `UpdateSource.problem`, but an asset URL is read out
+    of the feed's own response - so the one URL nothing here chose is also the one
+    whose file is handed to Windows to execute. `file:` and `ftp:` are schemes
+    `urlopen` supports and this has no use for.
+    """
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in ALLOWED_SCHEMES:
+        raise urllib.error.URLError(f"'{scheme or url}' is not an http or https URL")
+
 
 TIMEOUT_SECONDS = 15
 """Long enough for a slow connection, short enough that a hung request does not."""
@@ -34,7 +52,8 @@ class HttpReleaseFeed(ReleaseFeedPort):
         return await asyncio.to_thread(self._fetch, source)
 
     def _fetch(self, source: UpdateSource) -> tuple[Release, ...]:
-        request = urllib.request.Request(
+        require_http(source.releases_url)
+        request = urllib.request.Request(  # noqa: S310 - require_http above
             source.releases_url,
             headers={
                 "User-Agent": USER_AGENT,
@@ -42,7 +61,7 @@ class HttpReleaseFeed(ReleaseFeedPort):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310 - require_http above
                 raw = response.read(MAX_BYTES)
         except urllib.error.HTTPError as error:
             raise ReleaseFeedError(self._http_problem(error, source)) from error
@@ -127,10 +146,11 @@ class HttpAssetDownload(AssetDownloadPort):
         return await asyncio.to_thread(self._pull, url, target)
 
     def _pull(self, url: str, target: Path) -> int:
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        require_http(url)
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310 - require_http above
         staging = target.with_suffix(target.suffix + PARTIAL_SUFFIX)
         total = 0
-        with urllib.request.urlopen(request, timeout=self._timeout) as response:
+        with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310 - require_http above
             with staging.open("wb") as handle:
                 while True:
                     chunk = response.read(DOWNLOAD_CHUNK)

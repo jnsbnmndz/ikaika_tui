@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-PASS = "PASS"
+PASS = "PASS"  # noqa: S105 - a result label, not a password
 FAIL = "FAIL"
 SKIP = "SKIP"
 

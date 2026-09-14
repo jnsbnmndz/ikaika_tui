@@ -59,7 +59,7 @@ class LocalProcessRunner(ProcessRunner):
             return ProcessResult(exit_code=127, stdout="", stderr=message)
 
         collected: list[str] = []
-        assert process.stdout is not None
+        assert process.stdout is not None  # noqa: S101 - narrowing; PIPE was asked for
         try:
             async for raw in process.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")

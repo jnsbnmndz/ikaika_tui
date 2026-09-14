@@ -4,6 +4,7 @@ import asyncio
 import os
 import subprocess
 import unittest
+import urllib.error
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -36,6 +37,10 @@ from company_tui.infrastructure.handover import (
     SCRIPT,
     SILENT,
     WindowsHandover,
+)
+from company_tui.infrastructure.release_feed import (
+    HttpAssetDownload,
+    require_http,
 )
 from company_tui.infrastructure.update_state import FileUpdateState, state_path
 from company_tui.presentation.chrome import AppHeader
@@ -830,3 +835,34 @@ class TheKeyPrintedOnTheAnswer(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
             self.assertNotIn("said", answer, "nothing should have answered it")
             self.assertIsInstance(app.screen, ConfirmScreen)
+
+
+class TheSchemeOfAUrlBeforeItIsOpened(unittest.TestCase):
+    """`urlopen` speaks `file:` and `ftp:` too, and one of these URLs is not ours.
+
+    `api_base` is guarded by `UpdateSource.problem`, but an asset URL is read out of
+    the feed's own response - so the one URL nothing here chose is also the one whose
+    file is handed to Windows to execute.
+    """
+
+    def test_http_and_https_are_allowed(self):
+        require_http("http://localhost:8080/releases")
+        require_http("https://api.github.com/repos/a/b/releases")
+
+    def test_a_local_file_is_refused(self):
+        with self.assertRaises(urllib.error.URLError):
+            require_http("file:///C:/Windows/System32/calc.exe")
+
+    def test_other_schemes_are_refused(self):
+        for url in ("ftp://host/x.exe", "data:text/plain,x", "javascript:alert(1)", ""):
+            with self.assertRaises(urllib.error.URLError):
+                require_http(url)
+
+    def test_the_download_checks_before_it_opens_anything(self):
+        # The port documents URLError for anything that stops it, so the guard raises
+        # what the callers already handle rather than a new kind of failure.
+        with TemporaryDirectory() as folder:
+            target = Path(folder) / "setup.exe"
+            with self.assertRaises(urllib.error.URLError):
+                asyncio.run(HttpAssetDownload().fetch("file:///etc/passwd", target))
+            self.assertFalse(target.exists(), "nothing may be written for a refused URL")

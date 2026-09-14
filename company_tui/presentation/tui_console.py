@@ -471,7 +471,7 @@ class TuiConsole(App):
     @work
     async def _start(self) -> None:
         await self.push_screen_wait(SplashScreen())
-        assert self.application is not None
+        assert self.application is not None  # noqa: S101 - narrowing; bootstrap sets it
         self.result_code = await self.application.run(self.start_capability)
         await self._shut_down()
         self.exit()
