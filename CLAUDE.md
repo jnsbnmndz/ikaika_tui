@@ -2,7 +2,7 @@
 
 Guidance for working in this repository.
 
-This is Developer Toolbox Inventory (DTI) — a Python developer toolbox for repeatable scaffolding and automation. Every name it answers to is in `domain/naming.py`, derived from `APP_SLUG`; four of them are a wire format something else on the machine already speaks, so the new name is written and either is accepted. Its version lives in `VERSION` at the repository root, one line, `x.y.z+n`; `presentation/branding.py` reads it, so a release rewrites one file and nothing restates it (`docs/decisions/0002-the-version-is-one-file.md`). It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
+This is Developer Toolbox Inventory (DTI) — a Python developer toolbox for repeatable scaffolding and automation. Every name it answers to is in `domain/naming.py`, derived from `APP_SLUG`; four of them are a wire format something else on the machine already speaks, so the new name is written and either is accepted. Its version lives in `VERSION` at the repository root, one line, `x.y.z+n`; `company_tui/version.py` reads it and `presentation/branding.py` re-exports it, so a release rewrites one file and nothing restates it (`docs/decisions/0002-the-version-is-one-file.md`). The read lives apart from the theme because `branding.py` imports `textual`, and `--version`, `list` and `doctor` are meant to be scriptable — they were paying ~700ms to import a terminal framework none of them use. `cli.py` imports `bootstrap` inside the branch that needs it and `bootstrap` defers `TuiConsole` likewise, so nothing on the plain path touches Textual at all; frozen `--version` went from 863ms to 251ms. It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
 
 The interactive UI is themed: `presentation/branding.py` defines `APP_THEME` plus the tagline and version, registered and activated by `TuiConsole` on mount. The theme's own name is `naming.APP_SLUG`, so what is registered and what `TuiConsole` activates cannot drift — a mismatch there is an unstyled app. The wordmark is built from `APP_NAME` rather than written out, and `SPLASH_MARK` is a deliberately abstract placeholder rather than any company's logo. New CSS should reference theme tokens (`$primary`, `$accent`, `$surface`, `$panel`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand and adapts if the theme changes.
 
@@ -40,7 +40,8 @@ answer to what a release is, and it is the one nobody can run locally.
 .\script.ps1 check-all                    # the gate; -InstallHook for pre-push
 .\script.ps1 setup-signing                # release and debug certificates
 .\script.ps1 bump-version -Bump patch     # rewrite VERSION, commit, tag
-.\script.ps1 build-app -Sign              # freeze with PyInstaller
+.\script.ps1 build-app -Sign              # freeze with PyInstaller; -Optimize 0|1|2
+.\script.ps1 benchmark                    # time each level, print the matrix
 .\script.ps1 build-installer -Sign        # wrap it in NSIS
 ```
 

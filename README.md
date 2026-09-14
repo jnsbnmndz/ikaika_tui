@@ -84,6 +84,7 @@ a release is.
 .\script.ps1 setup-signing                # release and debug certificates
 .\script.ps1 bump-version -Bump patch     # rewrite VERSION, commit, tag
 .\script.ps1 build-app -Sign              # freeze with PyInstaller
+.\script.ps1 benchmark                    # time each -Optimize level, print a matrix
 .\script.ps1 build-installer -Sign        # wrap it in NSIS
 ```
 
@@ -139,6 +140,28 @@ share link *is* the capability to fetch the file, and a committed link cannot be
 see `docs/decisions/0003`. CI reads `DTI_CERT_PASSWORD`, `DTI_CERT_SHARE_URL` and
 `DTI_DEBUG_CERT_SHARE_URL`. A missing certificate does not fail the build; it says the
 artifacts are unsigned and carries on.
+
+### Startup, and the -Optimize flag
+
+`build-app` takes `-Optimize 0|1|2` (PyInstaller's bytecode level: 1 drops asserts, 2 also
+drops docstrings, which nothing here reads at runtime). The release workflow exposes it as
+a dispatch input.
+
+It is a choice rather than a constant because the app has to start on low-end machines —
+but measure before assuming. `.\script.ps1 benchmark` builds each level and prints a
+matrix; on the machine this was written for the levels were **inside the noise**:
+
+| Level | Size MB | `--version` | `list` | `doctor` |
+|---|---|---|---|---|
+| -O0 | 30.3 | 251 ms | 320 ms | 489 ms |
+| -O1 | 30.3 | 247 ms | 328 ms | 478 ms |
+| -O2 | 29.5 | 243 ms | 346 ms | 472 ms |
+
+What actually mattered was an import. `cli.py` pulled `bootstrap` and `branding` at module
+level, and `branding` imports `textual` for the theme — so `--version`, `list` and `doctor`
+each paid ~700 ms to load a terminal framework none of them use, against a documented
+promise that they stay fast and pipeable. Deferring those imports took frozen `--version`
+from **863 ms to 251 ms**. The build flag is worth having; it was not the bottleneck.
 
 ### The installer
 

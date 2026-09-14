@@ -5,7 +5,7 @@
 #     .\script.ps1 check-all
 #     .\script.ps1 setup-signing -FetchOnly
 #     .\script.ps1 bump-version -Bump patch [-Released] [-WhatIf] -Yes
-#     .\script.ps1 build-app -Sign [-Released] [-Clean]
+#     .\script.ps1 build-app -Sign [-Released] [-Clean] [-Optimize 0|1|2]
 #     .\script.ps1 build-installer -Sign [-Released]
 #
 # so a release can be rehearsed locally in full. What this file adds is the two things
@@ -162,6 +162,17 @@ on:
         type: boolean
         required: true
         default: false
+      optimize:
+        # A choice rather than a constant because the app has to start on low-end
+        # machines. `.\script.ps1 benchmark` measures the levels against each other, and
+        # on the machine this was written for the difference was inside the noise - so the
+        # default stays at what python does anyway, and raising it is a decision somebody
+        # makes with a measurement rather than a hunch.
+        description: 'Bytecode level: 1 drops asserts, 2 also drops docstrings'
+        type: choice
+        required: true
+        default: '0'
+        options: ['0', '1', '2']
 
 # Never two releases at once: both would read the same tags, hand out the same build
 # number, and the second push would be rejected after a full build had already run.
@@ -351,7 +362,7 @@ jobs:
       - name: Build the app
         shell: pwsh
         run: |
-          .\script.ps1 build-app ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }} ${{ inputs.clean && '-Clean' || '' }}
+          .\script.ps1 build-app ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }} ${{ inputs.clean && '-Clean' || '' }} -Optimize ${{ inputs.optimize }}
           if ($LASTEXITCODE -ne 0) { throw 'build-app failed' }
 
       - name: Build the installer

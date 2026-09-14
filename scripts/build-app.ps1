@@ -35,6 +35,17 @@ param(
     # Sign the payload exe if a certificate is configured. Off by default: an unsigned
     # build runs, it just shows an unknown publisher.
     [switch]$Sign,
+    # Bytecode optimisation, handed to PyInstaller as --optimize.
+    #
+    #   0  what python does by default
+    #   1  drops `assert` and `__debug__` branches
+    #   2  also drops docstrings, which nothing here reads at runtime
+    #
+    # Worth having as a choice rather than a constant because the app has to start on
+    # low-end machines, and the only honest way to pick a level is to measure one
+    # against another: `scriptsenchmark.ps1` does that.
+    [ValidateSet('0', '1', '2')]
+    [string]$Optimize = '0',
     [switch]$Help
 )
 
@@ -54,10 +65,12 @@ if ($Help) {
     Write-Host '  build-app - freeze the app into a folder that needs no Python.'
     Write-Host ''
     Write-Host '  Usage'
-    Write-Host '    .\script.ps1 build-app [-Released] [-Clean] [-Sign]'
+    Write-Host '    .\script.ps1 build-app [-Released] [-Clean] [-Sign] [-Optimize 0|1|2]'
     Write-Host ''
     Write-Host '  Writes dist\<name>-<version>\ and leaves build\ behind as scratch.'
     Write-Host '  VERSION is bundled as data because the header reads it at runtime.'
+    Write-Host '  -Optimize is bytecode level: 1 drops asserts, 2 also drops docstrings.'
+    Write-Host '  scripts\benchmark.ps1 measures one level against another.'
     Write-Host ''
     Write-Host '  Needs PyInstaller in the environment doing the build:'
     Write-Host '    python -m pip install pyinstaller'
@@ -71,7 +84,7 @@ $text = Format-AppVersion $version
 $kind = if ($Released) { 'official' } else { 'debug' }
 
 Write-Host ''
-Write-Host "[1/5] Building $AppName $text ($kind)"
+Write-Host "[1/5] Building $AppName $text ($kind, -O$Optimize)"
 
 # The interpreter that is going to do the building, and the one whose packages get frozen.
 # A checkout's own .venv where there is one, because that is where textual is - a global
@@ -124,6 +137,7 @@ $arguments = @(
     '--add-data', "$(Join-Path $root 'VERSION');.",
     '--collect-all', 'textual',
     '--paths', $root,
+    '--optimize', $Optimize,
     (Join-Path $root $EntryScript)
 )
 if ($Clean) { $arguments = @($arguments[0..1]) + @('--clean') + @($arguments[2..($arguments.Count - 1)]) }
