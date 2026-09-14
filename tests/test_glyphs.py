@@ -1,36 +1,4 @@
-"""Nothing the interface draws may be an emoji.
-
-CLAUDE.md and AGENT.md both say this file enforces the rule. It did not exist -
-`tests/` was gitignored, so the enforcement the documentation promised had
-quietly not been there. This is that test.
-
-Why the rule: a codepoint a terminal treats as emoji is drawn from an emoji font
-rather than a text one. It comes out double width, so every column after it on
-the line is wrong; in a colour that ignores the theme; and at a weight nothing
-like the box-drawing art beside it. They read perfectly well in an editor, which
-is exactly how a stop mark on the Run button and a stopwatch on each run's
-timestamp both got in.
-
-
-WHY RANGES AND AN ALLOWLIST, RATHER THAN A WIDTH TEST
-
-Width does not separate them. U+23F1 STOPWATCH is East Asian Narrow and is an
-emoji; U+2715 MULTIPLICATION X is Narrow and is not; U+274C CROSS MARK is Wide
-and is. A width test passes the exact glyph the docs name as one that got in.
-
-So the emoji BLOCKS are banned outright and the handful of text-presentation
-glyphs inside them are allowed by name. Four characters, each one already in use
-and each one legible in a terminal font - which is the whole test. Adding a
-fifth means writing down why it is text and not a picture.
-
-Width is still checked, as a second net: card art is laid out by counting
-characters, so one wide glyph from any block shifts every column after it.
-
-Read from the SOURCE with `ast`, not from a rendered screen. A string reachable
-only from an error path never appears in a snapshot, and that is the one somebody
-sees on the day something has already gone wrong. `ast` also resolves escapes, so
-`"\\U0001F600"` is caught however innocent it looks in the file.
-"""
+"""Nothing the interface draws may be an emoji."""
 
 import ast
 import unicodedata
@@ -62,11 +30,7 @@ EMOJI_RANGES = (
     (0xFE0F, 0xFE0F),
     (0x200D, 0x200D),
 )
-"""Blocks a terminal may draw from an emoji font.
-
-The last two are the variation selector and the zero-width joiner: neither draws
-anything itself, and both exist to turn the codepoint beside them into a picture.
-"""
+"""Blocks a terminal may draw from an emoji font."""
 
 TEXT_GLYPHS = {
     "✓": "CHECK MARK - a run that succeeded",
@@ -74,15 +38,10 @@ TEXT_GLYPHS = {
     "✗": "BALLOT X - a run that failed",
     "❯": "HEAVY RIGHT-POINTING ANGLE QUOTATION MARK - a prompt caret",
 }
-"""Inside those blocks but drawn from a text font. Narrow, monochrome, themed.
-
-Every entry is a character already in use. A new one belongs here only with a
-reason, because the default answer to "can I use this symbol" is no.
-"""
+"""Inside those blocks but drawn from a text font. Narrow, monochrome, themed."""
 
 ALLOWED_WIDE: frozenset[str] = frozenset()
 """Codepoints permitted to occupy two cells. Empty, and adding one needs a reason."""
-
 
 def is_emoji(char: str) -> bool:
     if char in TEXT_GLYPHS:
@@ -132,7 +91,6 @@ def offenders(predicate) -> list[str]:
 
 class GlyphTest(unittest.TestCase):
     def test_the_package_has_strings_to_check(self):
-        # Guards the guard: a broken walk makes every test below vacuous.
         self.assertGreater(len(drawn_strings()), 200)
 
     def test_no_emoji_anywhere_in_the_interface(self):
@@ -142,8 +100,6 @@ class GlyphTest(unittest.TestCase):
         self.assertEqual([], offenders(is_wide))
 
     def test_it_would_actually_catch_one(self):
-        # Both directions. A detector that finds nothing passes the two tests
-        # above forever, which is how the rule went unenforced in the first place.
         for name in ("GRINNING FACE", "STOPWATCH", "CROSS MARK", "ROCKET", "WATCH"):
             self.assertTrue(is_emoji(unicodedata.lookup(name)), name)
         for char, why in TEXT_GLYPHS.items():
@@ -153,8 +109,6 @@ class GlyphTest(unittest.TestCase):
             self.assertFalse(is_emoji(unicodedata.lookup(name)), name)
 
     def test_every_allowed_glyph_is_one_the_package_still_uses(self):
-        # An allowlist outlives what it was written for. An entry nothing draws
-        # any more is permission nobody asked for.
         drawn = {char for _, _, text in drawn_strings() for char in text}
         unused = sorted(c for c in TEXT_GLYPHS if c not in drawn)
         self.assertEqual([], unused)

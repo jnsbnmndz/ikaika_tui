@@ -1,26 +1,4 @@
-"""The settings most people should never need to change.
-
-Where the toolbox looks for a newer build of itself: which repository, which API
-host, whether prereleases count, and which asset of a release is the installer.
-Separate from Settings on purpose - that screen is about the projects this
-toolbox works on, and this one is about the toolbox itself. Mixing them puts
-"which fork am I running" next to "where do new projects go", and the second is
-edited weekly while the first is edited once.
-
-Everything here has a working default except the repository, which is empty
-because this code has no business guessing which build of it somebody is
-running. An empty repository means update checking is off, and Check for Updates
-says so rather than failing.
-
-
-IT VALIDATES BEFORE IT SAVES
-
-`owner/name`, and an api_base that is a URL. Both are checked here rather than
-at the next update check, where a full URL pasted into the repository field
-produces a 404 that reads as "there are no releases" for a repository that has
-plenty. `UpdateSource.problem` is the one place that rule lives, so the form and
-the check cannot disagree about what a valid source is.
-"""
+"""The settings most people should never need to change."""
 
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.config import ConfigPort, ConfigScope, Settings
@@ -123,10 +101,12 @@ class AdvancedCapability(Capability):
                 choices=tuple(CHANNEL_LABELS[name] for name in CHANNELS),
                 default=CHANNEL_LABELS[source.channel],
                 help=(
-                    "Debug builds are published as prereleases. 'prereleases "
-                    "only' tracks them and never offers an official release, "
-                    "even a newer one - which is what testing a debug line "
-                    "means. 'whichever is newest' mixes the two."
+                    "Debug builds are published as prereleases. An installed "
+                    "build only ever takes updates from its own line - a debug "
+                    "installer cannot replace a release install, it installs "
+                    "beside it - so all three settings mean the same thing to "
+                    "it. This decides for a copy run from source, which has no "
+                    "install to replace."
                 ),
             ),
             Option(
@@ -168,23 +148,14 @@ class AdvancedCapability(Capability):
             source = UpdateSource(
                 repository=str(values.get(REPOSITORY_KEY, "")).strip(),
                 api_base=str(values.get(API_BASE_KEY, "")).strip() or DEFAULT_API_BASE,
-                # The form carries the labels, because a dropdown reading
-                # "official/prerelease/any" explains nothing. Mapped back by value, and
-                # an answer that matches no label falls to the default rather than
-                # raising - a form cannot offer one, but an imported document can.
                 channel=self._channel_named(str(values.get(CHANNEL_KEY, ""))),
                 asset_pattern=str(values.get(ASSET_KEY, "")).strip()
                 or DEFAULT_ASSET_PATTERN,
             )
-            # An empty repository is a valid answer - it means off - so only a
-            # non-empty one that is malformed is refused. `problem` reports both
-            # as problems, which is right for a check and wrong for this form.
             if source.configured and source.problem:
                 return (f"That is not a usable update source: {source.problem}.", False)
 
         scope = self._scope(values)
-        # Rebuilt from `current` rather than saving `source` alone: save() writes
-        # the whole file, so anything Settings owns would be dropped to defaults.
         settings = Settings(
             workspace_root=current.workspace_root,
             bundle_prefix=current.bundle_prefix,

@@ -1,10 +1,4 @@
-"""Editing a JSON file without reformatting the parts nobody asked about.
-
-Scaffolding changes a handful of keys in files a person maintains afterwards.
-Writing them back in this module's preferred style would turn a four-key edit
-into a whole-file diff, so the indent the template chose is measured and reused,
-and keys that are not ours are left in place and in order.
-"""
+"""Editing a JSON file without reformatting the parts nobody asked about."""
 
 import json
 import re
@@ -21,7 +15,6 @@ _FIRST_INDENT = re.compile(r"^([ \t]+)\S", re.MULTILINE)
 
 class MalformedJson(ValueError):
     """The file is not the JSON object it was expected to be."""
-
 
 def load(source: str) -> Document:
     try:
@@ -52,12 +45,7 @@ def read(document: Document, path: Path) -> Any:
 
 
 def put(document: Document, path: Path, value: Any) -> bool:
-    """Set `path`, but only where the template already has somewhere to put it.
-
-    Absent sections are left absent rather than invented: a stack that ships no
-    `ios` block did not forget one, and adding a bundle id to a platform the
-    template does not target would be this toolbox making that decision.
-    """
+    """Set `path`, but only where the template already has somewhere to put it."""
     parent = _parent(document, path)
     if parent is None:
         return False

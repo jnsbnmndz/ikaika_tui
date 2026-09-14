@@ -1,10 +1,4 @@
-"""A project name the toolbox is willing to build a project out of.
-
-One string becomes a directory, a package identifier, a URL scheme and a bundle
-id, and every stack spells those differently. Parsing the name once puts that
-spelling in a single place — and refusing the strings that are not names keeps
-`..`, `.` and absolute paths away from the code that deletes directories.
-"""
+"""A project name the toolbox is willing to build a project out of."""
 
 import re
 from dataclasses import dataclass
@@ -23,7 +17,6 @@ _RESERVED = frozenset(
 
 class InvalidProjectName(ValueError):
     """The string cannot become a directory and an identifier at the same time."""
-
 
 @dataclass(frozen=True, slots=True)
 class ProjectName:
@@ -53,13 +46,7 @@ class ProjectName:
 
     @classmethod
     def existing(cls, value: str) -> "ProjectName":
-        """A name that is already written down somewhere, taken as it is.
-
-        `parse` guards names the toolbox is about to turn into a directory. This
-        is for reading one back out of a project's own manifest, where it may
-        have been hand-edited into something `parse` would refuse — a project
-        that already exists is not made invalid by being asked its name.
-        """
+        """A name that is already written down somewhere, taken as it is."""
         return cls(raw=value.strip())
 
     @property
@@ -78,8 +65,7 @@ class ProjectName:
 
     @property
     def compact(self) -> str:
-        """`demoapp` — URL schemes and the last segment of a bundle id, which
-        allow neither separators nor capitals."""
+        """`demoapp` — URL schemes and the last segment of a bundle id, which."""
         return "".join(word.lower() for word in self.words)
 
     @property

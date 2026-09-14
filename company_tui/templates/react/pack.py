@@ -1,3 +1,5 @@
+"""`TemplatePack` adapter for the React stack, dispatching to `behavior.py`."""
+
 from company_tui.domain.template_pack import (
     Generator,
     PackActionResult,

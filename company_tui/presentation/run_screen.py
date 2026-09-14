@@ -1,30 +1,4 @@
-"""Config form on the left, live terminal on the right.
-
-Every flag is filled in before anything runs, so a workflow is not a sequence of
-modal questions answered blind. Once it starts the form stays on screen as a
-record of what was asked for, and the right pane narrates what is happening —
-including any question the run turns out to need, answered in the same stdin box
-a real terminal would use.
-
-The screen is a *view*, not the owner of the run. Everything it shows lives on a
-`RunSession`; the screen renders whichever session is selected and replays that
-session's log when it attaches. That is what lets a run keep going after the
-panel is left behind, and what lets the tab strip swap one run for another
-without either of them noticing.
-
-The one button carries the whole lifecycle — Run, then Stop while it works, then
-Run again — so there is always something to press and never a state the user is
-stuck in. It is the *only* button here: leaving is Esc, and the footer hint that
-says so is itself the button for it, so the mouse reaches the exit without a
-second control beside Run that has to be kept in step with it. Esc is the way
-out rather than the way to stop: while work is running it detaches, leaving the
-run going.
-
-Both halves say what they want before being asked: a required field is marked on
-its label, a line under the form names whatever is still missing, and an empty
-terminal says it is empty rather than merely being blank. All three are knowable
-without pressing anything, so none of them waits for a press that goes nowhere.
-"""
+"""Config form on the left, live terminal on the right."""
 
 from collections.abc import Sequence
 
@@ -75,29 +49,17 @@ EMPTY_TITLE = "Ready to scaffold"
 EMPTY_HINT = "Configure the project, then press Ctrl+R."
 
 NEEDED_MARK = "ⓘ  "
-"""A terminal-safe circled information mark, kept to one cell so validation
-copy stays aligned in terminals that substitute emoji fonts for warning signs."""
+"""A terminal-safe circled information mark, kept to one cell so validation."""
 
 COPY_LABEL = "COPY"
 COPIED_LABEL = "COPIED"
 COPY_TOOLTIP = "Copy every line in this terminal. Ctrl+C copies a selection."
 CLEAR_TOOLTIP = "Empty this terminal, back to the prompt the run started under."
 COPIED_FOR = 1.4
-"""How long COPY says it worked before going back to offering to.
-
-Said on the button rather than in the terminal, because the terminal is the
-thing that was just copied and a line announcing the copy would be one more line
-the next copy carries. A clipboard write is an escape sequence the terminal
-either honours or drops without answering, so this reports that the app sent it,
-which is the whole of what the app knows."""
-
+"""How long COPY says it worked before going back to offering to."""
 
 def needed_text(missing: Sequence[str]) -> str:
-    """What the form still wants, named rather than counted.
-
-    One field is the ordinary case and reads as a sentence; several read as a
-    list, because a sentence naming four things is no longer a sentence.
-    """
+    """What the form still wants, named rather than counted."""
     if not missing:
         return ""
     if len(missing) == 1:
@@ -128,57 +90,20 @@ class RunActionButton(Button):
 PREVIEW_ID = "will-run"
 """The row showing the command line the current answers add up to."""
 
-
 class FieldToggle(Checkbox):
-    """A checkbox that is only the box.
-
-    Textual's is a mark and its label in one widget, which makes the text of a
-    question part of the control that answers it. Here the label is a `Static`
-    beside this, and this is the box on its own: one cell of mark inside a
-    border, so a click has to land on the box to count and hover lights what
-    the pointer is actually over.
-
-    The side characters go because they are what makes the stock checkbox three
-    cells wide. With a border of its own it does not need them, and one cell is
-    what a mark inside a box wants to be.
-    """
+    """A checkbox that is only the box."""
 
     BUTTON_LEFT = ""
     BUTTON_INNER = "✕"
     BUTTON_RIGHT = ""
 
     def render(self):
-        """The mark when it is on, an empty box when it is not.
-
-        Textual's own `render` pads the label a cell either side and assembles
-        it with the button, which for an empty label is still two cells of
-        padding — three cells of content in a box one cell wide, and what shows
-        in it is the ellipsis of the overflow rather than the mark. It also
-        draws the mark whether or not the box is on, in the colour of whatever
-        is behind it, which is a mark that has to be hidden rather than not
-        drawn. Off is nothing in the box.
-        """
+        """The mark when it is on, an empty box when it is not."""
         return self._button if self.value else Content("")
 
 
 class SelectableLog(RichLog):
-    """The run's output, with the pointer able to pick text out of it.
-
-    Textual selects by reading a per-cell offset off whatever a widget drew and
-    handing that widget back a range in its own coordinates. `RichLog` writes
-    neither: it keeps finished `Strip`s and paints them, so a drag across one
-    reports no offsets at all. The screen reads that as "select the whole
-    widget" and the whole widget then answers with nothing, because the
-    inherited `get_selection` looks for a renderable a log does not have — which
-    is why the terminal was the one pane here that could not be copied out of.
-
-    Both halves are supplied. `render_line` stamps each cell with where in the
-    log it came from and paints whatever is selected; `get_selection` reads the
-    text back off the same strips. That reading is the wrapped line as it
-    appears on screen, which is the point — this is the mouse taking what it is
-    pointing at. `RunSession.transcript` is the other reading, every line at its
-    own length, and that is what COPY sends.
-    """
+    """The run's output, with the pointer able to pick text out of it."""
 
     def render_line(self, y: int) -> Strip:
         scroll_x, scroll_y = self.scroll_offset
@@ -192,26 +117,10 @@ class SelectableLog(RichLog):
                 if end == -1:
                     end = len(self.lines[index].text)
                 strip = self._highlight(strip, start - scroll_x, end - scroll_x)
-        # The offsets go on last, over the highlight rather than under it: they
-        # are what the next drag reads, and a strip rebuilt after them carries
-        # none.
         return strip.apply_offsets(scroll_x, index)
 
     def _highlight(self, strip: Strip, start: int, end: int) -> Strip:
-        """Paint `start`-`end` of an already-cropped line as selected.
-
-        Over the line's own colours rather than under them. `Strip.apply_style`
-        puts a style underneath, where every cell the log has already coloured
-        wins and the selection changes nothing — which is what a log full of
-        marker colours is. `post_style` is the same combination the other way
-        round.
-
-        Partial, so what arrives is a background and nothing else. The whole
-        style resolves its unset foreground against what is behind it, and this
-        theme leaves that foreground unset: it comes back as the selection
-        colour written over itself, one block of flat colour with the line
-        inside it invisible.
-        """
+        """Paint `start`-`end` of an already-cropped line as selected."""
         width = strip.cell_length
         start = max(0, min(start, width))
         end = max(start, min(end, width))
@@ -278,8 +187,6 @@ class RunScreen(Screen[None]):
 
     NARROW_WIDTH = 82
 
-    # Esc means something different at each stage, and a footer that says
-    # otherwise is worse than no footer at all.
     HINTS_READY = (("Tab", "Switch field"), ("Ctrl+R", "Run"), ("Esc", "Back"))
     HINTS_RUNNING = (("Ctrl+R", "Stop"), ("Esc", "Leave running"))
     HINTS_DONE = (("Ctrl+R", "Run again"), ("Esc", "Close"))
@@ -828,8 +735,6 @@ class RunScreen(Screen[None]):
     }}
     """
 
-    # ------------------------------------------------- what the panel reports
-
     class Chosen(Message):
         """The user picked a different tab."""
 
@@ -861,20 +766,14 @@ class RunScreen(Screen[None]):
         self._sessions = sessions if sessions is not None else SessionRegistry()
         self._was_finished = session.finished
         self._copied_for: Timer | None = None
-        """Ticking while COPY is saying it worked, so a second press restarts
-        the message rather than being cut short by the first one's timer."""
+        """Ticking while COPY is saying it worked, so a second press restarts."""
         self._refused = False
-        """Whether Run has been pressed on this form and turned down.
-
-        Kept here rather than left on the widget, because the panel re-renders
-        whenever *any* session reports a change — so a run finishing in another
-        tab would have quietly withdrawn the refusal standing in this one."""
+        """Whether Run has been pressed on this form and turned down."""
 
     @property
     def session(self) -> RunSession:
         return self._session
 
-    # --------------------------------------------------------------- composing
 
     def compose(self) -> ComposeResult:
         with AppFrame():
@@ -882,8 +781,6 @@ class RunScreen(Screen[None]):
             with Horizontal(id="panes"):
                 with Vertical(id="config") as config:
                     config.border_title = "CONFIGURATION"
-                    # Scrolls, but the Run button stays put at the bottom so it
-                    # is never something you have to scroll to find.
                     with VerticalScroll(id="fields"):
                         yield from self._form_widgets()
                     yield Static("", id="validation")
@@ -930,8 +827,6 @@ class RunScreen(Screen[None]):
                             yield Button(
                                 "SEND", id="stdin-send", flat=True, disabled=True
                             )
-                            # Beside Send rather than up by the tabs: these act
-                            # on the terminal, and the terminal ends here.
                             yield Button(
                                 COPY_LABEL,
                                 id="terminal-copy",
@@ -957,18 +852,10 @@ class RunScreen(Screen[None]):
             yield AppFooter(self.HINTS_READY)
 
     def _form_widgets(self) -> list[Widget]:
-        """The whole config pane for the current session, as a flat list.
-
-        Built rather than yielded through container context managers, because
-        the same list has to be mountable into a pane that is already on screen
-        when the user switches to another tab.
-        """
+        """The whole config pane for the current session, as a flat list."""
         widgets: list[Widget] = [
             Static(self._session.title.upper(), classes="section--title")
         ]
-        # What the command is for, under its name and above its fields - the
-        # subheading the desktop form has always carried. Read from the document,
-        # so it cannot drift from the summary the menu showed a moment ago.
         if self._session.subtitle:
             widgets.append(Static(self._session.subtitle, classes="field--help"))
         for option in self._session.options:
@@ -999,10 +886,6 @@ class RunScreen(Screen[None]):
 
             widgets.append(Static(self._label(option), classes="field--label"))
             if option.kind is OptionKind.MULTI and option.choices:
-                # One box per value, because the question is how many, not which.
-                # The answer is read back off the boxes rather than kept beside
-                # them: a value assembled from the widgets cannot disagree with
-                # what the user can see is ticked.
                 picked = self._picked(option)
                 for index, choice in enumerate(option.choices):
                     widgets.append(
@@ -1025,16 +908,6 @@ class RunScreen(Screen[None]):
                     )
                 )
             elif option.kind is OptionKind.CHOICE and option.choices:
-                # Row zero NAMES the default and binds nothing, which is what
-                # makes an untouched form run the command as if no argument had
-                # been passed. A dropdown resting on a blank line lists what is
-                # possible while saying nothing about what will happen, so the
-                # row carries the default's name - as a label, never as a value.
-                #
-                # A stored value outside the option's own choices would raise
-                # InvalidSelectValueError on mount and take the app down, so it
-                # falls back to that row here as well as being dropped in
-                # `session.load`. Two guards; nothing here is worth crashing over.
                 stored = str(self._session.values.get(option.key, ""))
                 chooser = Select(
                     [(choice, choice) for choice in option.choices],
@@ -1044,14 +917,6 @@ class RunScreen(Screen[None]):
                     id=widget_id,
                 )
                 if option.refresh and self._session.refresh_runner is not None:
-                    # Only on a list the command FETCHED, which is what carrying a
-                    # refresh means. A declared set cannot change while the form is
-                    # open, so a button there would never do anything.
-                    #
-                    # `field--fetched`, not `field--path`: that class shrinks a
-                    # `.field--input` to make room for its button, and a Select is not
-                    # one - so it kept its full width and pushed the button clean off
-                    # the pane. The button was there, laid out, and never visible.
                     widgets.append(
                         Horizontal(
                             chooser,
@@ -1064,8 +929,6 @@ class RunScreen(Screen[None]):
                             classes="field--fetched",
                         )
                     )
-                    # Under the row rather than beside the button: a third thing in
-                    # that Horizontal is width the dropdown does not get.
                     widgets.append(
                         Static(
                             "", id=self._refresh_status_id(option), classes="field--help"
@@ -1074,9 +937,6 @@ class RunScreen(Screen[None]):
                 else:
                     widgets.append(chooser)
             elif option.kind in (OptionKind.PATH, OptionKind.FILE):
-                # Still typeable: browsing is the shortcut, not the only way in,
-                # and a path pasted from somewhere else should not need a walk
-                # through a tree to be accepted.
                 widgets.append(
                     Horizontal(
                         Input(
@@ -1104,9 +964,6 @@ class RunScreen(Screen[None]):
             if option.help:
                 widgets.append(Static(option.help, classes="field--help"))
 
-        # What the run will actually be, kept current as the form is filled in.
-        # The form and the command line are the same thing, and this is the row
-        # that says so: anything picked here once can be typed next time.
         if self._session.preview_runner is not None:
             widgets.append(Static("Will run", classes="field--label"))
             widgets.append(
@@ -1120,11 +977,7 @@ class RunScreen(Screen[None]):
 
     @staticmethod
     def _label(option: Option) -> Content:
-        """The field's name, saying up front whether it has to be answered.
-
-        Marked here rather than reported later, so filling the form in is one
-        pass down the pane instead of a press, a refusal, and a second pass.
-        """
+        """The field's name, saying up front whether it has to be answered."""
         if not option.required:
             return Content(option.label)
         return Content.assemble(option.label, (REQUIRED_MARK, "$accent"))
@@ -1142,15 +995,7 @@ class RunScreen(Screen[None]):
         return f"refreshed-{option.key}"
 
     async def _refresh(self, key: str) -> None:
-        """Re-fetch one choice's values, asking first if acting would change something.
-
-        The order is the whole point: preview, then confirm, then act. The refresh
-        behind this button may delete things - the branch list is brought up to
-        date by removing local branches whose remote is gone - and a button that
-        did that on a single click would be a button nobody could safely press.
-        An empty preview means there is nothing to ask about, so a refresh with
-        nothing to remove costs no dialog.
-        """
+        """Re-fetch one choice's values, asking first if acting would change something."""
         option = self._option_named(key)
         runner = self._session.refresh_runner
         if option is None or option.refresh is None or runner is None:
@@ -1168,9 +1013,6 @@ class RunScreen(Screen[None]):
         try:
             await self._ask_and_refresh(option, runner, status)
         except Exception as error:  # noqa: BLE001 - reported, never swallowed
-            # The worker runs with exit_on_error=False, so an escape from here is
-            # silence: the button springs back and nothing says why. That is the
-            # same shape as the failure in docs/pitfalls.md 1.1.
             if status is not None:
                 status.update(f"failed: {error}")
         finally:
@@ -1179,18 +1021,9 @@ class RunScreen(Screen[None]):
                 button.label = idle
 
     async def _ask_and_refresh(self, option: Option, runner, status) -> None:
-        """Preview, confirm if there is anything to confirm, then act.
-
-        Everything it does is written into the terminal as well as onto the line
-        beside the button. The line has room for four words; the terminal is
-        where this run's history is, and a list that was brought up to date - or
-        a delete that was declined - belongs in it beside the run it was done
-        for.
-        """
+        """Preview, confirm if there is anything to confirm, then act."""
         asked = await runner(option, True)
         if asked.message:
-            # The first line is the question; the rest is what saying yes
-            # costs, which ConfirmScreen shows under it.
             head, _, rest = asked.message.partition("\n")
             detail = rest.strip()
             agreed = await self.app.push_screen_wait(
@@ -1224,12 +1057,7 @@ class RunScreen(Screen[None]):
             )
 
     def _apply_refresh(self, option: Option, outcome: RefreshOutcome) -> None:
-        """Put the new values on the dropdown, keeping the selection if it survived.
-
-        An empty list is IGNORED. A refresh that failed, or that a network could
-        not answer, must not be the thing that empties a field the user had
-        already answered.
-        """
+        """Put the new values on the dropdown, keeping the selection if it survived."""
         if not outcome.choices:
             return
         chooser = self._one(self._widget_id(option), Select)
@@ -1248,8 +1076,7 @@ class RunScreen(Screen[None]):
 
     @staticmethod
     def _multi_id(option: Option, index: int) -> str:
-        """One box's id. Indexed rather than named after the value it carries -
-        a choice read off a disk can hold anything, and a Textual id may not."""
+        """One box's id. Indexed rather than named after the value it carries -."""
         return f"multi-{option.key}-{index}"
 
     @staticmethod
@@ -1267,12 +1094,7 @@ class RunScreen(Screen[None]):
         return {part.strip() for part in stored.split(",") if part.strip()}
 
     def _multi_value(self, key: str) -> str:
-        """The ticked values, comma-joined, in the order the document declared.
-
-        Comma-joined rather than a list because that is what a command line
-        already reads a list in, and what the dispatcher on the other side
-        splits back out - one shape crossing the boundary instead of two.
-        """
+        """The ticked values, comma-joined, in the order the document declared."""
         option = self._option_named(key)
         if option is None:
             return ""
@@ -1287,7 +1109,6 @@ class RunScreen(Screen[None]):
     def _browse_id(option: Option) -> str:
         return f"browse-{option.key}"
 
-    # ----------------------------------------------------------------- layout
 
     def on_mount(self) -> None:
         self._apply_density(self.size.width)
@@ -1298,21 +1119,10 @@ class RunScreen(Screen[None]):
 
     @property
     def _composed(self) -> bool:
-        """Whether there are widgets here yet to say anything to.
-
-        Deliberately not `is_mounted`: a `Screen` still reports that as `False`
-        inside its own `on_mount`, even though its children are already there —
-        so guarding on it skipped the whole first render, which is how the tab
-        strip came up empty and stayed that way. The other end — a screen being
-        taken apart while a run still holds a reference to it — is handled by
-        rendering through `query` rather than `query_one`, so a widget that has
-        already gone is nothing to say rather than an exception.
-        """
+        """Whether there are widgets here yet to say anything to."""
         return bool(self.children)
 
     def on_unmount(self) -> None:
-        # Whatever the run writes next belongs in its buffer, not to a screen
-        # that is on its way out.
         self._session.watch(None, None)
 
     def _focus_first_field(self) -> None:
@@ -1328,7 +1138,6 @@ class RunScreen(Screen[None]):
     def _apply_density(self, width: int) -> None:
         self.set_class(width < self.NARROW_WIDTH, "-narrow")
 
-    # ---------------------------------------------------------------- the view
 
     def show(self, session: RunSession) -> None:
         """Render another session here, form, log and all."""
@@ -1345,8 +1154,6 @@ class RunScreen(Screen[None]):
 
     @work(exclusive=True, group="run-screen-form")
     async def _swap_form(self) -> None:
-        # Removal is awaited before the new fields go in: the two sets share
-        # widget ids, and mounting over the top of the old ones is a clash.
         fields = self.query_one("#fields", VerticalScroll)
         await fields.remove_children()
         await fields.mount_all(self._form_widgets())
@@ -1369,9 +1176,6 @@ class RunScreen(Screen[None]):
         self._show_tabs()
         self._show_needed()
         self._show_empty()
-        # The moment a run ends, the one thing left to decide is whether to do
-        # it again — so that is what the keyboard is already on. Once only:
-        # every later line the run prints must not steal the focus back.
         if session.finished and not self._was_finished:
             for button in self.query("#run").results(Button):
                 button.focus()
@@ -1390,8 +1194,6 @@ class RunScreen(Screen[None]):
     def _missing(self) -> tuple[str, ...]:
         session = self._session
         if session.started:
-            # The form is a record of what was asked for now, not something
-            # still being filled in, so it has nothing left to ask for.
             return ()
         return missing_required(session.options, session.values)
 
@@ -1408,9 +1210,6 @@ class RunScreen(Screen[None]):
             return
         empty = len(self._session.log) <= 1
         self.set_class(empty, "-empty")
-        # Nothing to take a copy of and nothing to clear away. Both say so
-        # rather than waiting for a press that would go nowhere, which is the
-        # same rule the Run button and the validation line already follow.
         for button in self.query("#terminal-copy, #terminal-clear").results(Button):
             button.disabled = empty
 
@@ -1427,8 +1226,6 @@ class RunScreen(Screen[None]):
                 box.focus()
             elif not asking:
                 box.value = ""
-        # Enter only sends while there is a question to answer. Offered the rest
-        # of the time it would fire into whatever holds the focus instead.
         for hint in self.query("#stdin-hint").results(KeyHint):
             hint.pressable = asking
         for hint in self.query("#stdin-newline-hint").results(KeyHint):
@@ -1439,9 +1236,6 @@ class RunScreen(Screen[None]):
     def _show_tabs(self) -> None:
         shown = self._sessions.visible(self._session.scope)
         if self._session not in shown:
-            # A session on screen before its form has opened is not a tab yet,
-            # but it is the one being looked at, so it goes in the strip rather
-            # than the strip briefly showing everything except it.
             shown = (*shown, self._session)
         for strip in self.query("#tabs").results(SessionTabs):
             strip.show(shown, self._session)
@@ -1467,7 +1261,6 @@ class RunScreen(Screen[None]):
         for widget in self.query(".field--browse"):
             widget.disabled = disabled
 
-    # ------------------------------------------------------------ form values
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "stdin":
@@ -1476,22 +1269,11 @@ class RunScreen(Screen[None]):
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         key = self._multi_key(event.checkbox.id)
         if key is not None:
-            # Every box of this option, not just the one that moved: the answer
-            # is the set, and storing one box's value would store a boolean where
-            # a list belongs.
             self._store(f"field-{key}", self._multi_value(key))
             return
         self._store(event.checkbox.id, event.value)
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        # The blank row is "leave it out", so it stores nothing rather than the
-        # words on it - reading that row back would pass "(default: development)"
-        # as a branch name.
-        #
-        # Select.NULL, NOT Select.BLANK. In this Textual, BLANK is literally
-        # `False`, so `is Select.BLANK` never matches an unselected Select and the
-        # label would have been stored as the answer. NULL is the sentinel the
-        # widget actually holds and the one the constructor accepts.
         blank = event.value is Select.NULL
         self._store(event.select.id, "" if blank else str(event.value))
 
@@ -1499,8 +1281,6 @@ class RunScreen(Screen[None]):
         if not widget_id or not widget_id.startswith("field-"):
             return
         self._session.store(widget_id.removeprefix("field-"), value)
-        # Answering the thing that was refused is the end of the refusal; it
-        # goes back to being guidance about whatever is still outstanding.
         self._refused = False
         self._show_needed()
         for option in self._session.options:
@@ -1510,7 +1290,6 @@ class RunScreen(Screen[None]):
         for row in self.query(f"#{PREVIEW_ID}"):
             row.update(self._session.command_preview())
 
-    # -------------------------------------------------------------------- run
 
     async def wait_for_values(self) -> dict[str, OptionValue] | None:
         return await self._session.wait_for_values()
@@ -1559,26 +1338,15 @@ class RunScreen(Screen[None]):
         elif event.button.id and event.button.id.startswith("browse-"):
             self._browse(event.button.id.removeprefix("browse-"))
         elif event.button.id and event.button.id.startswith("refresh-"):
-            # As a worker, because it asks a question and runs a subprocess: a
-            # handler that awaited either would hold the interface while it did.
             self.run_worker(
                 self._refresh(event.button.id.removeprefix("refresh-")),
                 group="refresh",
                 exit_on_error=False,
             )
 
-    # ---------------------------------------------------------- the terminal
 
     def _copy_terminal(self) -> None:
-        """Put the whole transcript on the clipboard.
-
-        The whole of it rather than whatever is selected, and deliberately: a
-        press is a click, a click is what ends a drag, and the screen has
-        already dropped the selection by the time this runs. Selected text has
-        its own answer — Ctrl+C, which the screen answers before the app's own
-        binding for that key gets it — so this button is the other question,
-        which is "give me all of it".
-        """
+        """Put the whole transcript on the clipboard."""
         transcript = self._session.transcript()
         if not transcript:
             return
@@ -1600,30 +1368,15 @@ class RunScreen(Screen[None]):
             button.label = label
 
     def _clear_terminal(self) -> None:
-        """Empty this tab's log, and the view of it, back to its prompt.
-
-        The session is cleared rather than the widget, because the widget is a
-        view: clearing only what is drawn would leave every line still held,
-        still written down at the next save, and back on screen the moment the
-        user switched tabs and switched back.
-        """
+        """Empty this tab's log, and the view of it, back to its prompt."""
         self.clear_selection()
         self._session.clear_log()
         self._replay_terminal()
 
     def _browse(self, key: str) -> None:
-        """Fill a path field from the tree, starting where the field points.
-
-        The chosen path goes back through the field rather than straight into
-        the values, so it is stored, echoed, and picked up by the rows that
-        restate it exactly as if it had been typed.
-        """
+        """Fill a path field from the tree, starting where the field points."""
         field = self.query_one(f"#field-{key}", Input)
         option = self._option_named(key)
-        # A file field browses for a file. Offering a directory tree with the files
-        # hidden to somebody looking for a manifest is offering them nothing - which
-        # is the difference the desktop form draws with "Choose file..." against
-        # "Choose folder...".
         wants_file = option is not None and option.kind is OptionKind.FILE
 
         def chosen(path: str | None) -> None:
@@ -1654,9 +1407,6 @@ class RunScreen(Screen[None]):
         if session.started:
             return
         if self._missing():
-            # The same line that has been offering guidance all along, now
-            # saying no — and the cursor put on the first thing it names, so
-            # the answer to "what do I do about it" is already under the hands.
             self._refused = True
             self._show_needed()
             self._focus_missing()
@@ -1680,13 +1430,10 @@ class RunScreen(Screen[None]):
         if self._session.finished:
             self._session.decide(again=False)
         elif self._session.started:
-            # The run is the user's, and so is walking away from it. Stop is on
-            # the button; Esc leaves the work going and hands the screen back.
             self.post_message(self.Detached())
         else:
             self._session.cancel()
 
-    # --------------------------------------------------------------- the tabs
 
     def action_new_session(self) -> None:
         self.post_message(self.Added())
@@ -1723,7 +1470,6 @@ class RunScreen(Screen[None]):
         message.stop()
         self.post_message(self.Added())
 
-    # ------------------------------------------------- what the workflow says
 
     def write(self, message: str, marker: str = "plain") -> None:
         self._session.write(message, marker)

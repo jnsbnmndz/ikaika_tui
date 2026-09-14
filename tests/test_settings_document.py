@@ -1,11 +1,4 @@
-"""Exporting settings as JSON and reading one back.
-
-The round trip is the whole promise: a document written on one machine and read
-on another has to produce the same settings. What is tested hardest is the
-FORGIVING half - an import that quietly drops half a document while reporting
-success is the failure this shape exists to prevent, so every recovery path also
-has to report.
-"""
+"""Exporting settings as JSON and reading one back."""
 
 import json
 import tempfile
@@ -56,17 +49,12 @@ class TheRoundTrip(unittest.TestCase):
         self.assertEqual(FULL.updates, restored.updates)
 
     def test_it_survives_actual_json(self):
-        # dataclasses and Mappings are not JSON; the document has to be encodable
-        # as it stands, or export works in a test and fails on a real file.
         raw = json.dumps(write_document(FULL), indent=2)
         restored, problems = read_document(json.loads(raw), Settings())
         self.assertEqual((), problems)
         self.assertEqual(FULL.updates, restored.updates)
 
     def test_defaults_are_written_out_rather_than_omitted(self):
-        # Unlike the TOML writer. A reader cannot tell an omitted key from one
-        # deliberately set to today's default, and a default that changes between
-        # versions would silently rewrite the setting the file exists to preserve.
         document = write_document(Settings())
         self.assertEqual(DEFAULT_API_BASE, document["updates"]["api_base"])
         self.assertEqual(DEFAULT_ASSET_PATTERN, document["updates"]["asset_pattern"])
@@ -78,9 +66,6 @@ class TheRoundTrip(unittest.TestCase):
         self.assertEqual(SCHEMA, document["schema"])
 
     def test_a_document_written_under_a_former_name_is_not_complained_about(self):
-        # The kind is a wire format. A document exported before a rename still says
-        # the old thing, and a warning about the product's own former name is one
-        # nobody can act on.
         for legacy in KNOWN_KINDS:
             with self.subTest(kind=legacy):
                 document = write_document(FULL)
@@ -98,9 +83,6 @@ class ReadingSomethingOdd(unittest.TestCase):
         self.assertIn("not a settings document", problems[0])
 
     def test_a_missing_section_keeps_what_is_already_set(self):
-        # NOT the built-in defaults. A document silent about a setting is not
-        # asking for it to be reset, and importing one written before a field
-        # existed must not clear that field.
         settings, problems = read_document({"schema": SCHEMA, "kind": KIND}, FULL)
         self.assertEqual(FULL.bundle_prefix, settings.bundle_prefix)
         self.assertEqual(FULL.updates, settings.updates)
@@ -147,8 +129,6 @@ class ReadingSomethingOdd(unittest.TestCase):
         self.assertTrue(any("include_prereleases" in problem for problem in problems))
 
     def test_a_pin_with_no_url_is_dropped_rather_than_saved_as_empty(self):
-        # The TOML writer drops these, so keeping one here would produce a
-        # document that does not survive being saved and re-read.
         document = write_document(FULL)
         document["templates"]["ghost"] = {"url": "", "ref": "v1"}
         settings, _ = read_document(document, Settings())

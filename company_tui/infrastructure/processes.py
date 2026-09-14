@@ -1,3 +1,5 @@
+"""`ProcessRunner` over `subprocess`, with argument arrays and no shell."""
+
 import asyncio
 import shutil
 import subprocess
@@ -49,8 +51,6 @@ class LocalProcessRunner(ProcessRunner):
                 *_resolve_command(command),
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
-                # Interleaved, because the point is to show what the user would
-                # have seen in their own terminal, in the order it happened.
                 stderr=asyncio.subprocess.STDOUT,
             )
         except OSError as error:
@@ -59,7 +59,7 @@ class LocalProcessRunner(ProcessRunner):
             return ProcessResult(exit_code=127, stdout="", stderr=message)
 
         collected: list[str] = []
-        assert process.stdout is not None
+        assert process.stdout is not None  # noqa: S101 - narrowing; PIPE was asked for
         try:
             async for raw in process.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
@@ -67,8 +67,6 @@ class LocalProcessRunner(ProcessRunner):
                 on_output(line)
             exit_code = await process.wait()
         except asyncio.CancelledError:
-            # Whoever stopped us wanted the command stopped, not just this
-            # coroutine. Reaped before re-raising so nothing is left running.
             with suppress(ProcessLookupError):
                 process.kill()
             await process.wait()

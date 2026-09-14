@@ -1,10 +1,4 @@
-"""Editing the toolbox's own settings file from inside the toolbox.
-
-The settings are already a port, so the only thing missing was somewhere to
-change them. It reuses the run panel rather than inventing a screen: the same
-form on the left, the same terminal on the right saying which file was written
-and what is now in it.
-"""
+"""Editing the toolbox's own settings file from inside the toolbox."""
 
 import re
 from collections.abc import Mapping
@@ -64,9 +58,6 @@ class SettingsCapability(Capability):
 
     async def execute(self) -> int:
         while True:
-            # Re-read every time round: the previous pass may have written the
-            # file this one is about to show — and may have installed the very
-            # store the next form is about to report on.
             values = await self._console.open_run_panel(
                 "Settings", self._options(self._config.settings(), await self._stores())
             )
@@ -88,12 +79,7 @@ class SettingsCapability(Capability):
             return 0 if ok else FAILED
 
     async def _stores(self) -> dict[str, str]:
-        """One line per stack about what is in the store, and nothing fetched.
-
-        A form has to be on screen before anyone can ask for anything, so
-        building it must never be what clones a repository — or opening Settings
-        on a slow morning would be a network call nobody asked for.
-        """
+        """One line per stack about what is in the store, and nothing fetched."""
         described: dict[str, str] = {}
         for pack in self._pack_registry.all():
             if pack.script_source() is None:
@@ -167,7 +153,6 @@ class SettingsCapability(Capability):
             ),
         ]
 
-        # Only stacks that actually clone something have a source worth pinning.
         for pack in self._pack_registry.all():
             template = pack.template_source()
             if template is not None:
@@ -240,8 +225,6 @@ class SettingsCapability(Capability):
     async def _save(self, values: OptionValues) -> tuple[str, bool]:
         prefix = str(values.get(PREFIX_KEY, "")).strip()
         if not BUNDLE_PREFIX_SHAPE.match(prefix):
-            # Caught here rather than at the next scaffold, where it would have
-            # already been written into an app's iOS and Android identifiers.
             return (
                 (
                     f"'{prefix}' is not a bundle prefix — use reverse-DNS, "
@@ -273,8 +256,6 @@ class SettingsCapability(Capability):
         for key in sorted(settings.scripts):
             self._console.write(f"{key} scripts: {settings.scripts[key].described}")
 
-        # After the file, never before: what gets cloned is the URL and ref this
-        # form just saved, not the ones it was opened with.
         failures = await self._fetch(values)
         if failures:
             return (f"Saved settings to {path}, but {failures} did not install.", False)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "company-tui"
-version = "0.2.2+20"
+version = "0.2.3+21"
 description = "Company developer toolbox for project scaffolding and automation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,16 +62,40 @@ include = ["company_tui*"]
 target-version = "py311"
 
 [tool.ruff.lint]
-# Correctness first: pyflakes, the pycodestyle errors, import order, and bugbear.
+# Correctness first: pyflakes, the pycodestyle errors, import order, bugbear, the
+# security family, and blind-except.
 #
-# The style families - SIM, RET, RUF, PLW, DTZ, BLE, FURB - are deliberately NOT
+# BLE was turned on because five `# noqa: BLE001` were already written, each with a
+# reason - the rule was being obeyed by hand while not being enforced. Enabling it
+# made those five real and surfaced three more, all of them run supervisors that
+# report a failure rather than swallow it.
+#
+# The style families - SIM, RET, RUF, PLW, DTZ, FURB - are deliberately NOT
 # here yet. Turning them on surfaced seventeen findings across code this change
 # does not touch, and a lint that fails on unrelated files is one that gets run
 # with a flag to shut it up. They are worth adopting; adopting them is its own
 # change, with the findings actually read rather than blanket-suppressed.
-select = ["E", "F", "I", "B", "ISC"]
+select = ["E", "F", "I", "B", "ISC", "S", "BLE", "RUF100"]
+
+# RUF100 is "unused noqa". A suppression for a rule nobody runs is a lie in the
+# source: `handover.py` carried `# noqa: S603` for months while S was not selected
+# at all, which is part of why nobody noticed there was no security lint.
+
+# S is flake8-bandit. This is a public repository that signs installers, fetches a
+# certificate over a link and executes what it downloads, so the security family is
+# worth the noise it costs. S602 (`shell=True`) stays on and is the one that matters.
 
 ignore = [
+    # "subprocess call: check for execution of untrusted input". It fires on every
+    # `subprocess` call whether or not it is safe, and this repository's rule is
+    # already argument arrays with `shell=False` - so it flags the correct spelling
+    # and has nothing left to say. S602 catches the spelling that is actually wrong.
+    "S603",
+
+    # "Possible SQL injection". There is no database here, and no SQL. It matches a
+    # Textual `DEFAULT_CSS` block, which is a stylesheet.
+    "S608",
+
     # Line length is left to the formatter. Several files here hold block art and
     # ASCII tables whose columns are the point, and a wrapped one is wrong.
     "E501",
@@ -99,6 +123,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests unpack tuples to name what they are asserting about, and a name that
+# RUF059: tests unpack tuples to name what they are asserting about, and a name that
 # documents the shape of a return value is worth more than the warning.
-"tests/*" = ["RUF059"]
+# S101: an assert is what a test IS.
+"tests/*" = ["RUF059", "S101"]

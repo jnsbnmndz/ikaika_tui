@@ -1,17 +1,4 @@
-"""What a project is called, and the one file that records it.
-
-Every project this toolbox produces carries a script manifest, whether it was
-written file by file or cloned from a structure repository. It is what makes a
-directory a project of this toolbox's rather than a directory: scaffolding
-refuses to finish without one, and the generators refuse to run outside one.
-
-The filename lives in `domain/naming.py`, which also knows the one it used to
-have - a project written before the rename is still a project.
-
-Only the four keys below belong to the toolbox. A template is free to keep
-whatever else it needs in the same file, so the rest is read and written back
-untouched, in the order it was found.
-"""
+"""What a project is called, and the one file that records it."""
 
 from dataclasses import dataclass
 
@@ -27,10 +14,8 @@ DEFAULT_VERSION = "0.0.0+1"
 class NotAProjectError(Exception):
     """No script manifest here, so nothing about this tree is safe to assume."""
 
-
 class MalformedScriptManifest(Exception):
     """There is a manifest, but it does not carry the keys every project has."""
-
 
 @dataclass(frozen=True, slots=True)
 class ProjectIdentity:
@@ -48,11 +33,7 @@ class ProjectIdentity:
         description: str = "",
         version: str = DEFAULT_VERSION,
     ) -> "ProjectIdentity":
-        """Fill in what the user did not type, from what they did.
-
-        Title and description are worth asking for and not worth insisting on,
-        so a name alone is enough to produce a complete manifest.
-        """
+        """Fill in what the user did not type, from what they did."""
         resolved_title = title.strip() or name.title
         return cls(
             name=name,
@@ -76,12 +57,7 @@ def new_manifest(identity: ProjectIdentity) -> str:
 
 
 def apply_identity(source: str, identity: ProjectIdentity) -> str:
-    """Stamp `identity` onto an existing manifest, keeping the rest of it.
-
-    A template's manifest is checked before it is rewritten: a clone missing one
-    of the four keys is not an IKAIKA template, and saying so here is better
-    than handing back a project that is subtly not one.
-    """
+    """Stamp `identity` onto an existing manifest, keeping the rest of it."""
     document = json_document.load(source)
     absent = tuple(key for key in REQUIRED_KEYS if key not in document)
     if absent:

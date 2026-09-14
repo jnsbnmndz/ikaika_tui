@@ -1,3 +1,5 @@
+"""The capabilities, in the order the menu numbers them."""
+
 from collections.abc import Iterable
 
 from company_tui.domain.capability import Capability

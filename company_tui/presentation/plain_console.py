@@ -1,3 +1,5 @@
+"""The scriptable `Ui`: plain stdout, used by `list` and `doctor`."""
+
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar
 
@@ -20,7 +22,6 @@ T = TypeVar("T")
 
 class PlainConsole:
     def __init__(self) -> None:
-        # See `close_run_panel`: the run has already been acknowledged once.
         self._result_acknowledged = False
         self._failure = ""
 
@@ -30,12 +31,7 @@ class PlainConsole:
     async def start_run(
         self, workflow: Callable[[], Awaitable[None]], label: str
     ) -> None:
-        """One at a time, in the order they were asked for.
-
-        There is nowhere for a second run to go here: a script has one stdout
-        and one stdin, and two workflows narrating into them at once would be
-        two workflows nobody can read or answer.
-        """
+        """One at a time, in the order they were asked for."""
         await workflow()
 
     def error(self, message: str) -> None:
@@ -96,8 +92,6 @@ class PlainConsole:
         return packs[index]
 
     async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
-        # No tree to draw, so it is asked for. An empty answer keeps what there was,
-        # which is the only sensible reading of pressing Enter on a prompt like this.
         self.write(prompt or "Choose a project")
         typed = (await self.ask(f"Folder [{start}]")).strip()
         return typed or start or None
@@ -192,8 +186,6 @@ class PlainConsole:
         preview: object = None,
         subtitle: str = "",
     ) -> dict[str, OptionValue] | None:
-        # Accepted and ignored: an Update button needs a button. Asking the
-        # question one prompt at a time, there is nothing to keep current.
         """No two panes here — the same flags, asked one at a time."""
         self.write()
         self.write(" › ".join([*trail, title]) if trail else title)
@@ -209,12 +201,7 @@ class PlainConsole:
         return values
 
     async def install_update(self, installer: str, version: str) -> str:
-        """Refused, and named as a refusal rather than as a failure.
-
-        There is no app here to close and reopen - this console prints and exits. The
-        installer is on disk with its path already reported, so saying so is the whole
-        answer.
-        """
+        """Refused, and named as a refusal rather than as a failure."""
         return "installing needs the interactive app; run the installer yourself"
 
     async def working(self, label: str, work: Awaitable[T]) -> T:
@@ -223,15 +210,11 @@ class PlainConsole:
         return await work
 
     async def run_in_panel(self, work: Awaitable[T]) -> T | None:
-        """Nothing to stop here: Ctrl+C is already the terminal's own answer.
-
-        An error is still reported rather than raised, so a scripted run ends
-        with a message and an exit code instead of a traceback.
-        """
+        """Nothing to stop here: Ctrl+C is already the terminal's own answer."""
         self._failure = ""
         try:
             return await work
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - reported, never swallowed
             self._failure = f"{type(error).__name__}: {error}"
             self.error(self._failure)
             return None

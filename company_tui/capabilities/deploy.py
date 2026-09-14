@@ -1,3 +1,5 @@
+"""Ships the current project to an environment."""
+
 from company_tui.domain.capability import Capability, CapabilityInfo
 from company_tui.presentation.ui import Ui
 

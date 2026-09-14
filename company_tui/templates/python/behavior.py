@@ -1,11 +1,4 @@
-"""Python projects, written file by file — the reference for that half of the contract.
-
-React Native shows what a pack that clones looks like. This one shows the other
-shape: the pack produces the whole tree itself, including the
-`ikaika.script.json` that makes it an IKAIKA project, and then hands it to the
-same finalizer so that everything after "the files exist" happens once, in one
-place, identically for every stack.
-"""
+"""Python projects, written file by file — the reference for that half of the contract."""
 
 import sys
 from collections.abc import Mapping
@@ -122,10 +115,6 @@ def _project_files(identity: ProjectIdentity) -> dict[str, str]:
         return template
 
     return {
-        # The CONSTANT, not the string. This was the old filename written
-        # verbatim, so the reference pack scaffolded every new project with a
-        # manifest named after the product's previous name - readable, because
-        # the resolvers accept it, and wrong, because it is what gets written.
         SCRIPT_MANIFEST: new_manifest(identity),
         "pyproject.toml": fill(_PYPROJECT),
         "README.md": fill(_README),

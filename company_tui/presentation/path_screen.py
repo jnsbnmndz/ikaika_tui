@@ -1,14 +1,4 @@
-"""Browsing for a directory instead of remembering where it is.
-
-Opened from a `PATH` field, and it answers with one string: the directory that
-was highlighted when Select was pressed. The full path sits under the tree and
-follows the highlight, because a tree shows you where you are relative to what
-you opened and this is the only thing that says where you are absolutely.
-
-The tree is re-rooted rather than scrolled to go upwards: a `DirectoryTree` can
-only ever show what is beneath its root, so "Up" means opening the parent as a
-new root.
-"""
+"""Browsing for a directory instead of remembering where it is."""
 
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -23,13 +13,7 @@ from company_tui.presentation.screens import DialogScreen
 
 
 class DirectoryOnlyTree(DirectoryTree):
-    """What can be chosen, and none of what tooling leaves lying around.
-
-    Directories always; files only when the field is asking for one, because
-    browsing for a file in a tree that hides files means never finding it. A
-    listing that includes `.git` and every other dot-entry buries the handful
-    worth choosing either way.
-    """
+    """What can be chosen, and none of what tooling leaves lying around."""
 
     def __init__(self, *args, show_files: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -44,8 +28,6 @@ class DirectoryOnlyTree(DirectoryTree):
                 if path.is_dir() or self.show_files:
                     keep.append(path)
             except OSError:
-                # A directory that cannot be stat'ed — a disconnected network
-                # drive, something the user may not read — is simply not offered.
                 continue
         return keep
 
@@ -134,16 +116,11 @@ class PathScreen(DialogScreen[str | None]):
         self._files = files
         self._current = self._start
         self._recent = tuple(recent)
-        """Directories picked before, newest first. Empty is the normal state on a
-        first run, and the block is not drawn at all then."""
+        """Directories picked before, newest first. Empty is the normal state on a."""
 
     @staticmethod
     def _resolve(start: str) -> Path:
-        """The nearest real directory to what the field already says.
-
-        A field holding a path that has not been created yet should still open
-        somewhere useful, so the first parent that does exist is used.
-        """
+        """The nearest real directory to what the field already says."""
         try:
             candidate = Path(start.strip() or ".").expanduser().resolve()
         except (OSError, RuntimeError):
@@ -160,10 +137,6 @@ class PathScreen(DialogScreen[str | None]):
                 id="recent", classes="" if self._recent else "-empty"
             ):
                 for path in self._recent:
-                    # A click jumps the tree there rather than answering outright:
-                    # picking from a history is still choosing where to look, and one
-                    # click that both navigates and submits is a click nobody can take
-                    # back.
                     yield Static(path, classes="recent--entry", markup=False)
             yield DirectoryOnlyTree(str(self._start), id="tree", show_files=self._files)
             yield Static(self._display(self._start), id="chosen-path")
@@ -183,9 +156,6 @@ class PathScreen(DialogScreen[str | None]):
     def _set_current(self, path: Path) -> None:
         self._current = path
         self.query_one("#chosen-path", Static).update(self._display(path))
-        # Which history row, if any, is where the tree now is. Said in the list as
-        # well as in the path line, so a dialog opened on a remembered directory
-        # shows which one it came from.
         shown = self._display(path)
         for entry in self.query(".recent--entry").results(Static):
             entry.set_class(str(entry.render()) == shown, "-chosen")
@@ -198,17 +168,10 @@ class PathScreen(DialogScreen[str | None]):
     def on_directory_tree_directory_selected(
         self, event: DirectoryTree.DirectorySelected
     ) -> None:
-        # Enter on a directory expands it, which is what a tree should do; it is
-        # also the moment to treat that directory as the answer-in-waiting.
         self._set_current(Path(event.path))
 
     def on_click(self, event: events.Click) -> None:
-        """A click on a history row moves the tree to it.
-
-        Read off the widget's own text rather than an index, so the rows and the list
-        cannot drift apart - and guarded by the class, because every other click in
-        this dialog arrives here too.
-        """
+        """A click on a history row moves the tree to it."""
         target = getattr(event, "widget", None)
         if target is None or not target.has_class("recent--entry"):
             return

@@ -1,9 +1,4 @@
-"""What a workflow needs from the user, described rather than asked for.
-
-A capability or template pack declares its flags as `Option`s instead of driving
-a sequence of prompts. That lets one presentation render them all at once as a
-form, and another ask them one at a time, without either knowing the workflow.
-"""
+"""What a workflow needs from the user, described rather than asked for."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -18,72 +13,37 @@ class OptionKind(Enum):
     BOOLEAN = "boolean"
     CHOICE = "choice"
     PATH = "path"
-    """A directory. Typed like text, but a presentation may offer to browse for
-    it — the answer is somewhere on this machine, and remembering exactly where
-    is not something to ask of whoever is filling the form in."""
+    """A directory. Typed like text, but a presentation may offer to browse for."""
 
     FILE = "file"
-    """A file. PATH's other half, and separate because the picker is: browsing
-    for a file in a directory tree means never finding one."""
+    """A file. PATH's other half, and separate because the picker is: browsing."""
 
     MULTI = "multi"
-    """Several of a known set, offered as one tick box per value.
-
-    A single-select dropdown is the wrong control for an argument that takes
-    more than one: it silently accepts one where two were meant, and nothing
-    about it says several are allowed. The answer comes back comma-joined,
-    which is the form a command line already reads a list in."""
+    """Several of a known set, offered as one tick box per value."""
 
     NUMBER = "number"
-    """A number, with the field refusing anything that is not one.
-
-    Its own kind rather than text with a hint, because the hint is advice and
-    this is the difference between a typo caught in the form and one that
-    reaches whatever the command hands its argument to."""
+    """A number, with the field refusing anything that is not one."""
 
     INFO = "info"
     """Not an input: a value the workflow wants shown alongside the fields."""
 
-
 @dataclass(frozen=True, slots=True)
 class Refresh:
-    """An action that re-computes one option's choices.
-
-    A dropdown whose values were FETCHED can go out of date while a form is open,
-    and re-fetching them may mean changing something on the machine - the branch
-    list is brought up to date by deleting local branches whose remote is gone.
-
-    So there are two commands, not one. `preview` reports what acting would do
-    and does nothing; empty output means there is nothing to ask about. `command`
-    acts. A front end runs the first, confirms only if it said something, and
-    runs the second on a yes."""
+    """An action that re-computes one option's choices."""
 
     label: str = "Update"
     command: str = ""
     preview: str = ""
 
     values_command: str = ""
-    """How to read the list back after acting, when that is a separate command.
-
-    A declared refresh CHANGES something and reports what it did - it does not
-    print the new list. The values used to be re-read from the document, and then
-    the document stopped carrying them, so Update reported a success and left the
-    dropdown exactly as it was."""
+    """How to read the list back after acting, when that is a separate command."""
 
     lists_values: bool = False
-    """Whether `command` prints the new values, or a sentence about what it did.
-
-    A plain re-fetch of a list prints the list; a declared refresh acts on the
-    machine and reports, and the values are read back out of the document
-    afterwards. Told apart explicitly rather than by whether `preview` is empty,
-    because that would make one behaviour the side effect of another."""
+    """Whether `command` prints the new values, or a sentence about what it did."""
 
     @property
     def asks_first(self) -> bool:
-        """Whether acting could change something worth confirming.
-
-        A re-fetch of a list changes nothing, so there is nothing to ask about
-        and no dialog to put in the way of a button press."""
+        """Whether acting could change something worth confirming."""
         return bool(self.preview)
 
     @property
@@ -93,12 +53,7 @@ class Refresh:
 
 @dataclass(frozen=True, slots=True)
 class RefreshOutcome:
-    """What running a refresh produced.
-
-    `choices` is the list as it stands AFTER acting, which is the whole point:
-    the values on screen were fetched, and the refresh is what makes them
-    current. Empty means the run failed or had nothing to offer, and the field
-    keeps what it already had rather than emptying itself."""
+    """What running a refresh produced."""
 
     message: str = ""
     choices: tuple[str, ...] = ()
@@ -115,8 +70,7 @@ class Option:
     help: str = ""
     required: bool = False
     template: str = ""
-    """For INFO options: a format string over the other values, so a row can
-    restate what the current input will actually do (`"./{name}"`)."""
+    """For INFO options: a format string over the other values, so a row can."""
 
     minimum: float | None = None
     maximum: float | None = None

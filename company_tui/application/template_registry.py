@@ -1,3 +1,5 @@
+"""The template packs, keyed by stack."""
+
 from collections.abc import Iterable
 
 from company_tui.domain.template_pack import TemplatePack

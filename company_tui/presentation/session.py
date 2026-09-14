@@ -1,26 +1,4 @@
-"""One run and everything it owns.
-
-A session is a workflow's tab: the form it was started from, every line it has
-printed, the task doing the work, and whatever that task is waiting on. The run
-panel renders whichever session is selected rather than owning the run, so
-leaving a session does not end it — come back and the log is still there with
-the work still going.
-
-Which session a line belongs to is decided by `CURRENT_SESSION`, a context
-variable set when a session's task starts. Async tasks inherit the context they
-were created in, so every `write`/`ask`/`confirm` inside a workflow resolves to
-the session that workflow belongs to rather than to whatever happens to be on
-screen. Routing by "the open panel" is exactly the wrong model once there is
-more than one.
-
-A tab outlives the app, but a run does not. What is kept between one launch and
-the next is everything the user put in — the name they gave the tab, the stack
-it belongs to, the form they filled in and what the last run printed — and none
-of what was doing the work. A restored tab is idle, with its output above the
-prompt under a line saying it is from a previous session, because a killed
-subprocess cannot be resumed and a log restored as if it were live would show a
-scaffold that never finished as one that had. See `domain/session_memory.py`.
-"""
+"""One run and everything it owns."""
 
 from __future__ import annotations
 
@@ -47,48 +25,17 @@ TRAIL_SEPARATOR = " › "
 
 HISTORY_OPENED = "── from a previous session{when} ──"
 HISTORY_CLOSED = "── end of previous session ──"
-"""What a restored log is wrapped in.
-
-Marked rather than merely replayed. Output with nothing above it reads as this
-run's output, which for a scaffold that died half way through a clone is a claim
-that a directory exists in a state it does not."""
+"""What a restored log is wrapped in."""
 
 LOG_LIMIT = 500
-"""Lines a session keeps before the oldest fall off the top.
-
-`npm install` alone emits tens of thousands, and N sessions each holding every
-one of them for the life of the app is a leak with a progress bar on it. A cap
-here is a terminal's scrollback; a cap added later is a rewrite of everything
-that reads the log. Tabs outlive the runs in them now, so the number of logs
-being held is the number of tabs left open rather than the number in flight."""
+"""Lines a session keeps before the oldest fall off the top."""
 
 RUN_STAMP = "%Y-%m-%d %H:%M:%S"
-"""A run is something you come back to, so it says when it happened. Absolute
-rather than relative: a tab read an hour later should not have to be worked out
-backwards from "just now"."""
+"""A run is something you come back to, so it says when it happened. Absolute."""
 
 Workflow = Callable[[], Awaitable[None]]
-"""A whole workflow, ready to be run again from the start.
+"""A whole workflow, ready to be run again from the start."""
 
-Kept as a callable rather than a coroutine so a second tab in the same context
-is one more call — the session strip's "+" is "another one of these", not a menu
-walk repeated from memory."""
-
-
-# Glyph, glyph style, body style — per line kind, as theme tokens. Assembled
-# rather than marked up, because process output legitimately contains brackets
-# and must never be parsed as markup.
-#
-# Only tokens that resolve to a literal color may be used here. The `$text-*`
-# tokens are `auto` colors, which pick themselves from the background they are
-# painted on; assembled content has no such background to read, so they come out
-# pure black and the line is invisible.
-#
-# Every glyph is from the geometric or dingbat blocks. A clock face, a stopwatch
-# or a media-control arrow all live in the block terminals render from an emoji
-# font rather than a text one, which comes out double width and in a colour that
-# ignores the theme. The timestamp goes without one instead: dimmed is enough to
-# separate it from the run under it, and nothing legible was available.
 MARKERS: dict[str, tuple[str, str, str]] = {
     "step": ("◆ ", "$accent", ""),
     "ok": ("✓ ", "$success", ""),
@@ -112,13 +59,7 @@ def render_line(message: str, marker: str = "plain") -> Content:
 
 
 def _without_history(lines: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
-    """The log with any previous session's markers taken back out.
-
-    Restored lines are written down again — history is meant to survive more
-    than one restart — but the pair of lines wrapping them is not, or every
-    launch would wrap the last launch's wrapping and the log would end up more
-    divider than output.
-    """
+    """The log with any previous session's markers taken back out."""
     opening = HISTORY_OPENED.split("{", 1)[0]
     return [
         (message, marker)
@@ -156,12 +97,7 @@ _GLYPHS = {
 
 
 class RunSession:
-    """One run: its form, its log, its task, and whatever it is waiting on.
-
-    Every field the run panel used to hold lives here instead, so the panel can
-    be thrown away and rebuilt around whichever session the user picked without
-    the run noticing.
-    """
+    """One run: its form, its log, its task, and whatever it is waiting on."""
 
     def __init__(
         self,
@@ -175,55 +111,36 @@ class RunSession:
         self.id = identifier
         self.name = name
         self.base = name
-        """The label before it was numbered, so siblings are named after the
-        same thing rather than after each other."""
+        """The label before it was numbered, so siblings are named after the."""
         self.workflow = workflow
         self.refresh_runner: object = None
-        """How to re-fetch a fetched choice on this session's form, if the
-        workflow that opened it supplied a way. Set by `load`."""
+        """How to re-fetch a fetched choice on this session's form, if the."""
 
         self.subtitle = ""
         """One line saying what the command is for, shown above its fields."""
 
         self.preview_runner: object = None
-        """What the current answers add up to, as a command line. Supplied by
-        whoever opened the panel, because only they know what running it means."""
+        """What the current answers add up to, as a command line. Supplied by."""
 
-        # Choice made at each step of this session's own navigation, and the
-        # breadcrumb the panel and the dialogs are titled with. It keeps
-        # changing as the workflow walks; `scope` does not.
         self.steps: dict[str, str] = dict(steps or {})
         self.scope: tuple[str, ...] = tuple(self.steps.values())
-        """Where this run belongs, settled when it was made.
-
-        A snapshot rather than a reading of `steps`, because a tab that
-        re-homed itself every time the user chose differently would follow them
-        out of the context it is holding a directory and a log for — which is
-        how one terminal came to carry two stacks' runs. A workflow that walks
-        somewhere else gets a session there instead (`TuiConsole._relocate`)."""
+        """Where this run belongs, settled when it was made."""
         self.answers: dict[str, object] = {}
         """What each step actually chose, so a sibling can repeat it."""
         self.preset: dict[str, object] = dict(preset or {})
         """Answers inherited from the session this one was opened beside."""
 
         self.task: Worker | None = None
-        """The whole workflow. A Textual worker rather than a bare task, so a
-        run started from a keypress can still push a screen of its own."""
+        """The whole workflow. A Textual worker rather than a bare task, so a."""
         self.work: asyncio.Task | None = None
         """The one slow thing inside it that Stop cancels."""
         self.foreground = True
-        """Whether this session still needs the screen to itself. Cleared once
-        it is left running in the background, which is what frees the menu."""
+        """Whether this session still needs the screen to itself. Cleared once."""
         self.result_acknowledged = False
 
         self.log: deque[Content] = deque(maxlen=LOG_LIMIT)
         self.lines: deque[tuple[str, str]] = deque(maxlen=LOG_LIMIT)
-        """The same log, unrendered, for the one reader that outlives the theme.
-
-        A `Content` carries the colours of the theme it was assembled under, so
-        it is what to draw and not what was said. Kept alongside rather than
-        parsed back out of, and capped by the same limit, so the pair cannot
-        drift."""
+        """The same log, unrendered, for the one reader that outlives the theme."""
 
         self.stamp = ""
         """When this tab last ran, in the words the log says it in."""
@@ -235,20 +152,10 @@ class RunSession:
         self.panel_open = False
 
         self.opened = False
-        """Whether a form was ever put up here — which is what makes this a tab
-        rather than a workflow's placeholder.
-
-        Every workflow owns a session from the moment it starts, long before it
-        knows which context it is for: it is what carries the breadcrumb and the
-        answers while the user is still walking menus. Counting those as tabs is
-        how a strip grew an entry nothing had ever been in, and how the chrome
-        came to report a run waiting that was really a menu."""
+        """Whether a form was ever put up here — which is what makes this a tab."""
 
         self.ran = False
-        """Whether anything was ever run here. It is what keeps the tab once
-        its workflow is over: a finished run is a result to read and a form to
-        send again, and dropping it the moment the panel closed left doing the
-        whole thing over as the only way back to it."""
+        """Whether anything was ever run here. It is what keeps the tab once."""
 
         self.started = False
         self.finished = False
@@ -267,12 +174,10 @@ class RunSession:
         self._echo: Callable[[Content], None] | None = None
         self._on_view: Callable[[], None] | None = None
 
-    # ------------------------------------------------------------------ scope
 
     @property
     def place(self) -> tuple[str, ...]:
-        """Where the workflow using this session has got to, which may not be
-        where the session belongs any more."""
+        """Where the workflow using this session has got to, which may not be."""
         return tuple(self.steps.values())
 
     @property
@@ -289,7 +194,6 @@ class RunSession:
     def label(self) -> str:
         return TRAIL_SEPARATOR.join(self.trail or (self.title,))
 
-    # ----------------------------------------------------------- the watchers
 
     def watch(
         self,
@@ -305,7 +209,6 @@ class RunSession:
             self._on_view()
         self._notify(self)
 
-    # ------------------------------------------------------------------- form
 
     def load(
         self,
@@ -316,12 +219,7 @@ class RunSession:
         preview: object = None,
         subtitle: str = "",
     ) -> None:
-        """Set the form up for a run of this session.
-
-        `refresh` is kept on the session rather than on the screen because the
-        screen renders whichever tab is selected: two tabs can hold forms from
-        different workflows, and an Update button has to run the refresh
-        belonging to the form it is drawn on."""
+        """Set the form up for a run of this session."""
         self.refresh_runner = refresh
         self.preview_runner = preview
         self.subtitle = subtitle
@@ -331,29 +229,8 @@ class RunSession:
         self.trail = tuple(trail)
         self.values = defaults_for(self.options)
         for option in self.options:
-            # A dropdown opens on the row that NAMES its default and binds nothing,
-            # and a checklist opens with nothing ticked. Both mean "leave this
-            # argument out", so an untouched form runs the command exactly as
-            # typing its name with no arguments would.
-            #
-            # Binding the default explicitly looks identical and is not.
-            # flutter/build-release refuses a run outright when an argument that
-            # does not apply to the chosen platform is bound, and its remembered
-            # choices key off which arguments were bound at all - so a form that
-            # always passed -Platform would defeat the memory it exists to use.
-            # Settled here so it is true before any widget exists.
             if option.kind in (OptionKind.CHOICE, OptionKind.MULTI) and option.choices:
                 self.values[option.key] = ""
-        # What this tab was answered with last time. Coming back to a run that
-        # failed on one field should not mean typing the other five again, and
-        # the form is the record of what was asked for either way.
-        #
-        # An answer to a CHOICE is dropped when it is no longer one of the
-        # choices. A fetched list changes between runs - the branch answered
-        # last time is exactly the one somebody has since deleted - and a Select
-        # built with a value outside its own options raises
-        # InvalidSelectValueError on mount, which takes the app down rather than
-        # the field. A MULTI keeps whichever of its answers survived.
         self.values.update(
             {
                 key: self._surviving(key, value)
@@ -363,11 +240,6 @@ class RunSession:
         )
         self.panel_open = True
         self.opened = True
-        # A form is opened, not resumed. Whatever the last attempt decided is
-        # over, and a session that backed out of one carries `cancelled` until
-        # something clears it — which made choosing the same stack again answer
-        # the new form with the old refusal before it was ever on screen, and
-        # sent the workflow back to the menu it had just come from.
         self._rearm()
         self._open_prompt()
 
@@ -378,11 +250,7 @@ class RunSession:
         return str(self.preview_runner(dict(self.values)))
 
     def _surviving(self, key: str, value: OptionValue) -> OptionValue:
-        """`value` with anything the option no longer offers taken out.
-
-        Returns it unchanged for a field with no vocabulary, `''` for a choice
-        whose answer is gone, and the remaining members for a multi-select.
-        """
+        """`value` with anything the option no longer offers taken out."""
         option = next((o for o in self.options if o.key == key), None)
         if option is None or not option.choices:
             return value
@@ -396,13 +264,7 @@ class RunSession:
         return value if str(value) in option.choices else ""
 
     def _open_prompt(self) -> None:
-        """Start this run's transcript, unless the last prompt is still unused.
-
-        Backing out of a form and opening it again is nothing happening, and a
-        prompt per attempt stacks up a transcript of no runs. Backing out to a
-        different stack does get its own — but by landing in that stack's own
-        session, which opens on an empty log, rather than by adding a line here.
-        """
+        """Start this run's transcript, unless the last prompt is still unused."""
         prompt = render_line(self.label, marker="prompt")
         if self.log and self.log[-1].plain == prompt.plain:
             return
@@ -413,7 +275,6 @@ class RunSession:
     def store(self, key: str, value: OptionValue) -> None:
         self.values[key] = value
 
-    # -------------------------------------------------------------- lifecycle
 
     async def wait_for_values(self) -> dict[str, OptionValue] | None:
         """Resolve when the user runs, or `None` if they backed out first."""
@@ -421,12 +282,7 @@ class RunSession:
         return None if self.cancelled else dict(self.values)
 
     async def wait_for_next(self) -> bool:
-        """After a run: `True` to set up another one here, `False` to leave.
-
-        Making a second project should not mean walking back out through the
-        menu and picking the same three things again, so a finished panel offers
-        the form back rather than only the door.
-        """
+        """After a run: `True` to set up another one here, `False` to leave."""
         await self.next_decided.wait()
         return self.run_again
 
@@ -453,8 +309,6 @@ class RunSession:
         self.finished = True
         self.ok = ok
         self.write("")
-        # A failure has already been reported where it happened; closing with
-        # the same words again would just make it look like it went wrong twice.
         if message and message != self.failure:
             self.write(message, marker="ok" if ok else "error")
         self.write("Run again to make another, or Esc to return to the menu.")
@@ -476,8 +330,6 @@ class RunSession:
         """Back to the form, with the finished run left above it as history."""
         self._rearm()
 
-        # Reads as a shell: the last run stays above, and this one starts with a
-        # fresh prompt rather than pretending nothing came before it.
         self._open_prompt()
         self.changed()
 
@@ -491,18 +343,12 @@ class RunSession:
         self.changed()
 
     def report_failure(self, error: BaseException) -> str:
-        """Show a workflow's unhandled error here instead of losing the app.
-
-        A capability that raises is a bug, but taking the whole interface down
-        and printing a traceback over the terminal tells the user less than the
-        message does, and loses everything the run had already reported.
-        """
+        """Show a workflow's unhandled error here instead of losing the app."""
         self.failure = f"{type(error).__name__}: {error}"
         self.write(self.failure, marker="error")
         self.changed()
         return self.failure
 
-    # --------------------------------------------------------------- the log
 
     def write(self, message: str, marker: str = "plain") -> None:
         content = render_line(message, marker)
@@ -512,42 +358,19 @@ class RunSession:
             self._echo(content)
 
     def transcript(self) -> str:
-        """Everything this tab has printed, as one block of text.
-
-        Read off the log rather than off the widget showing it: the panel wraps
-        each line to whatever width the terminal pane happens to be, and a
-        transcript broken at the column the window was that afternoon is not
-        what anyone pasting it wants. The rendered text, though — glyphs and
-        all — because those are what the user is looking at, and a copy that
-        quietly drops the `$` off the prompts is a copy of something else.
-        """
+        """Everything this tab has printed, as one block of text."""
         return "\n".join(content.plain for content in self.log)
 
     def clear_log(self) -> None:
-        """Empty the terminal, leaving the prompt this run started under.
-
-        The prompt goes back because a cleared terminal is still this tab's
-        terminal, and that line is the only place the panel says which stack
-        and which workflow it belongs to. Clearing to nothing at all would take
-        the tab's name off its own output.
-        """
+        """Empty the terminal, leaving the prompt this run started under."""
         self.log.clear()
         self.lines.clear()
         self._open_prompt()
         self.changed()
 
-    # ------------------------------------------------------------- remembering
 
     def to_memory(self) -> RememberedSession:
-        """This tab as it deserves to come back: answers, not work.
-
-        `scope` is written down in its own right rather than left to be read
-        back out of `steps`. The two part company the moment a workflow walks
-        back to re-ask a step — `_enter_step` trims `steps` so the breadcrumb
-        corrects itself, while the scope the tab was created under stays where
-        it is. Read back from a trimmed `steps`, a React Native tab comes back
-        belonging to `("Scaffold",)` and appears in no strip at all.
-        """
+        """This tab as it deserves to come back: answers, not work."""
         return RememberedSession(
             name=self.name,
             base=self.base,
@@ -561,13 +384,7 @@ class RunSession:
         )
 
     def replay(self, remembered: RememberedSession) -> None:
-        """Take up what a previous run of the app left here.
-
-        The form comes back filled and the output comes back marked as over.
-        Nothing about the run itself does: a restored tab is idle, and the next
-        thing written under this is the prompt of a run that has not happened
-        yet.
-        """
+        """Take up what a previous run of the app left here."""
         self.scope = tuple(remembered.scope) or self.scope
         self.title = remembered.title
         self.trail = tuple(remembered.trail)
@@ -583,7 +400,6 @@ class RunSession:
             self.write(message, marker)
         self.write(HISTORY_CLOSED, marker="time")
 
-    # ----------------------------------------------------------- the question
 
     async def prompt(self, question: str) -> str:
         """Ask in this session's terminal, and block only this session."""
@@ -608,15 +424,7 @@ class RunSession:
 
 
 class SessionRegistry:
-    """Every session there is, in one place, whatever context made it.
-
-    Each context gets its own strip, but not its own registry: a session that
-    only existed inside its own context would be reachable only by walking the
-    menus back to it from memory — still holding a directory, possibly waiting
-    on a question. Kept together, every run can be counted from anywhere, which
-    is what lets the chrome say how many are going, `Ctrl+B` reach the one that
-    needs an answer, and each menu card say what is happening behind it.
-    """
+    """Every session there is, in one place, whatever context made it."""
 
     def __init__(self, on_change: Callable[[RunSession | None], None] | None = None) -> None:
         self._sessions: list[RunSession] = []
@@ -646,41 +454,20 @@ class SessionRegistry:
     def restore(
         self, remembered: RememberedSession, workflow: Workflow
     ) -> RunSession:
-        """Put a tab back as the app found it written down.
-
-        With no workflow of its own: nothing is driving a restored tab, which is
-        exactly what lets the next workflow to walk into that context pick it up
-        (`TuiConsole._relocate`) instead of opening a second one beside it. That
-        is the whole of "restore in place" — no menu is skipped and no run is
-        resumed; the tab is simply already there when the user arrives.
-        """
+        """Put a tab back as the app found it written down."""
         session = self.create(
             remembered.base or remembered.name,
             workflow,
             steps=dict(remembered.steps),
         )
-        # Replayed before it is named, because the name has to be free in the
-        # strip this tab actually belongs to, and until the scope is back that
-        # is not known.
         session.replay(remembered)
         session.name = self._unique(remembered.name, session.scope, except_for=session)
-        # And not holding the screen either. A session is born wanting the
-        # foreground because a session is normally born to run something, and
-        # what clears it is being left running in the background — which never
-        # happens to a tab that was never started. Left set, every restored tab
-        # counts as one more thing the menu loop is waiting on, and the loop
-        # stops coming back: the app draws its own empty frame and the only key
-        # that still does anything is the one that quits.
         session.foreground = False
         self._on_change(session)
         return session
 
     def remembered(self) -> tuple[RememberedSession, ...]:
-        """Every tab worth writing down, in the order they are shown.
-
-        Tabs, not sessions: a workflow between two menus owns a session too, and
-        restoring one would put an entry in a strip that nothing was ever in.
-        """
+        """Every tab worth writing down, in the order they are shown."""
         return tuple(s.to_memory() for s in self._sessions if s.opened)
 
     def remove(self, session: RunSession) -> None:
@@ -702,28 +489,11 @@ class SessionRegistry:
         return tuple(s for s in self._sessions if s.status.live)
 
     def visible(self, scope: tuple[str, ...]) -> tuple[RunSession, ...]:
-        """This context's tabs, and only this context's.
-
-        Flutter shows Flutter. A run from anywhere else is not here at all —
-        a tail of foreign tabs is the thing a strip per context exists to be
-        rid of, and it would grow with every stack the user ever opened. What
-        keeps such a run from being forgotten is `running_under`, which puts
-        the count on the menu card that leads back to it, the running total in
-        the chrome, and `Ctrl+B` to step straight into whichever run needs
-        something.
-
-        Tabs, not sessions: a workflow still walking the menus owns a session
-        too, and it is nothing you could open, close, rename or run in.
-        """
+        """This context's tabs, and only this context's."""
         return tuple(s for s in self._sessions if s.opened and s.scope == scope)
 
     def running_under(self, place: tuple[str, ...]) -> int:
-        """How many runs are going at or below a point in the menus.
-
-        By prefix rather than by exact context, so a stack's card counts that
-        stack's runs and `Scaffold`'s card counts all of them — every menu says
-        what is happening behind each door before the user opens it.
-        """
+        """How many runs are going at or below a point in the menus."""
         return sum(
             1
             for session in self._sessions
@@ -731,12 +501,7 @@ class SessionRegistry:
         )
 
     def summary(self) -> str:
-        """What the chrome says about runs the user cannot currently see.
-
-        Counted over tabs rather than sessions. A workflow between two menus is
-        not a run waiting to be read, and a header that said so sent the user
-        looking for something that was never there.
-        """
+        """What the chrome says about runs the user cannot currently see."""
         tabs = [s for s in self._sessions if s.opened]
         if not tabs:
             return ""
@@ -755,15 +520,7 @@ class SessionRegistry:
         scope: tuple[str, ...],
         except_for: RunSession | None = None,
     ) -> str:
-        """A name free in the one strip it will be seen in.
-
-        Numbered against that strip rather than against every session there is,
-        so each context starts at one: the second stack you scaffold opens on
-        its own first tab instead of inheriting a number from the first.
-
-        `except_for` is the session being named. Without it a tab restored under
-        the name it already has collides with itself and comes back as "… 2".
-        """
+        """A name free in the one strip it will be seen in."""
         taken = {
             s.name
             for s in self._sessions

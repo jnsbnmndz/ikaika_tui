@@ -1,17 +1,4 @@
-"""The recently-picked directories: the ordering rules, the store, and the picker.
-
-Two things are worth testing hardest.
-
-The ORDERING, because it is the whole data structure. Newest first, no duplicates,
-capped - and a path picked again has to MOVE rather than be appended, or the list stops
-being a history and becomes a log.
-
-The STORE'S TWO READS, because they are deliberately different. `recent()` filters out
-what is not a directory today, so an unmounted drive is not offered; `remember()` reads
-the file RAW, so writing does not permanently forget the projects on that drive.
-Confusing the two is how a history quietly empties itself the first time somebody
-unplugs a disk.
-"""
+"""The recently-picked directories: the ordering rules, the store, and the picker."""
 
 import unittest
 from pathlib import Path
@@ -30,8 +17,6 @@ class Ordering(unittest.TestCase):
         self.assertEqual(("b", "a"), remember(("a",), "b"))
 
     def test_a_repeat_moves_rather_than_duplicating(self):
-        # THE POINT OF THE WHOLE FUNCTION. Appending would leave the directory
-        # somebody uses every day drifting down the list.
         self.assertEqual(("a", "c", "b"), remember(("c", "b", "a"), "a"))
 
     def test_the_list_is_capped(self):
@@ -88,9 +73,6 @@ class TheStore(unittest.TestCase):
         self.assertEqual((str(here),), store.recent())
 
     def test_but_it_is_not_forgotten_by_writing(self):
-        # THE REGRESSION THIS GUARDS: `remember` reading through `recent()` would
-        # write back the filtered list, so a project on a drive that was unplugged
-        # this morning would be gone for good rather than back this afternoon.
         store, folder = self._store()
         unmounted = folder / "unmounted"
         unmounted.mkdir()
@@ -125,9 +107,6 @@ class ThePicker(unittest.IsolatedAsyncioTestCase):
         def _took(self, answer) -> None:
             self.chosen = answer
 
-    # A pushed screen is its own DOM tree, so these query `app.screen` rather than
-    # `app` - `App.query` does not reach into it, which reads as "the widget was never
-    # composed" and is not.
     async def test_the_history_is_listed(self):
         with TemporaryDirectory() as folder:
             first = Path(folder) / "one"
@@ -141,7 +120,6 @@ class ThePicker(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app.screen.query_one("#recent").has_class("-empty"))
 
     async def test_no_history_hides_the_block_entirely(self):
-        # An empty "Recent" heading is a promise the app is not keeping.
         with TemporaryDirectory() as folder:
             app = self._App((), folder)
             async with app.run_test() as pilot:
@@ -150,7 +128,6 @@ class ThePicker(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([], list(app.screen.query(".recent--entry")))
 
     async def test_clicking_a_row_moves_the_tree_without_answering(self):
-        # One click that both navigates and submits is a click nobody can take back.
         with TemporaryDirectory() as folder:
             elsewhere = Path(folder) / "elsewhere"
             elsewhere.mkdir()
@@ -160,12 +137,6 @@ class ThePicker(unittest.IsolatedAsyncioTestCase):
                 await pilot.click(".recent--entry")
                 await pilot.pause()
                 tree = app.screen.query_one(DirectoryTree)
-                # BOTH SIDES RESOLVED, because the picker resolves and a Windows
-                # temp directory may be an 8.3 short path. CI's runner hands out
-                # C:/Users/RUNNER~1/... and the picker expands it to
-                # C:/Users/runneradmin/... - one directory, two spellings. Comparing
-                # them raw passes on any machine whose user name is short enough not
-                # to shorten, which is exactly how this passed here and failed there.
                 self.assertEqual(elsewhere.resolve(), Path(str(tree.path)).resolve())
                 self.assertIsNone(app.chosen, "navigating is not answering")
 

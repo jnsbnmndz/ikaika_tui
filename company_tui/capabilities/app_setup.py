@@ -1,28 +1,4 @@
-"""Carrying this machine's configuration out as one JSON file, and back in.
-
-Settings live in TOML beside a repository, which is the right place for a file a
-team edits together. This is the other need: a new laptop, a rebuilt machine, or
-a colleague who should have the same setup - one file, moved, and everything
-matches. It reuses the run panel like Settings does, so the same form is on the
-left and the same terminal on the right saying exactly which file was touched.
-
-
-EXPORT WRITES A FILE. IMPORT WRITES YOUR SETTINGS.
-
-Those are not the same risk, so they are not treated the same way. Export names
-the file and refuses to overwrite one unless told to. Import shows every value it
-read and every problem it found, and writes nothing until the form is submitted
-again - because an import is a settings edit that arrives from outside, and the
-one thing worse than a typo is a typo somebody else made.
-
-
-IMPORTING REPORTS WHAT IT IGNORED
-
-`read_document` is deliberately forgiving: an unreadable field keeps the value
-already in place rather than failing the whole file. That is only defensible if
-the gaps are visible, so every problem it found is printed. "Imported" over a
-document half of which was skipped is the outcome this exists to avoid.
-"""
+"""Carrying this machine's configuration out as one JSON file, and back in."""
 
 import json
 from pathlib import Path
@@ -68,8 +44,6 @@ class AppSetupCapability(Capability):
 
     async def execute(self) -> int:
         while True:
-            # Re-read each time round: the previous pass may have imported the
-            # settings this form is about to show.
             values = await self._console.open_run_panel(
                 "App Setup", self._options(self._config.settings())
             )
@@ -156,8 +130,6 @@ class AppSetupCapability(Capability):
         if not raw:
             return ("No file was given.", False)
 
-        # expanduser, because a form is a place people type ~ and a Path that
-        # keeps it makes a directory literally called "~" on the first write.
         path = Path(raw).expanduser()
         if action == IMPORT:
             return await self._import(path, values)
@@ -215,8 +187,6 @@ class AppSetupCapability(Capability):
         for key in sorted(settings.scripts):
             self._console.write(f"{key} scripts: {settings.scripts[key].described}")
 
-        # Printed before the write, so a document that half-applied says so in
-        # the same breath as saying it applied.
         for problem in problems:
             self._console.write(f"ignored: {problem}")
 

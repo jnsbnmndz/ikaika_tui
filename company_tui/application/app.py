@@ -1,3 +1,5 @@
+"""Walks the capability menu and hands each choice to the console as a run."""
+
 from company_tui.application.registry import CapabilityRegistry
 from company_tui.domain.capability import CANCELLED, Capability
 from company_tui.presentation.ui import Ui
@@ -9,12 +11,7 @@ class Application:
         self._registry = registry
 
     async def run(self, start: str = "") -> int:
-        """The menu loop, optionally opening on one capability.
-
-        `start` is spent on the first pass and not remembered: coming back from that
-        capability has to reach the menu, or the rest of the toolbox is unreachable
-        to anyone who launched it this way.
-        """
+        """The menu loop, optionally opening on one capability."""
         while True:
             capability = await self._console.choose_capability(
                 self._registry.all(), start
@@ -23,11 +20,6 @@ class Application:
             if capability is None:
                 self._console.write("Goodbye.")
                 return 0
-            # Handed over rather than awaited: a presentation that can show more
-            # than one run at a time needs a task per run, and needs to be able
-            # to start this same workflow again for a second one. This returns
-            # when the workflow stops needing the screen, which is not the same
-            # as when it finishes.
             await self._console.start_run(
                 lambda item=capability: self._work(item), capability.info.name
             )

@@ -1,12 +1,4 @@
-"""React Native projects, cloned from the IKAIKA structure repository.
-
-Cloning is the easy half. A clone is a copy of somebody else's project until it
-is told who it is, so the sequence here is: check the tools exist, clear the
-destination with the user watching, clone, write down which revision arrived,
-then stamp the identity across `ikaika.script.json` and Expo's `app.json` and
-start a repository of its own. Stopping at any point takes the directory with
-it, because a half-adopted clone is worse than no directory at all.
-"""
+"""React Native projects, cloned from the IKAIKA structure repository."""
 
 import asyncio
 from collections.abc import Mapping
@@ -52,13 +44,7 @@ TEMPLATE = TemplateSource(
 SCRIPTS = TemplateSource(
     url="https://github.com/JDM-Github/react_native_scripts.git"
 )
-"""The repository the build workflows come from.
-
-Cloned once into the shared store rather than into each project, which is what
-makes editing a template there mean editing it for every React Native project on
-the machine. Its `ikaika.script.json` is what decides which workflows exist; this
-file names the repository and nothing else about it.
-"""
+"""The repository the build workflows come from."""
 
 GIT_TOOL = ToolRequirement("git", f"clones the {STACK_NAME} template")
 NPM_TOOL = ToolRequirement("npm", "installs project dependencies", required=False)
@@ -83,12 +69,7 @@ HISTORY_OPTION = Option(
 
 
 def new_project_options(source: TemplateSource, parent: str = ".") -> tuple[Option, ...]:
-    """The form for a new project, showing the template it will actually use.
-
-    The source is a row rather than a constant in this file because it can be
-    repointed or pinned in the settings file, and a form that still advertised the
-    default would be quietly lying about what is about to be cloned.
-    """
+    """The form for a new project, showing the template it will actually use."""
     return (
         *project_options(parent),
         INSTALL_OPTION,
@@ -155,9 +136,6 @@ async def scaffold_new_project(
             ),
         )
     except (NotAProjectError, CannotStampIdentity) as error:
-        # The clone is not a template this toolbox can finish, and an unfinished
-        # one still answers to the template's name in four places. Nothing is
-        # kept rather than handing back a project that is subtly not one.
         await _discard(root, services)
         return PackActionResult(
             available=True, message=f"{error} Nothing was kept.", exit_code=1
@@ -171,8 +149,6 @@ async def scaffold_new_project(
         services.console.write(
             f"{RAW}Only problems are shown. This usually takes a few minutes."
         )
-        # npm is thousands of lines of nothing and one line that matters, and
-        # the run's own narration is what gets lost if all of it comes through.
         watcher = QuietRun(services.console.write)
         install = await services.process_runner.stream(
             ("npm", "install", "--prefix", str(root)), watcher
@@ -263,10 +239,6 @@ async def run_script(
 
 
 async def build(services: PackServices) -> PackActionResult:
-    # Reached when the store is readable and declares nothing Build can offer —
-    # a store that could not be read says so on the stack menu long before here.
-    # A section with no template and no filename is a workflow; one carrying
-    # both is a generator, and those are Scaffold's Components.
     return PackActionResult(
         available=False,
         message=(
@@ -385,7 +357,6 @@ export function use__PASCAL__(initial: string = "") {
   return { __CAMEL__, set__PASCAL__, reset };
 }
 """
-
 
 def _fill(template: str, name: ProjectName) -> str:
     for token, value in (

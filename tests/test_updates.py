@@ -1,9 +1,4 @@
-"""The update check: version comparison, which release gets offered, and reporting.
-
-Version comparison is the part worth testing hardest. It is four numbers with one
-of them allowed to be unknown, and every wrong answer is silent: too eager and
-people are offered a downgrade, too shy and a real update is never mentioned.
-"""
+"""The update check: version comparison, which release gets offered, and reporting."""
 
 import asyncio
 import unittest
@@ -50,8 +45,6 @@ class ParsingVersions(unittest.TestCase):
             self.assertEqual("1.2.3+4", parse_version(raw).text, raw)
 
     def test_a_tag_without_a_build_number_reports_it_as_unknown(self):
-        # A distinct value from any real build number, so "absent" and "+0" are
-        # not the same answer - see test_build_zero_is_a_real_build_number.
         self.assertEqual(UNKNOWN_BUILD, parse_version("v2.0.0").build)
         self.assertEqual("2.0.0", parse_version("v2.0.0").text)
 
@@ -62,9 +55,6 @@ class ParsingVersions(unittest.TestCase):
 
 class ComparingVersions(unittest.TestCase):
     def test_a_higher_name_wins_whatever_the_build_numbers_say(self):
-        # The build number rises globally, so this pairing cannot happen from the
-        # release workflow - but a hand-made tag can produce it, and the name is
-        # what a person reads.
         self.assertTrue(parse_version("1.2.0+3").newer_than(parse_version("1.1.9+7")))
 
     def test_the_build_number_settles_the_same_name(self):
@@ -75,20 +65,12 @@ class ComparingVersions(unittest.TestCase):
         self.assertFalse(parse_version("1.0.0+7").newer_than(parse_version("1.0.0+7")))
 
     def test_an_unknown_build_number_abstains_rather_than_counting_as_zero(self):
-        # THE REGRESSION THIS GUARDS is `newer_than`'s short-circuit, not the
-        # sentinel's value. Without it, an installed 1.0.0+2 compares NEWER than a
-        # release tagged v1.0.0, so re-offering the same version reads as a
-        # downgrade - and comparing the other way, a real update goes unmentioned.
         installed = parse_version("1.0.0+2")
         offered = parse_version("v1.0.0")
         self.assertFalse(offered.newer_than(installed))
         self.assertFalse(installed.newer_than(offered))
 
     def test_build_zero_is_a_real_build_number_not_a_missing_one(self):
-        # WHY THE SENTINEL IS NEGATIVE. With 0 as "unknown", `1.0.0+0` - the first
-        # build of a version, which the release workflow does produce - is
-        # indistinguishable from a tag that published no build number, so the
-        # short-circuit fires and +1 stops counting as newer than +0.
         self.assertTrue(parse_version("1.0.0+1").newer_than(parse_version("1.0.0+0")))
         self.assertFalse(parse_version("1.0.0+0").newer_than(parse_version("1.0.0+1")))
         self.assertEqual("1.0.0+0", parse_version("1.0.0+0").text)
@@ -101,42 +83,27 @@ class ComparingVersions(unittest.TestCase):
         self.assertFalse(parse_version("9.9.9").newer_than(parse_version("nonsense")))
 
     def test_patch_ordering_is_numeric_not_lexical(self):
-        # "10" < "9" as strings, which is the classic way this breaks.
         self.assertTrue(parse_version("1.0.10").newer_than(parse_version("1.0.9")))
 
 
 class DecidingWhatIsOfficial(unittest.TestCase):
     def test_both_signals_have_to_agree(self):
         self.assertTrue(Release(tag="v1.0.0-released", prerelease=False).official)
-        # Tagged official but published as a prerelease.
         self.assertFalse(Release(tag="v1.0.0-released", prerelease=True).official)
-        # Published as a release but tagged as a debug build.
         self.assertFalse(Release(tag="v1.0.0", prerelease=False).official)
 
     def test_a_build_number_in_the_tag_does_not_hide_the_suffix(self):
-        # The release workflow tags `v<x.y.z>+<n>-released`, so the suffix is no
-        # longer the end of a bare name.
         release = Release(tag="v1.0.0+8-released", prerelease=False)
         self.assertTrue(release.official)
         self.assertEqual(8, release.version.build)
 
     def test_the_suffix_has_to_come_after_the_build_number(self):
-        # WHY THE TAG IS `v1.0.0+8-released` AND NOT `v1.0.0-released+8`, which is
-        # semver's ordering and would be the obvious way to write it. `official`
-        # asks what the tag ENDS WITH, so the semver spelling reads as a debug
-        # build - and `include_prereleases` is off, so it would never be offered
-        # at all. Nothing would report an error; the update would just never come.
         wrong = Release(tag="v1.0.0-released+8", prerelease=False)
         self.assertFalse(wrong.official)
 
 
 class OfferingABuildOfTheSameVersion(unittest.TestCase):
-    """What putting the build number in the tag is actually for.
-
-    Before it, both sides of this comparison were the same three numbers and the
-    build abstained, so a rebuild of the installed version could never be offered
-    - which is the whole reason the number rises globally.
-    """
+    """What putting the build number in the tag is actually for."""
 
     def test_a_higher_build_of_the_installed_version_is_newer(self):
         installed = parse_version("1.0.0+2")
@@ -173,9 +140,6 @@ class ChoosingARelease(unittest.TestCase):
         self.assertEqual("v3.0.0", chosen.tag)
 
     def test_the_feeds_own_order_is_not_trusted(self):
-        # GitHub returns releases by creation date. A patch published for an old
-        # branch after a newer release comes back first, and taking the head of
-        # the list would offer a downgrade.
         by_date = (
             Release(tag="v1.0.1-released", prerelease=False),
             Release(tag="v2.0.0-released", prerelease=False),
@@ -194,8 +158,6 @@ class ChoosingARelease(unittest.TestCase):
 
 class ValidatingTheSource(unittest.TestCase):
     def test_a_url_pasted_into_the_repository_field_is_refused(self):
-        # Left to the API this is a 404, which reads as "no releases" rather than
-        # "that is not a repository name".
         source = UpdateSource(repository="https://github.com/owner/name")
         self.assertIn("is not owner/name", source.problem)
 
@@ -207,8 +169,6 @@ class ValidatingTheSource(unittest.TestCase):
         self.assertFalse(UpdateSource(repository="").configured)
 
     def test_the_shipped_default_is_configured(self):
-        # The default is a real repository now, so a bare UpdateSource is usable -
-        # which is also what Advanced's "reset to defaults" writes.
         self.assertEqual(DEFAULT_REPOSITORY, UpdateSource().repository)
         self.assertTrue(UpdateSource().configured)
         self.assertEqual("", UpdateSource().problem)
@@ -325,19 +285,12 @@ class _RealDownloads(AssetDownloadPort):
 
 
 class Channels(unittest.TestCase):
-    """Three answers, and the middle one is the reason this is not a boolean.
-
-    `prerelease` has to keep offering the prerelease line even when an official release
-    is newer. That is the whole point for somebody testing debug builds, and it is the
-    case a boolean could not express: `include_prereleases = true` meant "either kind,
-    whichever is newest", which drifts onto the official line the moment one ships.
-    """
+    """Three answers, and the middle one is the reason this is not a boolean."""
 
     OFFICIAL = Release(tag="v2.0.0+9-released", prerelease=False)
     DEBUG = Release(tag="v1.5.0+8", prerelease=True)
     ODD = Release(tag="v3.0.0+7", prerelease=False)
-    """Published as a full release but tagged without -released, so `official` says no.
-    Something other than the workflow made it."""
+    """Published as a full release but tagged without -released, so `official` says no."""
 
     def _chosen(self, channel, releases=None):
         source = UpdateSource(repository="a/b", channel=channel)
@@ -347,8 +300,6 @@ class Channels(unittest.TestCase):
         self.assertEqual(self.OFFICIAL.tag, self._chosen(CHANNEL_OFFICIAL).tag)
 
     def test_prerelease_ignores_a_newer_official_release(self):
-        # THE POINT OF THE THIRD CHANNEL. 2.0.0+9 is newer than 1.5.0+8 and is not
-        # offered, because somebody on this channel is tracking debug builds.
         self.assertEqual(self.DEBUG.tag, self._chosen(CHANNEL_PRERELEASE).tag)
 
     def test_any_takes_whichever_is_newest(self):
@@ -358,8 +309,6 @@ class Channels(unittest.TestCase):
         self.assertIsNone(self._chosen(CHANNEL_PRERELEASE, (self.OFFICIAL,)))
 
     def test_a_release_that_is_neither_belongs_to_any_alone(self):
-        # `official` wants "not prerelease AND tagged -released", `prerelease` asks how
-        # it was published. A release marked neither is nobody's channel but `any`.
         self.assertIsNone(self._chosen(CHANNEL_OFFICIAL, (self.ODD,)))
         self.assertIsNone(self._chosen(CHANNEL_PRERELEASE, (self.ODD,)))
         self.assertEqual(self.ODD.tag, self._chosen(CHANNEL_ANY, (self.ODD,)).tag)
@@ -408,8 +357,6 @@ class DownloadingAndInstalling(unittest.TestCase):
         self.assertEqual([], downloads.fetched, "nothing to fetch")
 
     def test_anyway_reinstalls_the_version_already_running(self):
-        # A repair. The installer removes the old copy first either way, so this
-        # rebuilds the install rather than layering on it.
         message, ok, console, downloads = self._run(
             {"anyway": True}, version="0.2.0+3", latest="v0.2.0+3-released"
         )
@@ -418,8 +365,6 @@ class DownloadingAndInstalling(unittest.TestCase):
         self.assertEqual(1, len(console.installed), "anyway installs as well as fetches")
 
     def test_anyway_downloads_without_the_download_box(self):
-        # Two boxes for one intent would be a trap: ticking "install anyway" and
-        # forgetting "download" would report success having fetched nothing.
         _, _, _, downloads = self._run({"anyway": True})
         self.assertEqual(1, len(downloads.fetched))
 
@@ -436,8 +381,6 @@ class DownloadingAndInstalling(unittest.TestCase):
         self.assertIn("Downloaded", message)
 
     def test_a_refused_install_reports_it_and_says_where_the_file_is(self):
-        # The app can decline - somebody answers no to the confirmation, or the
-        # handover cannot be armed. The download still happened and is still usable.
         message, ok, console, _ = self._run(
             {"download": True, "install": True}, install_problem="Left alone"
         )
@@ -447,15 +390,7 @@ class DownloadingAndInstalling(unittest.TestCase):
 
 
 class EachLineUpdatesItself(unittest.TestCase):
-    """A release that cannot replace this build is never offered.
-
-    A debug build and a release build are two separate INSTALLS - own directory,
-    own uninstall entry, own command - so a debug installer does not update a
-    release install, it installs beside it. Offered anyway it is not a bad update
-    but a silent no-op: the installer succeeds, a second app appears, the running
-    build is the version it always was, and the same offer comes back at every
-    launch. That is what this stops.
-    """
+    """A release that cannot replace this build is never offered."""
 
     OFFICIAL = Release(tag="v1.0.0+9-released", prerelease=False)
     DEBUG = Release(tag="v1.1.0+20", prerelease=True)
@@ -468,29 +403,21 @@ class EachLineUpdatesItself(unittest.TestCase):
         )
 
     def test_a_release_build_is_never_offered_a_debug_build(self):
-        # Even though the debug build carries the higher version: debug builds are
-        # cut far more often, so on `any` this is the usual case, not the corner.
         self.assertEqual(self.OFFICIAL, self._choose(BUILD_RELEASE))
 
     def test_a_debug_build_is_never_offered_an_official_release(self):
         self.assertEqual(self.DEBUG, self._choose(BUILD_DEBUG))
 
     def test_the_channel_cannot_overrule_the_line(self):
-        # An installed build has exactly one line that can replace it, so the
-        # setting has nothing left to choose - and a setting that could choose
-        # wrongly here is the loop this whole class exists to close.
         for channel in (CHANNEL_OFFICIAL, CHANNEL_PRERELEASE, CHANNEL_ANY):
             self.assertEqual(self.OFFICIAL, self._choose(BUILD_RELEASE, channel), channel)
             self.assertEqual(self.DEBUG, self._choose(BUILD_DEBUG, channel), channel)
 
     def test_nothing_on_this_line_is_offered_nothing(self):
-        # Rather than falling back to the other line, which is the bug.
         self.assertIsNone(self._choose(BUILD_DEBUG, releases=(self.OFFICIAL,)))
         self.assertIsNone(self._choose(BUILD_RELEASE, releases=(self.DEBUG,)))
 
     def test_a_source_checkout_still_follows_the_channel(self):
-        # Nothing was installed there and nothing can be replaced, so the question
-        # the channel asks is genuinely open and it keeps the last word.
         self.assertEqual(self.DEBUG, self._choose(BUILD_UNKNOWN, CHANNEL_ANY))
         self.assertEqual(self.OFFICIAL, self._choose(BUILD_UNKNOWN, CHANNEL_OFFICIAL))
         self.assertEqual(self.DEBUG, self._choose(BUILD_UNKNOWN, CHANNEL_PRERELEASE))
@@ -508,8 +435,6 @@ class ReadingTheLineOffTheCommand(unittest.TestCase):
         self.assertEqual(BUILD_RELEASE, build_kind(r"C:\Programs\dti\dti.exe"))
 
     def test_nothing_is_no_line_at_all(self):
-        # `python -m company_tui`: the executable is the interpreter, which is a
-        # build of nothing, and there is no install to replace either.
         self.assertEqual(BUILD_UNKNOWN, build_kind(""))
 
     def test_the_case_of_the_name_does_not_decide_it(self):
@@ -517,12 +442,7 @@ class ReadingTheLineOffTheCommand(unittest.TestCase):
 
 
 class RunningAnInstallerFromDisk(unittest.TestCase):
-    """The file chooser: a setup program picked by hand, with no feed involved.
-
-    It exists for testing a build before anybody else gets it, so everything the
-    published path does first - channel, comparison, download - is exactly what
-    has to be out of the way.
-    """
+    """The file chooser: a setup program picked by hand, with no feed involved."""
 
     def _run(self, values, *, repository="a/b", install_problem=""):
         console = _Console(install_problem=install_problem)
@@ -553,28 +473,19 @@ class RunningAnInstallerFromDisk(unittest.TestCase):
         self.assertEqual(1, len(console.installed))
         installer, version = console.installed[0]
         self.assertEqual(str(target), installer)
-        # Named by its filename, because that is all anything knows about it. A
-        # made-up version number in the confirmation would be worse.
         self.assertEqual(target.name, version)
 
     def test_the_feed_is_never_asked(self):
-        # No check, no comparison, no download - that is the whole point of it.
         _, _, _, feed = self._run({INSTALLER_KEY: str(self._installer())})
         self.assertEqual(0, feed.asked)
 
     def test_it_works_with_no_repository_configured(self):
-        # A machine somebody was handed a build to test on is exactly the machine
-        # with nothing set up, so the source check must not be in front of this.
         target = self._installer()
         message, ok, console, _ = self._run({INSTALLER_KEY: str(target)}, repository="")
         self.assertTrue(ok, message)
         self.assertEqual(1, len(console.installed))
 
     def test_it_says_it_does_not_know_what_the_file_is(self):
-        # A debug build installs BESIDE the release one rather than over it, so an
-        # installer picked off disk may not replace the copy running this - which
-        # is what makes it useful for testing and what makes it baffling when it
-        # is not expected. Said in the terminal, where it is read.
         target = self._installer()
         _, _, console, _ = self._run({INSTALLER_KEY: str(target)})
         self.assertTrue(
@@ -599,8 +510,6 @@ class RunningAnInstallerFromDisk(unittest.TestCase):
         self.assertEqual([], console.installed)
 
     def test_something_that_is_not_a_setup_program_is_refused(self):
-        # The handover runs it with /S, which is NSIS's and nothing else's - an
-        # .msi given the same argument fails obscurely from inside msiexec.
         message, ok, console, _ = self._run({INSTALLER_KEY: str(self._installer("dti.msi"))})
         self.assertFalse(ok)
         self.assertIn("not a setup program", message)
@@ -616,21 +525,13 @@ class RunningAnInstallerFromDisk(unittest.TestCase):
 
 
 class TheSettingsFileAndTheDefault(unittest.TestCase):
-    """Absent and empty are different answers, and the round trip has to keep them apart.
-
-    The default is a real repository, so a settings file that says nothing gets it. A file
-    that says `repository = ""` has said OFF, and must keep saying it - which means the
-    save path has to write that empty value down rather than omitting it the way it omits
-    every other default. Omit it and clearing the field in Advanced switches checking off
-    until the next read and then quietly back on.
-    """
+    """Absent and empty are different answers, and the round trip has to keep them apart."""
 
     def _config(self, body: str = "") -> FileConfig:
         folder = TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         project = Path(folder.name) / naming.CONFIG_NAME
         project.write_text(body, encoding="utf-8")
-        # A user file that does not exist, so only the project one is read.
         return FileConfig(project=project, user=Path(folder.name) / "absent.toml")
 
     def test_a_file_with_no_updates_section_gets_the_default(self):
@@ -648,8 +549,6 @@ class TheSettingsFileAndTheDefault(unittest.TestCase):
         self.assertEqual("someone/else", source.repository)
 
     def test_turning_it_off_survives_a_save_and_a_reload(self):
-        # THE REGRESSION THIS GUARDS. Saving an empty repository used to write no line
-        # at all, which reads back as "nothing said" and hands out the default.
         config = self._config("")
         settings = replace(config.settings(), updates=UpdateSource(repository=""))
         written = config.save(settings, ConfigScope.PROJECT)
@@ -668,9 +567,6 @@ class TheSettingsFileAndTheDefault(unittest.TestCase):
         self.assertEqual(CHANNEL_PRERELEASE, source.channel)
 
     def test_the_old_boolean_still_means_what_it_meant(self):
-        # `include_prereleases = true` said "either kind, whichever is newest" and said
-        # nothing about prereleases only. Reading it as prerelease-only would silently
-        # stop offering official releases to somebody who never asked for that.
         source = self._config('[updates]\ninclude_prereleases = true\n').update_source()
         self.assertEqual(CHANNEL_ANY, source.channel)
 
@@ -693,8 +589,6 @@ class TheSettingsFileAndTheDefault(unittest.TestCase):
         )
 
     def test_the_default_itself_is_not_written_back_as_configuration(self):
-        # The other half: a settings file repeating the built-in value is noise that
-        # reads as a decision, and it pins every existing file to today's default.
         config = self._config("")
         written = config.save(config.settings(), ConfigScope.PROJECT)
         self.assertNotIn("repository =", written.read_text(encoding="utf-8"))
@@ -758,9 +652,6 @@ class TheCheck(unittest.TestCase):
         self.assertTrue(any("dti-0.2.0-setup" in line for line in lines))
 
     def test_only_prereleases_says_which_switch_would_change_that(self):
-        # From a source checkout the CHANNEL is still what decides, so Advanced is
-        # the right place to send somebody. See the build-kind tests for the
-        # installed case, where it is not and the sentence does not say it is.
         feed = _Feed((Release(tag="v9.9.9", prerelease=True),))
         message, ok, _ = self._run(UpdateSource(repository="a/b"), feed)
         self.assertTrue(ok)

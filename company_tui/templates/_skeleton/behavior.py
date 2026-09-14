@@ -1,17 +1,4 @@
-"""Copy this folder to add a stack: rename it, change STACK_NAME, fill each function in.
-
-The signatures below are the ones the real packs use, so a copy of this file
-starts out compatible with `pack.py` rather than needing to be reshaped first.
-`templates/python/behavior.py` writes a tree file by file and
-`templates/react_native/behavior.py` clones one — model whichever is closer.
-
-Two things are not optional whichever way the tree arrives:
-
-* the project must end up carrying `ikaika.script.json`, stamped with the
-  identity the user asked for — hand the finished directory to
-  `services.finalizer.finalize()` and it does that;
-* anything the pack half-created has to be cleaned up if the run is stopped.
-"""
+"""Copy this folder to add a stack: rename it, change STACK_NAME, fill each function in."""
 
 from company_tui.domain.template_pack import (
     Generator,

@@ -1,3 +1,5 @@
+"""The interactive Textual front end, and the owner of every run in flight."""
+
 import asyncio
 from collections.abc import Awaitable, Sequence
 from contextlib import suppress
@@ -76,15 +78,7 @@ TRAIL_STEPS = (
     "script_section",
     "script_action",
 )
-"""Every menu a workflow can walk, in the order it walks them.
-
-ORDER IS LOAD-BEARING: `_enter_step` forgets a step and everything AFTER it in
-this tuple, so a step listed too late leaves its own successors standing when the
-user goes back. And a step MISSING from here is worse than misplaced -
-`TRAIL_STEPS.index` raises, the exception is caught as a failed run, and the
-workflow dies into the session log while the menu loop calmly puts the top menu
-back. Which is what "script_section" did: Scripts opened, vanished, and left a
-card menu that looked like nothing had been asked for."""
+"""Every menu a workflow can walk, in the order it walks them."""
 
 SCRIPT_UPDATE_ANSWERS: tuple[tuple[str, str, str, str], ...] = (
     (
@@ -106,16 +100,10 @@ SCRIPT_UPDATE_ANSWERS: tuple[tuple[str, str, str, str], ...] = (
         "Written to your settings, where it can be turned back on. Skips the check entirely.",
     ),
 )
-"""Key, name, card line and focus line for each way out of a stale store.
-
-A menu because there are three, and because two of them are only safe to take
-once you know what the third costs: re-cloning is the one step here that throws
-away work, and it says so on the card rather than after the fact."""
+"""Key, name, card line and focus line for each way out of a stale store."""
 
 RAW_OUTPUT_PREFIX = "  "
-"""Marks a line as verbatim output from a subprocess rather than the toolbox
-talking. Reads as indentation in the plain console, and as dimmed process output
-in the run panel."""
+"""Marks a line as verbatim output from a subprocess rather than the toolbox."""
 
 QUIT_CONFIRM = f"Quit {APP_NAME}?"
 QUIT_DETAIL = (
@@ -125,12 +113,7 @@ QUIT_WITH_RUNS = (
     "Are you sure you want to close the toolbox?\n"
     "{count} still going — every one of them will be stopped."
 )
-"""What quitting costs, spelled out rather than left to the title.
-
-Two versions because they are two different prices: with nothing going, quitting
-loses a menu position, and with N runs going it is N directories abandoned
-half-written. The title asks the same question either way.
-"""
+"""What quitting costs, spelled out rather than left to the title."""
 
 QUIT_ANSWER = f"QUIT {APP_NAME}"
 
@@ -139,61 +122,19 @@ CLOSE_TAB_DETAIL = "'{name}' is still running.\nClosing the tab stops it."
 CLOSE_TAB_ANSWER = "CLOSE TAB"
 
 BUSY_DELAY = 0.25
-"""How long a step has to take before the app says it is working on it.
-
-Every step is a screen popped and another pushed, and most of them are over
-before the frame in between has been drawn. Announcing those would be a mark
-that appears and vanishes at every choice the user makes — motion that says
-nothing and reads as flicker. Waited out rather than measured beforehand,
-because whether reading a stack's scripts is instant or is a network round trip
-depends on what is in the store and on what settings say to check."""
+"""How long a step has to take before the app says it is working on it."""
 
 INSTALL_PAUSE = 1.2
-"""How long the installing screen is held before the app actually goes.
-
-`docs/decisions/0004` says arming comes first and quitting follows immediately,
-because what has been armed is waiting for exactly that. This does not break
-that rule so much as pay a fixed, named price against it: the waiter allows 120
-seconds and this spends one of them.
-
-A floor rather than a delay. Shutting down writes the tabs and takes every run
-down, which for a run mid-`npm install` is a subprocess tree and covers this on
-its own - but with nothing running it is instant, and a message that appears and
-disappears inside one frame is worse than no message at all: the user sees a
-flicker and cannot say what it was."""
+"""How long the installing screen is held before the app actually goes."""
 
 WINDOW_POLL_INTERVAL = 0.2
-"""How often the window is measured.
-
-There is no event for it: the window is resized by the window manager, and what
-reaches the app is a new cell grid — which the same drag produces several of, and
-a drag onto a display at another scale produces none of, while changing the size
-in pixels. So it is asked for rather than waited for.
-
-Five times a second, because the poll is also where the end of a drag is noticed
-(`SizeGuard.hold`), and a window that snaps back a whole second after the button
-came up reads as the app arguing rather than as a floor. A tick is two reads
-against state the input system and the window manager already hold, and nothing
-is drawn unless the measurement changed.
-
-What must not follow from a faster poll is a resize per tick. The version of this
-that held the window to a floor *and* a ratio ran ten times a second and asked
-every time, and see `infrastructure/window_shape.py` for what that cost — the cap
-and the wait-for-the-button-up are both there.
-"""
+"""How often the window is measured."""
 
 WINDOW_NOTICE = "▲ window {width}x{height} → {floor_width}x{floor_height}"
-"""Said in the header while the window is smaller than the layout wants.
-
-The size it is against the size it should be, because "too small" without a
-number leaves the user dragging an edge and guessing whether they are there yet.
-"""
+"""Said in the header while the window is smaller than the layout wants."""
 
 UPDATE_MARK = "▲"
-"""The glyph on the update badge. Geometric Shapes, like every other mark drawn
-here — see `tests/test_glyphs.py` for why a plausible-looking emoji is not an
-option, and `domain/updates.py` for why the domain formats the notice around a
-mark it is handed rather than holding one."""
+"""The glyph on the update badge. Geometric Shapes, like every other mark drawn."""
 
 UPDATE_CONFIRM = "Install the update?"
 UPDATE_DETAIL = (
@@ -201,67 +142,35 @@ UPDATE_DETAIL = (
     "The toolbox will close, update itself, and reopen."
 )
 UPDATE_ANSWER = "INSTALL AND RESTART"
-"""What saying yes costs, spelled out.
-
-It closes the app — which is not what "install" implies on its own, and is the
-part somebody with a run going needs to know before they press it. The quit
-confirmation still happens underneath this one when runs are live, so the count
-is named there rather than repeated here.
-"""
+"""What saying yes costs, spelled out."""
 
 UPDATE_DECLINED = "Left alone - nothing was installed."
 
 UPDATE_RUNS = "\n{count} other run{s} will be stopped."
-"""Added to the install question when something else is going.
+"""Added to the card's install question, where a run is the one asking."""
 
-The run doing the asking is not counted: it is about to end either way, and naming it
-turns the question into the app arguing with the button just pressed.
-"""
+UPDATE_RUNS_ALL = "\n{count} run{s} will be stopped."
+"""The same for the chord, where nothing is asking and none of them is "other"."""
 NO_INSTALLER_AT = "There is no installer at {path} any more."
 
 NOTHING_TO_INSTALL = "Nothing to install - no newer build has been downloaded."
-"""Ctrl+U pressed with no badge up.
-
-The key is only ever advertised on the badge, so a press without one is somebody
-guessing - and a deliberate keypress that does nothing at all reads as a broken
-key. One line where a workflow without a panel says things.
-"""
+"""Ctrl+U pressed with no badge up."""
 
 UPDATE_FAILED = "The update could not be started: {problem}"
-"""Said in the activity log rather than in a dialog.
-
-A handover that could not be armed leaves the app exactly where it was, which is
-not a state anybody needs a modal about — and the app is still perfectly usable,
-which a dialog would imply it is not.
-"""
+"""Said in the activity log rather than in a dialog."""
 
 T = TypeVar("T")
 
 
 class TuiConsole(App):
-    """The interactive front end, and the owner of every run in flight.
-
-    One workflow used to own one screen and one console. Sessions turn that
-    around: the console holds every run, each with its own log, task and form,
-    and the run panel becomes a view onto whichever one is selected. Output
-    finds its way home through `CURRENT_SESSION` rather than through "the panel
-    that happens to be open", which is the only routing rule that survives there
-    being more than one.
-    """
+    """The interactive front end, and the owner of every run in flight."""
 
     TITLE = f"{PEAK_ART}  {APP_NAME} — {APP_TAGLINE}"
     SUB_TITLE = APP_VERSION
     BINDINGS = [
         ("ctrl+q", "leave", "Quit"),
-        # The key everyone reaches for out of habit, so it means what they
-        # expect rather than nothing. It is checked after the screen's own copy
-        # binding, which yields when there is no selection to copy.
         ("ctrl+c", "leave", "Quit"),
         ("ctrl+b", "resume_runs", "Runs"),
-        # Does nothing at all until there is an installer downloaded and waiting,
-        # which is why it is not in any footer: a hint for a key that is dead most
-        # of the time is a control that lies. The badge carries the key instead,
-        # and the badge only exists when the key does something.
         ("ctrl+u", "install_update", "Update"),
     ]
 
@@ -305,24 +214,16 @@ class TuiConsole(App):
         self.workspace_label = workspace_label
         self._memory = memory
         self._recent = recent
-        """The directories picked before, or None where there is nothing to remember
-        with. Kept under the user's home, which an installer update cannot reach."""
+        """The directories picked before, or None where there is nothing to remember."""
         self._watch = watch
-        """The launch-time update check, or None where there is nothing to check
-        with — the plain console has no chrome to put a badge in, and a test pilot
-        has no business asking GitHub anything."""
+        """The launch-time update check, or None where there is nothing to check."""
         self._workspace = workspace
-        """Which project's tabs these are. One machine holds several, and the
-        tabs of one are not the tabs of another."""
+        """Which project's tabs these are. One machine holds several, and the."""
         self.result_code = 0
-        # Choice already made at each step, for navigation that has not become a
-        # session yet. Once it has, the session carries its own.
         self._steps: dict[str, str] = {}
         self._sessions = SessionRegistry(on_change=self._session_changed)
         self._panel: RunScreen | None = None
         self._attached: RunSession | None = None
-        # Set while nothing is claiming the screen, which is what lets the menu
-        # loop come back round.
         self._foreground_free = asyncio.Event()
         self._foreground_free.set()
         self._attachment = asyncio.Event()
@@ -332,16 +233,11 @@ class TuiConsole(App):
         self._window_notice = ""
         self._update_notice = ""
         self._update: UpdateReport = NOTHING_TO_REPORT
-        """What the launch check found. Empty until it has answered, and empty
-        forever if update checking is not configured."""
+        """What the launch check found. Empty until it has answered, and empty."""
         self._plan: WindowPlan = DEFAULT_PLAN
         self._guard: SizeGuard | None = None
         self._leaving = False
-        """Set once the app is on its way out, so the menu loop stops asking.
-
-        Stopping the runs frees the screen, which reads to the loop that started
-        them as a workflow letting go — and it comes back round and pushes
-        another menu into an app that is already unmounting."""
+        """Set once the app is on its way out, so the menu loop stops asking."""
 
     def compose(self) -> ComposeResult:
         with AppFrame():
@@ -355,63 +251,28 @@ class TuiConsole(App):
         self.theme = naming.APP_SLUG
         output = self.query_one("#output", RichLog)
         output.border_title = "Activity"
-        # The window is opened at a size, measured, and put back onto the floor
-        # once a drag that took it under one has ended — and never asked for a
-        # cell grid, which is the app telling the terminal what shape to be and a
-        # fight the terminal wins: its idea of the grid and ours disagree until
-        # the pointer lands somewhere other than where it points.
         self._watch_window_shape()
         self._recall()
-        # Before `_start`, and deliberately not awaited: it is a worker, so the
-        # first paint does not wait for a network round trip. A launch that opened
-        # on a blank frame while GitHub was slow would be this feature costing
-        # more than it is worth.
         self._look_for_update()
         self._start()
 
-    # -------------------------------------------------------------- the tabs
 
     def _recall(self) -> None:
-        """Put back the tabs the last run of the app left open.
-
-        Before the workflow starts, so a menu walked straight into finds its
-        strip already populated. Nothing is resumed and no menu is skipped: a
-        restored tab has no workflow behind it, which is what lets the first
-        workflow to arrive in that context pick it up rather than open a second
-        tab beside it.
-        """
+        """Put back the tabs the last run of the app left open."""
         if self._memory is None:
             return
         for remembered in self._memory.remembered(self._workspace):
             self._sessions.restore(remembered, _nothing)
 
     def _remember(self) -> None:
-        """Write the tabs down, at the points where there is something new.
-
-        Not on every line of output: a build prints tens of thousands of them
-        and a file rewritten per line is the same mistake as a window resized
-        per frame. Called instead when a run ends, a tab is renamed or closed,
-        and when the app does — which between them covers everything the user
-        typed.
-        """
+        """Write the tabs down, at the points where there is something new."""
         if self._memory is None:
             return
         self._memory.remember(self._workspace, self._sessions.remembered())
 
-    # ------------------------------------------------------------- the window
 
     def _watch_window_shape(self) -> None:
-        """Open the window at its size, then start reporting on it.
-
-        Nothing to measure or to size without a real terminal in front of one:
-        under a test pilot the only window this process could find is the one the
-        test runner happens to be sitting in, and resizing that would be a unit
-        test rearranging the developer's desk.
-
-        The plan is read once. Which screen the window is on can change, but a
-        floor that moved under a window the user had already settled would resize
-        it for having been dragged onto another display.
-        """
+        """Open the window at its size, then start reporting on it."""
         if self._driver is None or self.is_headless:
             return
         self._window = current_window()
@@ -429,17 +290,12 @@ class TuiConsole(App):
             return
         state = window.state()
         if state is None:
-            # The window is gone — every later reading would name a handle that
-            # is either dead or, once Windows reuses it, somebody else's.
             self._window = None
             self._guard = None
             self._stop_watching_window()
             self._say_about_window("")
             return
         if self._guard is not None and self._guard.hold(state):
-            # It just asked for a size, so this measurement is already history.
-            # The next tick reads the answer, and says something about it only if
-            # the window did not get there.
             return
         if not cramped(state, self._plan):
             self._say_about_window("")
@@ -453,18 +309,10 @@ class TuiConsole(App):
             )
         )
 
-    # ------------------------------------------------------------- updating
 
     @work
     async def _look_for_update(self) -> None:
-        """Ask, once, in the background, and say nothing unless there is an answer.
-
-        Every failure is silence. Offline, rate-limited, a repository that does not
-        exist, a tag that does not parse — none of it is the user's problem at the
-        moment they opened a terminal, and all of it is reported properly by the
-        manual check, which is somebody actually asking. `UpdateWatch.look` never
-        raises, so this cannot take the mount path down.
-        """
+        """Ask, once, in the background, and say nothing unless there is an answer."""
         if self._watch is None:
             return
         report = await self._watch.look()
@@ -472,12 +320,7 @@ class TuiConsole(App):
         self._say_about_update(report.notice(UPDATE_MARK))
 
     def _say_about_update(self, notice: str) -> None:
-        """Put the notice in every header, and only when it has changed.
-
-        The same shape as `_say_about_window` for the same reason: a header
-        composed after this ran reads the value back off the app, so a notice
-        pushed only on change would be lost by the next screen.
-        """
+        """Put the notice in every header, and only when it has changed."""
         if notice == self._update_notice:
             return
         self._update_notice = notice
@@ -491,26 +334,7 @@ class TuiConsole(App):
         return self._update_notice
 
     async def install_update(self, installer: str, version: str) -> str:
-        """`Ui.install_update`. Ask, then hand over from a worker of this app's own.
-
-        The worker matters. `_shut_down` cancels every session, and this is called from
-        inside one - so the confirmation and the handover run on the app rather than on
-        the caller, and the caller's cancellation is then just part of leaving.
-
-        The path is checked before anything is asked. A dialog offering to install a
-        file that is not there is a dialog whose only outcome is an error.
-
-        ONE QUESTION, NOT TWO
-        =====================
-        This asked the quit confirmation underneath the install one, the way `Ctrl+U`
-        does. From a keypress that is right - the runs it names are somebody's real
-        work. From inside a run panel it is not: the card IS a run, so the second
-        dialog asked whether to stop the very run doing the asking. Answering no to
-        that - which is the sane answer to "quit with a run going" when you asked to
-        install, not to quit - abandoned the install with nothing to say why.
-        So the cost of the OTHER runs is named in the one question, and the run that
-        is asking is left out of the count.
-        """
+        """`Ui.install_update`. Ask, then hand over from a worker of this app's own."""
         if self._watch is None:
             return "update installing is not configured"
         target = Path(installer)
@@ -539,9 +363,6 @@ class TuiConsole(App):
         problem = self._watch.arm(target)
         if problem:
             return problem
-        # From here the app is leaving, and the caller is one of the runs that leaving
-        # cancels. Started as a worker so that cancellation cannot take the shutdown
-        # with it.
         self._leave_for_update(version)
         return ""
 
@@ -550,18 +371,7 @@ class TuiConsole(App):
         await self._leaving_for_update(version)
 
     async def _leaving_for_update(self, version: str) -> None:
-        """Say what is happening, hold it long enough to be read, then go.
-
-        Both ways of installing end here - the card's own dialog and `Ctrl+U` on
-        the badge - so there is one answer to what leaving for an update looks
-        like rather than two that can drift.
-
-        The screen goes up BEFORE the shutdown rather than after it. Shutting
-        down is the part that takes the time: it writes the tabs down and then
-        takes every run with it, and a run mid-`npm install` is a subprocess tree
-        to kill. Announced afterwards, the message would appear once there was
-        nothing left to wait for, which is the wrong end of the pause entirely.
-        """
+        """Say what is happening, hold it long enough to be read, then go."""
         await self.push_screen(InstallingScreen(version))
         await asyncio.sleep(INSTALL_PAUSE)
         await self._shut_down()
@@ -572,33 +382,10 @@ class TuiConsole(App):
 
     @work
     async def _install_update(self) -> None:
-        """Hand the machine over to the installer, then get out of its way.
-
-        The order is the whole thing. `hand_over` arms a process that is waiting
-        for THIS process to exit before it starts the installer — so arming has to
-        come first, and quitting has to follow immediately. Reversed, there is
-        nothing left to arm it; skipped, the installer deletes the directory it is
-        running from. See `infrastructure/handover.py`.
-
-        ONE QUESTION, NOT TWO
-        =====================
-        This asked `_confirm_quit` underneath the install one, so an install with
-        runs going put up a second dialog asking whether to quit. Two dialogs for
-        one decision is a menu to get through rather than a question to answer,
-        and the second one asks about quitting when what was pressed was install
-        - so the sane answer to "quit with runs going" abandoned the install, and
-        abandoned it SILENTLY, with the app sitting back on the menu looking like
-        the key had done nothing. `Ui.install_update` already folds the cost of
-        the runs into its one question; this is the same shape, arrived at for
-        the same reason, and the two now agree.
-        """
+        """Hand the machine over to the installer, then get out of its way."""
         if self._watch is None:
             return
         if not self._update.waiting:
-            # Pressed without a badge, or pressed after the manual card
-            # downloaded something during this launch. `look` answers out of the
-            # state file without a request when an installer is already fetched,
-            # so this is not a second network call in the common case.
             report = await self._watch.look()
             self._update = report
             self._say_about_update(report.notice(UPDATE_MARK))
@@ -611,7 +398,7 @@ class TuiConsole(App):
         )
         live = self._sessions.live()
         if live:
-            detail += UPDATE_RUNS.format(count=len(live), s="" if len(live) == 1 else "s")
+            detail += UPDATE_RUNS_ALL.format(count=len(live), s="" if len(live) == 1 else "s")
         answer = await self.push_screen_wait(
             ConfirmScreen(
                 UPDATE_CONFIRM,
@@ -625,10 +412,6 @@ class TuiConsole(App):
             return
         problem = self._watch.hand_over(self._update)
         if problem:
-            # Nothing was armed, so nothing is waiting for this process and the app
-            # carries on. Said where a workflow without a panel says things. Nothing
-            # is announced either - the installing screen goes up only once there is
-            # genuinely something waiting for this process to end.
             self.write(UPDATE_FAILED.format(problem=problem))
             return
         await self._leaving_for_update(self._update.available.text or self._update.tag)
@@ -639,11 +422,7 @@ class TuiConsole(App):
             self._window_watch = None
 
     def _say_about_window(self, notice: str) -> None:
-        """Put the notice in every header, and only when it has changed.
-
-        The guard is the point of the whole arrangement: a window nobody is
-        dragging is measured once a second and nothing is drawn at all.
-        """
+        """Put the notice in every header, and only when it has changed."""
         if notice == self._window_notice:
             return
         self._window_notice = notice
@@ -657,14 +436,7 @@ class TuiConsole(App):
         return self._window_notice
 
     def _write_to_terminal(self, data: str) -> None:
-        """Send an escape sequence the way Textual sends its own.
-
-        Never `sys.stdout`. The driver owns the output stream and on Windows
-        writes it from a background thread, so anything written straight to
-        stdout can land in the middle of a frame and splice itself into another
-        escape sequence — which is how a working screen turns into one whose
-        contents no longer sit where it thinks they do.
-        """
+        """Send an escape sequence the way Textual sends its own."""
         driver = self._driver
         if driver is None:
             return
@@ -674,22 +446,11 @@ class TuiConsole(App):
     def _clear_pointer_state(self) -> None:
         """Discard pointer state that a focus change can strand mid-gesture."""
         self.capture_mouse(None)
-        # Textual otherwise keeps the old hover target until another mouse event.
-        # Clearing it makes the first movement after returning emit Enter again.
         self._set_mouse_over(None, None)
         self._end_text_selection()
 
     def _end_text_selection(self) -> None:
-        """Abandon a drag-selection rather than let it outlive the window.
-
-        A press with no matching release — the window went away between them —
-        leaves the screen convinced a drag is still in progress. It then treats
-        every later movement as extending that selection: the highlight follows
-        the pointer, scrollable content auto-scrolls under it, and the press
-        that should have chosen something goes into ending the drag instead.
-        `clear_selection` alone is not enough; it forgets the selection but
-        leaves the drag itself armed.
-        """
+        """Abandon a drag-selection rather than let it outlive the window."""
         for screen in self.screen_stack:
             screen.clear_selection()
             screen._selecting = False
@@ -699,12 +460,8 @@ class TuiConsole(App):
         self._clear_pointer_state()
 
     def on_app_focus(self, event: events.AppFocus) -> None:
-        # Some Windows terminals stop forwarding mouse movement/clicks while the
-        # window is inactive and don't reliably restore those modes themselves.
         restore_terminal_interaction(self._write_to_terminal)
         self._clear_pointer_state()
-        # Repaint rather than re-layout: the terminal may have been redrawn from
-        # under us, so every cell is suspect, not just the geometry.
         self.call_after_refresh(self._repaint_everything)
 
     def _repaint_everything(self) -> None:
@@ -714,12 +471,11 @@ class TuiConsole(App):
     @work
     async def _start(self) -> None:
         await self.push_screen_wait(SplashScreen())
-        assert self.application is not None
+        assert self.application is not None  # noqa: S101 - narrowing; bootstrap sets it
         self.result_code = await self.application.run(self.start_capability)
         await self._shut_down()
         self.exit()
 
-    # ------------------------------------------------------------- the output
 
     def write(self, message: str = "") -> None:
         session = current_session()
@@ -735,23 +491,14 @@ class TuiConsole(App):
         return log
 
     def _quiet_output(self) -> None:
-        """Nothing to look at again, ready for the next workflow.
-
-        The activity log is where a workflow with no panel of its own reports,
-        and the user reads it at the pause that follows. After that it is a line
-        from a run that is over — and left standing it rides along behind every
-        later transition, which is the one thing the gap between screens exists
-        not to do.
-        """
+        """Nothing to look at again, ready for the next workflow."""
         for log in self.query("#output").results(RichLog):
             log.clear()
             log.add_class("-quiet")
 
     @staticmethod
     def _marker_for(message: str) -> str:
-        """Two conventions, both readable in the plain console too: a line
-        indented by `RAW_OUTPUT_PREFIX` is verbatim process output, and a line
-        ending in an ellipsis is a step about to happen."""
+        """Two conventions, both readable in the plain console too: a line."""
         if message.startswith(RAW_OUTPUT_PREFIX):
             return "output"
         return "step" if message.endswith("...") else "plain"
@@ -766,8 +513,6 @@ class TuiConsole(App):
     async def ask(self, prompt: str) -> str:
         session = current_session()
         if session is not None and session.panel_open:
-            # Blocks this session and nothing else: a hidden run waiting on an
-            # answer badges its own tab rather than stopping the app.
             return await session.prompt(prompt)
         await self._claim_screen(session)
         return await self.push_screen_wait(InputScreen(prompt, self.trail_label()))
@@ -780,23 +525,9 @@ class TuiConsole(App):
         await self._claim_screen(session)
         return await self.push_screen_wait(ConfirmScreen(prompt, self.trail_label()))
 
-    # --------------------------------------------- the gap between screens
 
     async def working(self, label: str, work: Awaitable[T]) -> T:
-        """Do `work` with the app saying so, for a step that has no panel.
-
-        A workflow between two menus has nowhere of its own to narrate into:
-        the screen it was started from has been popped and the one it is
-        heading for cannot be built until this answers. What shows meanwhile is
-        the app's own frame — which is the right thing for the tenth of a
-        second most steps take, and the wrong thing entirely for a step that
-        goes to the network and comes back four seconds later, because an empty
-        frame that stays put is exactly what a wedged one looks like.
-
-        Only announced once it has outlasted `BUSY_DELAY`, so nothing flickers
-        on a step that was never slow. The work itself is untouched either way,
-        and a cancel reaches it rather than orphaning it.
-        """
+        """Do `work` with the app saying so, for a step that has no panel."""
         task = asyncio.ensure_future(work)
         try:
             done, _pending = await asyncio.wait({task}, timeout=BUSY_DELAY)
@@ -808,9 +539,6 @@ class TuiConsole(App):
             finally:
                 self._show_busy("")
         except asyncio.CancelledError:
-            # `asyncio.wait` hands the cancel on without touching what it was
-            # waiting for, and a fetch left running past the workflow that
-            # wanted it is a subprocess nothing will ever reap.
             task.cancel()
             raise
 
@@ -818,7 +546,6 @@ class TuiConsole(App):
         for line in self.query("#busy").results(BusyLine):
             line.show(label)
 
-    # ------------------------------------------------------------- the panel
 
     @property
     def sessions(self) -> SessionRegistry:
@@ -833,23 +560,17 @@ class TuiConsole(App):
 
     def _spawn(self, session: RunSession) -> None:
         async def run() -> None:
-            # Set inside the task, so it belongs to this task's context and to
-            # every task created from it — which is every `write`, `ask` and
-            # subprocess the workflow goes on to make.
             CURRENT_SESSION.set(session)
             try:
                 await session.workflow()
             except asyncio.CancelledError:
                 raise
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - the run supervisor; it reports
                 self._here(session).report_failure(error)
             finally:
                 self._retire(self._here(session))
 
         session.foreground = True
-        # A worker, not a bare task: a session started from the tab strip has no
-        # worker above it to inherit, and a workflow that cannot push a screen
-        # is one that cannot ask a question or show a menu.
         session.task = self.run_worker(
             run(), name=session.name, group="session", exit_on_error=False
         )
@@ -857,28 +578,19 @@ class TuiConsole(App):
 
     @staticmethod
     def _here(started_in: RunSession) -> RunSession:
-        """The session a workflow is using now, which is not always the one it
-        started in — walking to another context moves it to that context's."""
+        """The session a workflow is using now, which is not always the one it."""
         return current_session() or started_in
 
     def _retire(self, session: RunSession) -> None:
-        """The workflow is over. Whether the tab goes with it depends.
-
-        A tab something was run in stays, freed rather than removed: it holds
-        the output, the time it happened and the form it was sent, and walking
-        back into the stack is how you get to it. One that only ever showed a
-        menu or a form nobody sent has nothing to come back for.
-        """
+        """The workflow is over. Whether the tab goes with it depends."""
         session.panel_open = False
-        # Nothing is driving it any more, which is what lets a workflow that
-        # walks back in here pick it up instead of opening a tab beside it.
         session.task = None
         self._remember()
         self._background(session)
         if not session.ran:
             self._sessions.remove(session)
         if self._attached is session:
-            self._detach()
+            self._detach_session()
         else:
             self._settle()
             self._refresh_panel()
@@ -894,21 +606,12 @@ class TuiConsole(App):
     ) -> dict[str, OptionValue] | None:
         session = current_session()
         if session is None:
-            # No session means no task of our making — a capability driven
-            # straight from the CLI rather than off the menu. It still gets a
-            # form; having no worker behind it is what `_retire` reads to know
-            # nothing will ever come along and clear its tab.
             session = self._sessions.create(title, _nothing, steps=dict(self._steps))
             CURRENT_SESSION.set(session)
         else:
             session = self._relocate(session)
             if session is None:
-                # The context is busy and the user is now watching it. Reads
-                # to the workflow as a step backwards, which puts its own menu
-                # up once the screen comes free.
                 return None
-        # A panel already open is one the user asked to keep for another run, so
-        # it collects the next set of values rather than being replaced.
         if not session.panel_open:
             session.load(
                 title,
@@ -918,52 +621,25 @@ class TuiConsole(App):
                 preview,
                 subtitle,
             )
-        self._attach(session)
+        self._attach_session(session)
 
         values = await session.wait_for_values()
         if values is None:
             session.panel_open = False
             if self._attached is session:
-                self._detach()
+                self._detach_session()
             return None
         return values
 
     def _relocate(self, session: RunSession) -> RunSession | None:
-        """The session for where the workflow is now, which may not be this one.
-
-        A session belongs to one context for the whole of its life, so a
-        workflow that has walked to another stack carries on in a session
-        there rather than dragging this one along. Dragging it along is what
-        put two stacks' runs in one terminal, and it is why the tab a user left
-        going in React Native was the same tab that greeted them in Flutter.
-
-        The context is only fully known here, at the panel — a menu deeper than
-        the last one answered has not been asked yet — so this is where the
-        move happens rather than at each step. What is left behind is dropped:
-        nothing ever ran in it, and a tab nobody can reach from the strip they
-        walked to is litter.
-
-        Walking into a stack that already has a tab nothing is driving picks
-        that tab up rather than opening one beside it. That is what makes going
-        back into React Native mean going back to the React Native run — its
-        output still above, the time it happened still in it, and the form
-        still holding what it was sent.
-        """
+        """The session for where the workflow is now, which may not be this one."""
         if session.scope == session.place:
             return session
 
         free = self._free_at(session.place)
         busy = tuple(s for s in self._sessions.visible(session.place) if s.panel_open)
         if free is None and busy:
-            # Every tab here is mid-run. There is nothing to fill in, so the
-            # user is put on the run that is already going rather than handed a
-            # second tab beside it, and this workflow waits for the screen —
-            # which it gets back as the menu it came from when they leave.
-            #
-            # Only a tab with a form on it counts: one whose own workflow has
-            # walked off to a menu has nothing to show, and attaching it put up
-            # a run panel with an empty configuration pane.
-            self._attach(busy[0])
+            self._attach_session(busy[0])
             return None
 
         moved = free or self._sessions.create(
@@ -976,16 +652,8 @@ class TuiConsole(App):
         moved.answers = dict(session.answers)
         moved.preset = dict(session.preset)
         moved.foreground = session.foreground
-        # Handed over, not shared. A tab something has already been run in is
-        # kept rather than removed, and one kept still wanting the screen is a
-        # claim with no workflow left to release it: `_retire` only ever reaches
-        # the session the workflow ended up in, so the menu loop would wait on
-        # this one for the rest of the app's life — the empty frame with nothing
-        # but the quit chord on it.
         session.foreground = False
         self._teach(session.place, session.workflow)
-        # The worker follows the workflow. Left on the tab behind, Stop and
-        # quit would reach for this run through a session it has walked out of.
         moved.task, session.task = session.task, None
         if not session.ran:
             self._sessions.remove(session)
@@ -993,25 +661,13 @@ class TuiConsole(App):
         return moved
 
     def _teach(self, place: tuple[str, ...], workflow: Workflow) -> None:
-        """Hand this context's workflow to every tab in it that is idle.
-
-        A tab restored from the last run of the app has no workflow — a callable
-        is not something a JSON file can hold — and the strip's "+" is "another
-        one of these", which needs one. Every tab in a context leads to the same
-        capability, so the first workflow to walk in can say what it is for all
-        of them; a tab with a run in it is left alone, because its own workflow
-        is the one that is running.
-        """
+        """Hand this context's workflow to every tab in it that is idle."""
         for tab in self._sessions.visible(place):
             if tab.task is None:
                 tab.workflow = workflow
 
     def _free_at(self, place: tuple[str, ...]) -> RunSession | None:
-        """A tab in this context with no workflow behind it, if there is one.
-
-        Oldest first, so coming back twice lands on the same tab rather than
-        wandering through them.
-        """
+        """A tab in this context with no workflow behind it, if there is one."""
         return next(
             (s for s in self._sessions.visible(place) if s.task is None), None
         )
@@ -1027,17 +683,11 @@ class TuiConsole(App):
         try:
             return await task
         except asyncio.CancelledError:
-            # Stop cancels this task and nothing else. Anything else cancelling
-            # it is the app shutting down, which has to keep unwinding — and
-            # take the work down with it.
             task.cancel()
             if not session.stop_requested:
                 raise
             return None
-        except Exception as error:
-            # The panel reports it and the user reads it there. Letting it out
-            # would kill the worker running the workflow, take its output with
-            # it, and lose everything that led up to the failure.
+        except Exception as error:  # noqa: BLE001 - the run supervisor; it reports
             session.report_failure(error)
             return None
         finally:
@@ -1062,24 +712,18 @@ class TuiConsole(App):
         session.panel_open = False
         session.result_acknowledged = True
         if session.task is None:
-            # Nothing is going to run out and retire this one, so closing its
-            # panel is the end of it — otherwise it sits in the strip forever
-            # as a run that never finishes.
             self._retire(session)
             return False
         if self._attached is session:
-            self._detach()
+            self._detach_session()
         else:
             self._refresh_panel()
         return False
 
-    # ---------------------------------------------------------- attach/detach
 
-    def _attach(self, session: RunSession) -> None:
+    def _attach_session(self, session: RunSession) -> None:
         previous = self._attached
         if previous is not None and previous is not session:
-            # Whatever it was doing carries on; it just stops being the thing
-            # holding the screen.
             self._background(previous)
         self._attached = session
         session.foreground = True
@@ -1095,15 +739,8 @@ class TuiConsole(App):
         self._settle()
         self._refresh_badges()
 
-    def _detach(self) -> None:
-        """Take the panel off the screen, and nothing more.
-
-        Deliberately not the same thing as backgrounding the session. A run
-        whose panel closes because the user backed out of the form is still
-        mid-workflow and about to put a menu of its own up; freeing the menu
-        loop here would push a second one over the top of it, which is two
-        owners of one screen stack.
-        """
+    def _detach_session(self) -> None:
+        """Take the panel off the screen, and nothing more."""
         self._attached = None
         panel = self._panel
         if panel is not None and self.screen is panel:
@@ -1136,7 +773,7 @@ class TuiConsole(App):
         while self._attached is not None and self._attached is not session:
             await self._attachment.wait()
         if self._attached is session and session is not None:
-            self._detach()
+            self._detach_session()
 
     def _refresh_panel(self) -> None:
         if self._panel is not None and self._attached is not None:
@@ -1159,37 +796,21 @@ class TuiConsole(App):
                 screen.show_runs(summary)
                 screen.show_counts(self._sessions.running_under)
 
-    # ------------------------------------------------- what the panel reports
 
     def on_run_screen_chosen(self, message: RunScreen.Chosen) -> None:
-        self._attach(message.session)
+        self._attach_session(message.session)
 
     def on_run_screen_detached(self, message: RunScreen.Detached) -> None:
-        # The one gesture that means "leave it running": the run gives up the
-        # screen, and the menu it came from comes back.
         session = self._attached
-        self._detach()
+        self._detach_session()
         if session is None:
             return
-        # Before backgrounding, not after: freeing the foreground with nothing
-        # else holding it releases the menu loop, and the top menu it puts up
-        # would land under whatever is opened here a moment later. And only
-        # when nothing else is already waiting for the screen — a workflow that
-        # walked in on this run is holding its own menu ready, and a second one
-        # would land on top of it.
         if not any(s.foreground for s in self._sessions.all() if s is not session):
             self._resume_behind(session)
         self._background(session)
 
     def _resume_behind(self, session: RunSession) -> RunSession | None:
-        """Put the menu this run was started from back up, still one step in.
-
-        Esc means one step back, not "out to the top" — the run carries on in
-        its own tab, and what the user lands on is the menu that chose it, so
-        starting another is picking a different stack rather than walking in
-        from the front again. A workflow with no menu behind its panel has no
-        step to go back to, and leaving is the whole of what Esc can mean there.
-        """
+        """Put the menu this run was started from back up, still one step in."""
         steps = dict(session.steps)
         if len(steps) < 2:
             return None
@@ -1207,8 +828,6 @@ class TuiConsole(App):
         parent = self._attached
         if parent is None:
             return
-        # Another one of these, not another walk through the same three menus:
-        # the sibling inherits what every step already answered.
         session = self._sessions.create(
             parent.base,
             parent.workflow,
@@ -1216,7 +835,7 @@ class TuiConsole(App):
             preset=dict(parent.answers),
         )
         self._spawn(session)
-        self._attach(session)
+        self._attach_session(session)
 
     def on_run_screen_closed(self, message: RunScreen.Closed) -> None:
         self._close_session(message.session)
@@ -1235,16 +854,13 @@ class TuiConsole(App):
             )
         ):
             return
-        # The neighbour takes the screen first, so the panel is handed over
-        # rather than torn down and rebuilt — and so unwinding the closed run
-        # cannot find itself still attached and pop the panel out from under it.
         if self._attached is session:
             neighbour = self._neighbour(session)
             if neighbour is not None:
-                self._attach(neighbour)
+                self._attach_session(neighbour)
         await self._stop_run(session)
         if self._attached is session:
-            self._detach()
+            self._detach_session()
         self._remember()
 
     def _neighbour(self, session: RunSession) -> RunSession | None:
@@ -1261,7 +877,6 @@ class TuiConsole(App):
         self._refresh_panel()
         self._remember()
 
-    # ------------------------------------------------------- coming back to it
 
     def action_resume_runs(self) -> None:
         """Back into whatever is still going, from wherever the user is."""
@@ -1271,26 +886,16 @@ class TuiConsole(App):
 
     @work
     async def _pick_run(self) -> None:
-        """Show everything in flight and go to whichever one is chosen.
-
-        Each context keeps its own strip, so no strip can list them all — and
-        going straight to whichever run seemed most urgent was a guess made on
-        the user's behalf about which one they meant.
-        """
+        """Show everything in flight and go to whichever one is chosen."""
         waiting = self._resumable()
         if not waiting:
             return
         session = await self.push_screen_wait(RunsScreen(waiting))
         if session is not None and session in self._sessions.all():
-            self._attach(session)
+            self._attach_session(session)
 
     def _resumable(self) -> tuple[RunSession, ...]:
-        """Runs there is something to go back to, most wanting attention first.
-
-        Only sessions with a form on them. A workflow part-way through its
-        menus owns a session too, and it has nothing to show — going to one
-        puts up a run panel with an empty configuration pane.
-        """
+        """Runs there is something to go back to, most wanting attention first."""
         order = ("asking", "failed", "done", "running", "idle")
         return tuple(
             sorted(
@@ -1299,7 +904,6 @@ class TuiConsole(App):
             )
         )
 
-    # -------------------------------------------------------------- shutdown
 
     def action_leave(self) -> None:
         self._leave()
@@ -1312,14 +916,7 @@ class TuiConsole(App):
         self.exit()
 
     async def _confirm_quit(self, deliberate: bool = True) -> bool:
-        """Nothing leaves the app on a keystroke that could have meant something else.
-
-        Quitting on top of live runs is N directories abandoned rather than one,
-        so that is always named before anything is thrown away. With nothing
-        going, only the quit chords go straight out: Esc is a navigation key, and
-        the press that walks out of the last menu is one further than the user
-        was aiming — mash it and the app should still be there.
-        """
+        """Nothing leaves the app on a keystroke that could have meant something else."""
         live = self._sessions.live()
         if live:
             count = f"{len(live)} run{'s are' if len(live) > 1 else ' is'}"
@@ -1339,34 +936,18 @@ class TuiConsole(App):
         )
 
     async def _shut_down(self) -> None:
-        """Write the tabs down, then take the runs down — in that order.
-
-        Stopping a run removes its session from the registry, so tabs written
-        down afterwards are no tabs at all, and "no tabs" is how this store says
-        the project was closed out. Written first, the record is of the app as
-        the user left it: every form as filled in, every name as given, and a
-        run that was going logged up to the moment it was killed.
-        """
+        """Write the tabs down, then take the runs down — in that order."""
         self._leaving = True
         self._remember()
         await self._stop_every_run()
 
     async def _stop_every_run(self) -> None:
-        """N tasks to unwind and N subprocesses to kill, not one of each.
-
-        The single-run path already did this correctly; it only had to fan out.
-        """
+        """N tasks to unwind and N subprocesses to kill, not one of each."""
         for session in self._sessions.all():
             await self._stop_run(session)
 
     async def _stop_run(self, session: RunSession) -> None:
-        """Take the whole workflow down, not just the slow thing inside it.
-
-        Deliberately not `request_stop`: that is the user saying "stop this run"
-        and the workflow is meant to survive it and report the stop. Here the
-        workflow itself is going away, so the cancellation has to travel all the
-        way out rather than being caught and recovered from.
-        """
+        """Take the whole workflow down, not just the slow thing inside it."""
         worker = session.task
         if worker is not None and not worker.is_finished:
             worker.cancel()
@@ -1374,7 +955,6 @@ class TuiConsole(App):
                 await worker.wait()
         self._sessions.remove(session)
 
-    # ---------------------------------------------------------------- menus
 
     def trail_label(self) -> str:
         return TRAIL_SEPARATOR.join(self._current_steps().values())
@@ -1384,11 +964,7 @@ class TuiConsole(App):
         return session.steps if session is not None else self._steps
 
     def _enter_step(self, step: str) -> tuple[str, ...]:
-        """Forget this step and everything downstream, then return what precedes it.
-
-        Re-asking a step means its old answer is being replaced, so the trail
-        corrects itself without the caller having to say it went backwards.
-        """
+        """Forget this step and everything downstream, then return what precedes it."""
         steps = self._current_steps()
         for later in TRAIL_STEPS[TRAIL_STEPS.index(step) :]:
             steps.pop(later, None)
@@ -1404,13 +980,7 @@ class TuiConsole(App):
     def _entry(
         self, trail: tuple[str, ...], key: str, name: str, description: str
     ) -> MenuEntry:
-        """One card, told what is still going on behind it.
-
-        Where the card leads is where the menu stands plus the card's own name,
-        which is exactly the context a run started there would belong to. With
-        a strip per context that is the only thing telling the user a run they
-        left is down this way — the strip they are looking at will not.
-        """
+        """One card, told what is still going on behind it."""
         return MenuEntry(key, name, description, self._sessions.running_under((*trail, name)))
 
     def _replay(self, step: str) -> object | None:
@@ -1427,22 +997,12 @@ class TuiConsole(App):
     ) -> Capability | None:
         chosen = next((c for c in capabilities if c.info.key == preselect), None)
         if chosen is not None:
-            # Recorded exactly as a real choice is, so the breadcrumb, the session's
-            # scope and the tab this lands in are the same either way. No screen is
-            # claimed because nothing has taken one yet - this only ever answers the
-            # first call.
             self._enter_step("capability")
             self._record("capability", chosen.info.name, chosen)
             return chosen
         if self._leaving:
-            # Nothing left to choose: the loop asking is on its way out, and a
-            # menu pushed now would be mounted into a screen stack being torn
-            # down. Reads to the loop as "the user walked out of the top menu",
-            # which is what has just happened.
             return None
         session = current_session()
-        # A workflow that was stopped never reached its pause, so the flag it
-        # left behind is cleared here rather than swallowing the next one.
         self._result_acknowledged = False
         self._quiet_output()
         if session is not None:
@@ -1465,10 +1025,6 @@ class TuiConsole(App):
             )
         )
         if index is None:
-            # Leaving here is leaving for good, so anything still going gets
-            # named before it is thrown away rather than after — and so does
-            # leaving at all, because Esc got here by walking rather than by
-            # being aimed.
             if await self._confirm_quit(deliberate=False):
                 return None
             return await self.choose_capability(capabilities)
@@ -1544,9 +1100,6 @@ class TuiConsole(App):
         return packs[index]
 
     async def choose_folder(self, start: str = "", prompt: str = "") -> str | None:
-        # No step recorded: a folder is not one of the menus a run's breadcrumb is
-        # made of, and putting it in TRAIL_STEPS would make going back to a menu
-        # forget it.
         await self._claim_screen(current_session())
         chosen = await self.push_screen_wait(
             PathScreen(
@@ -1555,9 +1108,6 @@ class TuiConsole(App):
                 recent=self._recent.recent() if self._recent is not None else (),
             )
         )
-        # Recorded on the way out, and only for an answer: a dialog somebody escaped
-        # out of said nothing about where they work, and a history that filled up with
-        # cancelled navigation would be a history of nothing.
         if chosen and self._recent is not None:
             self._recent.remember(chosen)
         return chosen
@@ -1569,9 +1119,6 @@ class TuiConsole(App):
     ) -> ScriptSection | None:
         inherited = self._replay("script_section")
         if isinstance(inherited, ScriptSection):
-            # Matched by key rather than by identity: the document is read off the
-            # disk again on the way back in, so a sibling tab repeating this step is
-            # holding an equal section, not the same one.
             match = next((s for s in sections if s.key == inherited.key), None)
             if match is not None:
                 self._record("script_section", match.name, match)
@@ -1583,9 +1130,6 @@ class TuiConsole(App):
             CardMenuScreen(
                 "Choose a group",
                 [
-                    # No detail passed: CardMenuScreen falls through to hints.py for a
-                    # key it knows, which is every domain this toolkit ships, and to the
-                    # card's own description for one it does not.
                     self._entry(trail, section.key, section.name, section.summary)
                     for section in sections
                 ],
@@ -1607,9 +1151,6 @@ class TuiConsole(App):
     ) -> ScriptAction | None:
         inherited = self._replay("script_action")
         if isinstance(inherited, ScriptAction):
-            # Matched by identifier rather than by identity: the catalogue is
-            # read off the disk again on the way back in, so a sibling tab
-            # repeating this step is holding an equal action, not the same one.
             match = next(
                 (a for a in actions if a.identifier == inherited.identifier), None
             )

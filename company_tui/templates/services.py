@@ -1,10 +1,4 @@
-"""What every pack is handed, and the few steps every pack does the same way.
-
-A pack's own module should read as the stack it is for. Checking that a tool
-exists, showing someone what a delete is about to take, and previewing a set of
-files before writing them are not that — they are the same in every stack, so
-they live here and a pack calls them.
-"""
+"""What every pack is handed, and the few steps every pack does the same way."""
 
 import re
 import time
@@ -40,7 +34,7 @@ RAW = "  "
 PREVIEW_LIMIT = 12
 """How many names a preview lists before it starts counting instead."""
 
-PACKAGE_TOKEN = "{package}"
+PACKAGE_TOKEN = "{package}"  # noqa: S105 - a placeholder, not a password
 """Stands in, in a generator's default folder, for the project's own package name."""
 
 QUIET_TAIL = 20
@@ -53,14 +47,7 @@ _TROUBLE = re.compile(r"npm ERR!|\bfatal:|\berror:|\bERROR\b", re.IGNORECASE)
 
 
 class QuietRun:
-    """Watches a noisy command without repeating it.
-
-    `npm install` is several thousand lines nobody reads and one line that
-    matters. Streaming all of it buries the run's own narration; streaming none
-    of it makes a three-minute install look like a hang. So: trouble is shown as
-    it happens, a long silence is broken by saying the run is still alive, and
-    the end of the output is kept back so a failure has something to show.
-    """
+    """Watches a noisy command without repeating it."""
 
     def __init__(
         self,
@@ -129,12 +116,7 @@ def describe_missing(missing: Sequence[ToolRequirement]) -> str:
 
 
 async def clear_destination(root: Path, services: PackServices) -> bool:
-    """Make `root` safe to scaffold into, or report that the user said no.
-
-    An occupied destination is listed before it is offered up for deletion. A
-    yes/no with nothing behind it is not a confirmation — the person answering
-    has to be able to see what the answer costs.
-    """
+    """Make `root` safe to scaffold into, or report that the user said no."""
     if not services.file_system.exists(root):
         return True
 
@@ -173,13 +155,7 @@ async def run_generator(
     renderers: Mapping[str, Renderer],
     stack_name: str,
 ) -> PackActionResult:
-    """Add files to the project the user is standing in.
-
-    Where a new project starts from an empty destination, this one starts from
-    someone else's work, so it refuses twice before writing: once if the current
-    directory is not an IKAIKA project at all, and again if the files it would
-    write are already there.
-    """
+    """Add files to the project the user is standing in."""
     root = Path(".")
     try:
         identity = services.finalizer.require_project(root)
@@ -200,9 +176,6 @@ async def run_generator(
         )
 
     services.console.write(f"Adding to '{identity.title}' ({identity.name}).")
-    # A stack whose folders are named after the project cannot put a useful
-    # default in a form built before the project is known, so it writes
-    # `{package}` and the answer is substituted once the manifest has been read.
     folder = Path(str(context.destination).replace(PACKAGE_TOKEN, identity.name.snake))
     files = {
         str(folder / relative_path): content

@@ -1,22 +1,10 @@
-"""The launch-time update check, and the handover that runs the installer.
-
-Two things here are worth testing hardest, and neither is the happy path.
-
-The THROTTLE, because both ways of getting it wrong are invisible. Too eager and the app
-spends a sixty-an-hour budget on somebody restarting it to look at a theme, so the manual
-check is rate-limited when they actually want it. Too shy and an update sits unmentioned.
-
-The REMEMBERED STATE, because it is a path this build reads out of a file written by a
-previous build and then asks Windows to execute. Every branch that decides to trust it is
-in here: the file has to still exist, and what it holds has to still be newer than what
-is running - or the badge survives the install it was offering and the app spends every
-launch proposing the version it already is.
-"""
+"""The launch-time update check, and the handover that runs the installer."""
 
 import asyncio
 import os
 import subprocess
 import unittest
+import urllib.error
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -49,6 +37,10 @@ from company_tui.infrastructure.handover import (
     SCRIPT,
     SILENT,
     WindowsHandover,
+)
+from company_tui.infrastructure.release_feed import (
+    HttpAssetDownload,
+    require_http,
 )
 from company_tui.infrastructure.update_state import FileUpdateState, state_path
 from company_tui.presentation.chrome import AppHeader
@@ -155,14 +147,7 @@ class _Handover(HandoverPort):
 
 
 def _scratch_cache(case: unittest.TestCase) -> Path:
-    """A real, empty cache directory that goes away with the test.
-
-    NEVER `Path(".")`. That was the placeholder here while the cache was only ever read
-    from, and it stopped being harmless the moment `_discard` learned to delete: the
-    sweep emptied the repository root, every file of it. `_discard` now refuses any
-    directory not named `updates`, and this makes sure no test ever asks it to.
-    docs/pitfalls.md 6.3.
-    """
+    """A real, empty cache directory that goes away with the test."""
     folder = TemporaryDirectory()
     case.addCleanup(folder.cleanup)
     cache = Path(folder.name) / CACHE_DIRECTORY
@@ -191,13 +176,9 @@ class Throttling(unittest.TestCase):
         self.assertTrue(due(UpdateState(checked_at=_stamp(CHECK_INTERVAL_HOURS + 1)), NOW))
 
     def test_exactly_the_interval_is_due(self):
-        # >= rather than >, so a value landing on the boundary asks rather than
-        # waiting for a whole further interval.
         self.assertTrue(due(UpdateState(checked_at=_stamp(CHECK_INTERVAL_HOURS)), NOW))
 
     def test_a_timestamp_in_the_future_is_due(self):
-        # A corrected clock, or a file from another machine. Waiting for the calendar
-        # to catch up would suppress the check with nothing on screen to say why.
         ahead = (NOW + timedelta(hours=5)).isoformat()
         self.assertTrue(due(UpdateState(checked_at=ahead), NOW))
 
@@ -223,9 +204,6 @@ class Looking(unittest.TestCase):
         )
 
     def test_an_unconfigured_source_asks_nothing_and_says_nothing(self):
-        # Spelled out, because a bare UpdateSource is CONFIGURED now - it carries
-        # DEFAULT_REPOSITORY. Empty is somebody having turned checking off, and it is
-        # still the one thing that stops this asking.
         feed = _Feed()
         report = asyncio.run(self._watch(UpdateSource(repository=""), feed).look())
         self.assertEqual(0, feed.asked)
@@ -233,8 +211,6 @@ class Looking(unittest.TestCase):
         self.assertEqual("", report.notice("^"))
 
     def test_the_shipped_default_does_get_asked(self):
-        # The other side of it: out of the box, with nothing configured, the check runs.
-        # That is what making the repository a default was for.
         feed = _Feed()
         report = asyncio.run(self._watch(UpdateSource(), feed).look())
         self.assertEqual(1, feed.asked)
@@ -285,9 +261,6 @@ class Looking(unittest.TestCase):
             self.assertTrue(state.state.checked_at)
 
     def test_nothing_newer_records_the_check_and_forgets_the_old_installer(self):
-        # THE REGRESSION THIS GUARDS: the app comes back up as the version that
-        # installer held. A state file that kept it would offer the install again,
-        # every launch, forever.
         feed = _Feed((_release("v0.0.1+1-released"),))
         state = _State(UpdateState(checked_at=_stamp(9), tag="v0.0.1+1", installer="x"))
         report = asyncio.run(
@@ -300,8 +273,6 @@ class Looking(unittest.TestCase):
         self.assertEqual("", state.state.installer)
 
     def test_a_feed_error_is_silent_and_does_not_record_a_check(self):
-        # Not recording is the point: an offline launch must not hold the check off
-        # for six hours after the network comes back.
         feed = _Feed(error="could not reach api.github.com")
         state = _State()
         report = asyncio.run(
@@ -359,11 +330,6 @@ class RememberingWhatWasFetched(unittest.TestCase):
         )
 
     def test_a_download_from_the_other_line_is_not_offered(self):
-        # updates.json is ONE file and both installs read it. The debug build
-        # fetches a debug installer and records it; without this the release build
-        # starts, sees a newer version recorded and offers it - which installs a
-        # second app and leaves the release build where it was. docs/pitfalls.md
-        # 6.6, arriving past the guard in `choose` that was meant to close it.
         state = self._recorded("v9.9.9+9")
         watch = self._watch(_Feed(()), state, build=BUILD_RELEASE)
         self.assertFalse(asyncio.run(watch.look()).waiting)
@@ -374,14 +340,8 @@ class RememberingWhatWasFetched(unittest.TestCase):
         self.assertTrue(asyncio.run(watch.look()).waiting)
 
     def test_each_line_keeps_its_own_record(self):
-        # The refusal above is the belt; this is the braces, and it is what stops
-        # the two builds fighting over one file. Shared, the release build's own
-        # check overwrote the debug build's record and cost it a re-download of
-        # thirty megabytes it already had.
         self.assertEqual(state_path(BUILD_RELEASE), state_path(BUILD_UNKNOWN))
         self.assertNotEqual(state_path(BUILD_DEBUG), state_path(BUILD_RELEASE))
-        # The release build keeps the name the file already has, so the split
-        # needs no migration.
         self.assertEqual("updates.json", state_path(BUILD_RELEASE).name)
 
     def test_an_installer_already_here_needs_no_request_at_all(self):
@@ -432,7 +392,6 @@ class RememberingWhatWasFetched(unittest.TestCase):
                     installer=str(installer),
                 )
             )
-            # Installed IS what the installer holds - the update already happened.
             report = asyncio.run(self._watch(feed, state, version="0.0.1+1").look())
             self.assertFalse(report.waiting)
             self.assertEqual("", state.state.installer)
@@ -474,20 +433,9 @@ class HandingOver(unittest.TestCase):
 
 
 class TheWaiterScript(unittest.TestCase):
-    """The one script that decides whether an upgrade corrupts the install.
-
-    It has to wait for THIS process and then start the installer, in that order. The
-    installer runs `RMDir /r` over the directory holding the running executable, so a
-    script that starts it without waiting is the bug the whole file exists to avoid.
-
-    The rest of these are about the thing that replaced a `-Command` string: nothing is
-    interpolated into the script, so every path travels as an argument and quoting stops
-    being a correctness question.
-    """
+    """The one script that decides whether an upgrade corrupts the install."""
 
     def _handover(self, folder: str) -> WindowsHandover:
-        # Never the real %TEMP%: a test that wrote there would leave a .ps1 behind on
-        # every run. See docs/pitfalls.md 6.3 for why a path argument here gets a test.
         return WindowsHandover(timeout=120, folder=Path(folder))
 
     def test_it_waits_before_it_starts(self):
@@ -498,35 +446,22 @@ class TheWaiterScript(unittest.TestCase):
         )
 
     def test_it_installs_silently_and_waits_for_the_installer(self):
-        # The whole point of an in-app update: no wizard, and -Wait so what follows
-        # happens after the install rather than alongside it.
         self.assertIn(f"-ArgumentList '{SILENT}'", SCRIPT)
         self.assertIn("-Wait -PassThru", SCRIPT)
 
     def test_a_failure_reruns_the_installer_visibly(self):
-        # A SILENT FAILURE IS WORSE THAN A WIZARD: the user sees the app close and
-        # nothing come back. The retry runs it again without /S so its own error dialog
-        # explains itself.
         visible = SCRIPT.rindex("Start-Process -FilePath $Installer -ErrorAction")
         self.assertGreater(visible, SCRIPT.index(SILENT), "the retry must drop /S")
 
     def test_a_start_that_threw_is_told_from_a_non_zero_exit(self):
-        # The old one-liner could not tell them apart. $ErrorActionPreference was
-        # SilentlyContinue, so a Start-Process that threw left $done null, and
-        # `$null -ne 0` took the same branch as an installer that ran and refused -
-        # two different failures, one behaviour, and no record of which happened.
         self.assertIn("the installer could not be started", SCRIPT)
         self.assertIn("the installer exited with", SCRIPT)
 
     def test_the_log_survives_a_failure_and_the_script_never_does(self):
-        # By the time this runs the app is gone, so the log is the only account there
-        # is - and it is worth nothing if it is deleted on the path that needs it.
         self.assertIn("if ($installed) { Remove-Item -LiteralPath $Log", SCRIPT)
         self.assertIn("Remove-Item -LiteralPath $PSCommandPath", SCRIPT)
 
     def test_nothing_is_interpolated_into_it(self):
-        # The point of the whole change. A path pasted into the script is program text,
-        # and a quote in one ends the string and runs the rest as PowerShell.
         with TemporaryDirectory() as folder:
             written = self._handover(folder)._write_script()
             self.assertEqual(SCRIPT, written.read_text(encoding="utf-8-sig"))
@@ -539,9 +474,6 @@ class TheWaiterScript(unittest.TestCase):
             self.assertEqual("120", argv[argv.index("-Timeout") + 1])
 
     def test_an_awkward_path_reaches_the_script_untouched(self):
-        # The inverse of the `quote()` this replaced. Nothing is escaped, because the
-        # path is never code - and this repository lives under a folder literally named
-        # "GitHub(jnsbnmndz)".
         awkward = Path("C:/it's/GitHub(jnsbnmndz)/$env/setup.exe")
         with TemporaryDirectory() as folder:
             argv = self._handover(folder)._argv(Path(folder) / "w.ps1", awkward)
@@ -551,9 +483,6 @@ class TheWaiterScript(unittest.TestCase):
         self.assertIn("$env", passed)
 
     def test_the_script_is_run_with_the_policy_bypassed(self):
-        # -File OBEYS the execution policy where -Command ignored it. Without this the
-        # script is refused on a default machine, and what the user sees is an app that
-        # closed and never came back.
         with TemporaryDirectory() as folder:
             script = Path(folder) / "w.ps1"
             argv = self._handover(folder)._argv(script, Path(folder) / "setup.exe")
@@ -571,15 +500,6 @@ class TheWaiterScript(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "the handover refuses before this on other systems")
     def test_the_waiter_gets_a_console_of_its_own(self):
-        # THE BUG THIS FILE WAS REWRITTEN FOR. DETACHED_PROCESS gives powershell.exe no
-        # console, and a console application with no console comes up, finds nothing to
-        # attach to, and exits 0 without running a line - while the parent's Popen
-        # reports success, so the app said the handover was armed and quit. There was
-        # never a waiter, so there was never an installer.
-        #
-        # A test cannot start a real waiter, because a real waiter installs something.
-        # What it can do is refuse by name the one flag known to produce a process that
-        # does nothing at all.
         with TemporaryDirectory() as folder:
             installer = Path(folder) / "setup.exe"
             installer.write_bytes(b"")
@@ -598,9 +518,6 @@ class TheWaiterScript(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "the handover refuses before this on other systems")
     def test_a_waiter_that_could_not_start_leaves_nothing_behind(self):
-        # Nothing is waiting for this process, so the app carries on - and the script
-        # would sit in %TEMP% for good, since the only thing that deletes it is the run
-        # that never happened.
         with TemporaryDirectory() as folder:
             installer = Path(folder) / "setup.exe"
             installer.write_bytes(b"")
@@ -653,13 +570,7 @@ class TheStateFile(unittest.TestCase):
 
 
 class SweepingTheCache(unittest.TestCase):
-    """Thirty megabytes per version, and nothing else is in a position to remove it.
-
-    The installer never touches the user's home; the uninstaller must not, because that
-    directory also holds settings and the script repositories somebody edits. So the only
-    thing that can tell a stale installer from the one being offered is the check that
-    knows which version is running.
-    """
+    """Thirty megabytes per version, and nothing else is in a position to remove it."""
 
     def _watch(self, feed, state, cache, *, version="0.0.1+1"):
         return UpdateWatch(
@@ -673,8 +584,6 @@ class SweepingTheCache(unittest.TestCase):
         )
 
     def test_the_installer_for_the_running_version_is_deleted(self):
-        # THE RESIDUE THIS EXISTS FOR: the update happened, so this file produced the
-        # version doing the asking. Nothing else will ever come back for it.
         cache = _scratch_cache(self)
         installer = cache / "dti-0.0.1-setup.exe"
         installer.write_bytes(b"installer")
@@ -697,8 +606,6 @@ class SweepingTheCache(unittest.TestCase):
         self.assertFalse(partial.exists())
 
     def test_a_fresh_download_survives_its_own_sweep(self):
-        # The sweep runs after a successful download, to clear the PREVIOUS version's
-        # installer. Without the exception it would delete what it just fetched.
         cache = _scratch_cache(self)
         stale = cache / "dti-0.0.1-setup.exe"
         stale.write_bytes(b"old")
@@ -709,8 +616,6 @@ class SweepingTheCache(unittest.TestCase):
         self.assertFalse(stale.exists(), "and drop what it replaced")
 
     def test_a_directory_in_the_cache_is_left_alone(self):
-        # "Remove everything under a path built from configuration" is not a line worth
-        # having, so the sweep skips directories rather than recursing.
         cache = _scratch_cache(self)
         nested = cache / "somebody-elses-folder"
         nested.mkdir()
@@ -720,15 +625,12 @@ class SweepingTheCache(unittest.TestCase):
         self.assertTrue((nested / "keep.txt").exists())
 
     def test_a_missing_cache_directory_is_not_an_error(self):
-        # Named `updates`, so the name guard is not what makes this pass.
         cache = _scratch_cache(self) / "gone" / CACHE_DIRECTORY
         state = _State(UpdateState(checked_at=_stamp(9)))
         asyncio.run(self._watch(_Feed(), state, cache).look())
         self.assertFalse(cache.exists())
 
     def test_an_installer_still_being_offered_is_not_swept(self):
-        # Nothing newer was found, but the remembered installer IS newer than what is
-        # running — so the remembered path short-circuits before any sweep.
         cache = _scratch_cache(self)
         installer = cache / "dti-0.0.2-setup.exe"
         installer.write_bytes(b"installer")
@@ -745,17 +647,7 @@ class SweepingTheCache(unittest.TestCase):
 
 
 class TheSweepDoesNotTrustItsPath(unittest.TestCase):
-    """The regression that ate this repository's root, twice.
-
-    `_discard` is a loop that deletes files in a directory handed to the constructor. A
-    test passed `Path(".")` as a placeholder - harmless when it was written, because the
-    cache was only ever read from - and the sweep emptied every file at the repository
-    root. `.gitignore` with it, which then unmasked the signing keys.
-
-    Both guards are asserted here, either of which would have prevented it. The tests
-    above no longer point the cache anywhere real, but "no test does that any more" is a
-    promise about the tests; this is a property of the code.
-    """
+    """The regression that ate this repository's root, twice."""
 
     def _watch(self, cache: Path) -> UpdateWatch:
         return UpdateWatch(
@@ -770,7 +662,6 @@ class TheSweepDoesNotTrustItsPath(unittest.TestCase):
 
     def test_a_directory_that_is_not_the_cache_is_left_completely_alone(self):
         with TemporaryDirectory() as folder:
-            # Shaped like the thing that actually got deleted.
             root = Path(folder)
             (root / "VERSION").write_text("0.0.1+1", encoding="utf-8")
             (root / ".gitignore").write_text("certs/", encoding="utf-8")
@@ -804,18 +695,7 @@ class TheSweepDoesNotTrustItsPath(unittest.TestCase):
 
 
 class TheBadge(unittest.IsolatedAsyncioTestCase):
-    """The header, mounted for real rather than reasoned about.
-
-    Only the header: booting `TuiConsole` would start the menu loop, and the thing
-    worth checking here is that the badge reads the notice off the app the way the
-    window notice does — compose-time as well as on change, because every step of a
-    workflow composes a fresh header and an update found once at launch would
-    otherwise vanish at the first menu.
-
-    Read back with `render()`, not `renderable`, which does not exist on this
-    version of Textual — docs/pitfalls.md 5.2, walked into once more while writing
-    this very test.
-    """
+    """The header, mounted for real rather than reasoned about."""
 
     class _App(App):
         def __init__(self, notice: str = "") -> None:
@@ -860,12 +740,7 @@ if __name__ == "__main__":
 
 
 class TheInstallingScreen(unittest.IsolatedAsyncioTestCase):
-    """What the app puts up between saying yes to an update and going away.
-
-    The window used to vanish on the spot: everything after the click is correct
-    and none of it was visible, so the one moment the app was doing exactly what
-    it had been asked to do was the moment it looked like a crash.
-    """
+    """What the app puts up between saying yes to an update and going away."""
 
     class _App(App):
         pass
@@ -888,9 +763,6 @@ class TheInstallingScreen(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_nothing_dismisses_it(self):
-        # By now the handover is armed and something is waiting on this pid, so
-        # there is nowhere to go back to - a key that appeared to cancel would be
-        # a control that lies. It is the only screen in the app with no way out.
         app = self._App()
         async with app.run_test() as pilot:
             await self._up(app)
@@ -902,9 +774,6 @@ class TheInstallingScreen(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(app.screen, InstallingScreen)
 
     async def test_the_mark_turns_rather_than_sitting_still(self):
-        # This screen is up for as long as shutting down takes, which with a run
-        # mid-install is a subprocess tree to kill - and a still frame held for
-        # four seconds is the wedged window it exists to rule out.
         app = self._App()
         async with app.run_test() as pilot:
             screen = await self._up(app)
@@ -918,15 +787,7 @@ class TheInstallingScreen(unittest.IsolatedAsyncioTestCase):
 
 
 class TheKeyPrintedOnTheAnswer(unittest.IsolatedAsyncioTestCase):
-    """`ConfirmScreen(key=...)` draws a chord under the affirmative. It must press it.
-
-    It was drawn and never bound. `BINDINGS` carried `escape` and nothing else,
-    and a `ModalScreen` stops the app's own copy of the chord reaching past it -
-    so the one key the dialog named was the one key that did nothing. What that
-    looked like was an update that would not install: the button says Ctrl+U,
-    Ctrl+U does nothing, and Enter is on CANCEL because neither answer may look
-    pre-selected.
-    """
+    """`ConfirmScreen(key=...)` draws a chord under the affirmative. It must press it."""
 
     class _App(App):
         pass
@@ -964,7 +825,6 @@ class TheKeyPrintedOnTheAnswer(unittest.IsolatedAsyncioTestCase):
             self.assertIs(False, answer.get("said"))
 
     async def test_a_dialog_with_no_chord_is_unaffected(self):
-        # Most of them have none, and a key press there must go where it always did.
         app = self._App()
         async with app.run_test() as pilot:
             answer = await self._ask(app, "")
@@ -975,3 +835,34 @@ class TheKeyPrintedOnTheAnswer(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
             self.assertNotIn("said", answer, "nothing should have answered it")
             self.assertIsInstance(app.screen, ConfirmScreen)
+
+
+class TheSchemeOfAUrlBeforeItIsOpened(unittest.TestCase):
+    """`urlopen` speaks `file:` and `ftp:` too, and one of these URLs is not ours.
+
+    `api_base` is guarded by `UpdateSource.problem`, but an asset URL is read out of
+    the feed's own response - so the one URL nothing here chose is also the one whose
+    file is handed to Windows to execute.
+    """
+
+    def test_http_and_https_are_allowed(self):
+        require_http("http://localhost:8080/releases")
+        require_http("https://api.github.com/repos/a/b/releases")
+
+    def test_a_local_file_is_refused(self):
+        with self.assertRaises(urllib.error.URLError):
+            require_http("file:///C:/Windows/System32/calc.exe")
+
+    def test_other_schemes_are_refused(self):
+        for url in ("ftp://host/x.exe", "data:text/plain,x", "javascript:alert(1)", ""):
+            with self.assertRaises(urllib.error.URLError):
+                require_http(url)
+
+    def test_the_download_checks_before_it_opens_anything(self):
+        # The port documents URLError for anything that stops it, so the guard raises
+        # what the callers already handle rather than a new kind of failure.
+        with TemporaryDirectory() as folder:
+            target = Path(folder) / "setup.exe"
+            with self.assertRaises(urllib.error.URLError):
+                asyncio.run(HttpAssetDownload().fetch("file:///etc/passwd", target))
+            self.assertFalse(target.exists(), "nothing may be written for a refused URL")

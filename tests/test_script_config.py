@@ -1,12 +1,4 @@
-"""What a script repository's document is read as.
-
-Focused on what a project's own config added, each of it silent when wrong: a
-section grouping that decides the menu depth, an action description that decides
-what a card says, and the control each declared type is offered as - a `path`
-that is a picker rather than a blank box, an `array` that is tick boxes rather
-than a dropdown accepting one where several were meant, and a `number` that is a
-numeric field rather than advice printed under a text one.
-"""
+"""What a script repository's document is read as."""
 
 import unittest
 
@@ -64,8 +56,6 @@ class SectionsTest(unittest.TestCase):
         self.assertEqual(2, len(sections[0].actions))
 
     def test_keeps_declaration_order_rather_than_sorting(self):
-        # The document's order is the author's order; re-sorting it would put the
-        # menu in an order nobody chose and make it move when a section is renamed.
         document = {**DOCUMENT, "config": {
             "windows": DOCUMENT["config"]["windows"],
             "git": DOCUMENT["config"]["git"],
@@ -94,8 +84,6 @@ class DescriptionTest(unittest.TestCase):
         self.assertEqual("Pulls updates from another branch.", action.detail)
 
     def test_falls_back_to_the_section_when_the_document_describes_nothing(self):
-        # Ten commands in one section would otherwise all read "Runs the git
-        # workflow", which is true of each and useful about none.
         action = ScriptAction(section="git", key="check-all")
         self.assertEqual("Runs the git workflow", action.summary)
 
@@ -107,8 +95,6 @@ class PathKindTest(unittest.TestCase):
         self.assertIs(OptionKind.PATH, options["CertDir"].kind)
 
     def test_a_declared_set_of_paths_is_still_offered_as_the_set(self):
-        # A choice is a better control than a picker when the answers are known,
-        # and this is the ordering that decides which one wins.
         document = {**DOCUMENT, "config": {"windows": {"setup-signing": {
             "args": [{"flag": "CertDir", "type": "path", "default": "a",
                       "allowed_values": ["a", "b"]}],
@@ -126,8 +112,6 @@ class PathKindTest(unittest.TestCase):
 
 class ArgumentTest(unittest.TestCase):
     def test_a_choice_keeps_the_values_the_document_allowed(self):
-        # The bug this guards produced one allowed value that was the whole list
-        # printed as a string, and a default that then resolved to nothing.
         action = next(a for a in actions_from(DOCUMENT) if a.key == "pull-updates")
         options = {o.key: o for o in action_options(action, "/proj")}
         self.assertEqual(("development", "main"), options["Branch"].choices)
@@ -141,7 +125,6 @@ class ArgumentTest(unittest.TestCase):
         self.assertEqual(
             "true", action.references_from({"Prune": True})["pull-updates.args.Prune"]
         )
-
 
 
 class MultiSelectTest(unittest.TestCase):
@@ -165,14 +148,11 @@ class MultiSelectTest(unittest.TestCase):
         return {o.key: o for o in action_options(action, "/proj")}
 
     def test_an_array_with_a_declared_set_is_offered_as_tick_boxes(self):
-        # A dropdown here accepts one where two were meant, and says nothing
-        # about several being allowed.
         option = self.options()["Targets"]
         self.assertIs(OptionKind.MULTI, option.kind)
         self.assertEqual(("windows", "android", "web"), option.choices)
 
     def test_an_array_with_no_declared_set_stays_free_text(self):
-        # Nothing to tick. Comma-joined text is what a list without a vocabulary is.
         self.assertIs(OptionKind.TEXT, self.options()["Extra"].kind)
 
     def test_a_number_is_a_number_field_and_not_a_hint_on_a_text_one(self):
@@ -184,14 +164,12 @@ class MultiSelectTest(unittest.TestCase):
         self.assertEqual("A number between 1024 and 65535.", option.help)
 
     def test_a_range_is_said_in_whole_numbers(self):
-        # The document wrote 1024, not 1024.0, and the help is read by a person.
         self.assertNotIn(".0", self.options()["Port"].help)
 
     def test_a_number_with_no_range_still_says_what_it_is(self):
         self.assertEqual("A number.", self.options()["Count"].help)
 
     def test_a_comma_joined_answer_validates_against_the_declared_set(self):
-        # This is what the tick boxes produce, so it has to be what the rules accept.
         argument = actions_from(self.DOC)[0].arguments[0]
         self.assertEqual("", argument.reason_to_refuse("windows,android"))
         self.assertIn("nintendo", argument.reason_to_refuse("windows,nintendo"))

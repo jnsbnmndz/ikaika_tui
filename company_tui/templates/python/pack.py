@@ -1,3 +1,5 @@
+"""`TemplatePack` adapter for the Python stack, dispatching to `behavior.py`."""
+
 from company_tui.domain.options import Option
 from company_tui.domain.template_pack import (
     Generator,

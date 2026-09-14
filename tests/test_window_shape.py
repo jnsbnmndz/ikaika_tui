@@ -1,20 +1,4 @@
-"""A poll that costs two reads and draws nothing.
-
-CLAUDE.md says this file counts calls on a fake window: a hundred ticks over one
-being dragged, one maximized, one minimized, or one with room in it all have to
-answer zero resizes, and a floor that cannot be reached has to stop after
-`RESIZE_ATTEMPTS` rather than asking once per tick forever. It did not exist -
-`tests/` was gitignored - so this is that test.
-
-Both invariants are about cost, which is why they need counting rather than
-reading. `SizeGuard.hold` runs on a timer; a branch that resizes when it should
-not is not a wrong window size, it is a window being shoved about several times a
-second while somebody is trying to drag it.
-
-No `user32` here. `SizeGuard` takes an `AppWindow`, so a fake with the same two
-methods is the whole harness, and `dragging()` is patched at module scope because
-it reads the real mouse button.
-"""
+"""A poll that costs two reads and draws nothing."""
 
 import unittest
 from unittest import mock
@@ -85,15 +69,12 @@ class QuietTicksTest(unittest.TestCase):
         self.assertEqual([], self._hold(roomy()).resizes)
 
     def test_a_maximized_window_is_left_alone(self):
-        # The user asked for the whole screen more recently than this did.
         self.assertEqual([], self._hold(cramped_state(maximized=True)).resizes)
 
     def test_a_minimized_window_is_left_alone(self):
-        # Not a size anybody chose.
         self.assertEqual([], self._hold(cramped_state(minimized=True)).resizes)
 
     def test_a_window_being_dragged_is_never_resized(self):
-        # The expensive case, and the one that reads as the app fighting the mouse.
         self.dragging.return_value = True
         self.assertEqual([], self._hold(cramped_state()).resizes)
 
@@ -105,9 +86,6 @@ class BoundedAttemptsTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_a_floor_that_cannot_be_reached_is_asked_for_at_most_twice(self):
-        # A window manager that refuses the size would otherwise be asked once per
-        # tick, forever - a resize several times a second for as long as the app is
-        # open. The state handed in never improves, which is the point.
         state = cramped_state()
         window = FakeWindow(state)
         guard = SizeGuard(window)
@@ -116,7 +94,6 @@ class BoundedAttemptsTest(unittest.TestCase):
         self.assertEqual(RESIZE_ATTEMPTS, len(window.resizes))
 
     def test_the_budget_is_returned_once_the_window_has_room(self):
-        # Otherwise one bad stretch early on spends the budget for the session.
         window = FakeWindow()
         guard = SizeGuard(window)
         for _ in range(RESIZE_ATTEMPTS):
@@ -136,7 +113,6 @@ class BoundedAttemptsTest(unittest.TestCase):
 
 class OpeningTest(unittest.TestCase):
     def test_a_window_already_the_right_size_is_not_asked_about(self):
-        # The common case on the second run of the day.
         window = FakeWindow(
             WindowState(
                 width=DEFAULT_PLAN.start_width,

@@ -1,3 +1,5 @@
+"""Copy this with `behavior.py` to add a stack; see CLAUDE.md."""
+
 from company_tui.domain.template_pack import (
     Generator,
     PackActionResult,
