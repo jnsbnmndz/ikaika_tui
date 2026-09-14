@@ -245,12 +245,19 @@ graphify update .                         # after any code change (AST only, no 
 - Avoid dependencies until their value clearly exceeds their maintenance cost. `textual` (the interactive TUI) is the one exception so far — keep it that way; put any new external tool behind a port instead of a fresh dependency where possible.
 - **Comments live at the top of a file and nowhere else.** One module docstring saying what
   the file is for, in a line or two. Classes and functions get a single line; constants get
-  a single line or none. No inline `#` commentary — the exceptions are tool directives
-  (`# noqa`, `# type:`), which are instructions rather than prose. The reasoning that used
-  to sit beside the code lives in `docs/decisions/` (why a thing is built this way) and
-  `docs/pitfalls.md` (what went wrong and the rule that followed); put it there, where one
-  copy serves the whole repository, and reference it by number when a line needs it.
+  a single line or none. No inline `#` commentary — the only exceptions are tool directives
+  (`# noqa`, `# type:`), which are instructions rather than prose.
+- **The reasoning goes in `docs/`, not beside the code.** `docs/decisions/` is why a thing
+  is built the way it is; `docs/pitfalls.md` is what went wrong and the rule that followed.
+  Write it there, where one copy serves the whole repository, and cite it by number
+  (`docs/pitfalls.md 6.4`) where a line needs it. A finding that only exists as a comment
+  is one the next sweep deletes.
 - Do not write comments that repeat what the code already says.
+- **Behaviour and its description change together** — the docs that describe it, and the
+  text on screen. A card's description, an option's `help`, a dialog's wording and a focus
+  hint are the documentation users actually read, and they go stale the same way a comment
+  does. A control that describes what it no longer does is the same defect as a stale
+  comment, only visible to everyone.
 - Preserve existing behavior unless the requested change says otherwise.
 
 ## Adding a capability
@@ -299,5 +306,8 @@ The app also asks for itself, once, as it starts: `application/updates.py` runs 
 - New decisions go in `docs/decisions/`; anything that failed silently goes in
   `docs/pitfalls.md`.
 - New decisions and failure paths are tested.
+- Anything the change made untrue is corrected in the same change: the decision record it
+  contradicts, the passage in `README.md`, and the **text on screen** — card descriptions,
+  option `help`, dialog wording, focus hints in `presentation/hints.py`.
 - Domain boundaries remain independent of concrete tools.
 - Graphify reflects the current source tree.
