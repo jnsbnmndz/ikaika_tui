@@ -1,16 +1,4 @@
-"""Creating a project, and adding to one that already exists.
-
-The two are one capability because they are one question asked twice — which
-stack, and then what of it — but they are not the same work. New Project hands
-a name and a destination to the pack. Components hands a form to whatever the
-stack's script repository declares it can add, because those generators are
-maintained where the templates they write are, and a toolbox release is the
-wrong unit for "React Native grew a widget generator".
-
-A stack with no script repository, or one whose repository declares nothing
-that writes a file, falls back to the generators the pack itself ships. That is
-what keeps Components meaningful for a stack that has never had scripts.
-"""
+"""Creating a project, and adding to one that already exists."""
 
 from company_tui.application.template_registry import TemplatePackRegistry
 from company_tui.capabilities import script_actions
@@ -83,21 +71,10 @@ class ScaffoldCapability(Capability):
                 if walk.ending is script_actions.Ending.DONE:
                     return walk.exit_code
                 if walk.notice:
-                    # Written rather than carried onto a menu, because what
-                    # follows is a form and not a menu. Carrying it back to the
-                    # stack menu would drop the "keep this copy" answer with it
-                    # — that is settled per walk — and ask the same question
-                    # again the moment the user walked back in.
                     self._console.write(walk.notice)
-                # NOTHING falls through to whatever the pack ships with, which
-                # for a stack that has never had a script repository is the only
-                # thing Components could mean.
 
             options = pack.options(target)
             if not options:
-                # A form with nothing on it cannot be filled in, so the pack is
-                # asked again — with the reason carried onto that menu, where the
-                # user actually is, rather than written behind it.
                 notice = (
                     f"{pack.info.name} has nothing to generate for "
                     f"{target.value.replace('_', ' ')} yet."
@@ -115,18 +92,11 @@ class ScaffoldCapability(Capability):
             try:
                 context = context_from(target, values)
             except InvalidProjectName as error:
-                # Caught before any pack sees it: the name becomes a directory
-                # that gets deleted and recreated, and a name that is really a
-                # path would aim that at somewhere the user did not choose.
                 if await self._console.close_run_panel(str(error), ok=False):
                     continue
                 return FAILED
 
             try:
-                # Claimed here rather than inside a pack, so every stack is
-                # covered by the same rule and none of them has to remember it —
-                # and claimed before the work is handed over, or two runs both
-                # find the directory free and both start writing to it.
                 self._locks.claim(context.destination)
             except DestinationBusy as error:
                 if await self._console.close_run_panel(str(error), ok=False):
@@ -139,9 +109,6 @@ class ScaffoldCapability(Capability):
                 self._locks.release(context.destination)
 
             if result is None:
-                # No result means either the user stopped it or it broke; the
-                # console knows which, and they do not end the same way — a
-                # break has to report a failing exit code to whatever ran us.
                 failure = self._console.panel_failure()
                 if await self._console.close_run_panel(
                     failure or STOPPED_MESSAGE, ok=False
@@ -149,9 +116,6 @@ class ScaffoldCapability(Capability):
                     continue
                 return FAILED if failure else CANCELLED
 
-            # Scaffolding one project is usually scaffolding several, so the
-            # panel offers itself back and the loop picks that up here rather
-            # than making the user walk out to the menu and in again.
             if await self._console.close_run_panel(
                 result.message, ok=result.exit_code == 0
             ):

@@ -243,6 +243,13 @@ graphify update .                         # after any code change (AST only, no 
 - Preview destructive changes and require explicit confirmation.
 - Never expose credentials, tokens, private payloads, or environment secrets.
 - Avoid dependencies until their value clearly exceeds their maintenance cost. `textual` (the interactive TUI) is the one exception so far — keep it that way; put any new external tool behind a port instead of a fresh dependency where possible.
+- **Comments live at the top of a file and nowhere else.** One module docstring saying what
+  the file is for, in a line or two. Classes and functions get a single line; constants get
+  a single line or none. No inline `#` commentary — the exceptions are tool directives
+  (`# noqa`, `# type:`), which are instructions rather than prose. The reasoning that used
+  to sit beside the code lives in `docs/decisions/` (why a thing is built this way) and
+  `docs/pitfalls.md` (what went wrong and the rule that followed); put it there, where one
+  copy serves the whole repository, and reference it by number when a line needs it.
 - Do not write comments that repeat what the code already says.
 - Preserve existing behavior unless the requested change says otherwise.
 

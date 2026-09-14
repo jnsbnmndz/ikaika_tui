@@ -1,3 +1,5 @@
+"""One menu option as a focusable card."""
+
 from dataclasses import dataclass
 
 from textual.app import ComposeResult
@@ -10,13 +12,7 @@ from company_tui.presentation.icons import art_for
 
 
 def running_text(count: int) -> str:
-    """What a card says about the runs going on behind it.
-
-    Words, with no glyph in front of them. Every pointer, clock and stop shape
-    worth reaching for lives in the block terminals render from an emoji font
-    instead of a text one — double width, its own colour, and nothing like the
-    line art beside it. The accent colour is what makes this line stand out.
-    """
+    """What a card says about the runs going on behind it."""
     return f"{count} running" if count else ""
 
 
@@ -26,30 +22,13 @@ class MenuEntry:
     name: str
     description: str
     running: int = 0
-    """Runs still going at or below this option. A menu that says nothing about
-    them makes the user open every door to find the one they left work behind."""
+    """Runs still going at or below this option. A menu that says nothing about."""
 
     detail: str = ""
-    """The line shown under the grid while this card has focus, where the entry
-    knows it. `hints.py` is a table keyed by the keys this toolbox ships, and a
-    menu read off a script repository's manifest has keys it cannot know — so
-    such a menu carries its own words rather than falling through to a card
-    description written to fit three lines."""
-
+    """The line shown under the grid while this card has focus, where the entry."""
 
 class Card(Widget, can_focus=True):
-    """One menu option.
-
-    The `-compact` class collapses the card to a single row for terminals too
-    narrow to give every option a full tile; the compose tree stays the same so
-    only the stylesheet decides which layout is in play. A merely short terminal
-    keeps the tiles and scrolls them instead.
-
-    Hovering focuses the card rather than styling it separately, so the accent
-    border marks exactly one option whether you arrived by mouse or by keyboard.
-    The card has no fill of its own in any state — only the border speaks — and
-    `max-height` stops a tall terminal from stretching the tiles out of shape.
-    """
+    """One menu option."""
 
     BINDINGS = [("enter", "select", "Select")]
 
@@ -208,12 +187,7 @@ class Card(Widget, can_focus=True):
         yield Static(f"[{self.index + 1}]", classes="card--hotkey", markup=False)
 
     def show_running(self, count: int) -> None:
-        """Say what is going on behind this card, as it changes.
-
-        Said once at compose time it would be a snapshot, and a card still
-        offering to take you back into a run that has finished is worse than
-        one that never mentioned it.
-        """
+        """Say what is going on behind this card, as it changes."""
         for line in self.query(".card--running").results(Static):
             line.update(running_text(count))
             line.set_class(not count, "-idle")

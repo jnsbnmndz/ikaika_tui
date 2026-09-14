@@ -1,22 +1,4 @@
-"""The run panel answers a form the way the WPF dialog does.
-
-Two front ends over the same commands only works if they mean the same thing by
-the same form. These are the rules where "nearly" is a different program:
-
-  An untouched field binds NOTHING. Not an empty string, not the default made
-  explicit - nothing. `flutter/build-release` refuses a run outright when an
-  argument that does not apply to the chosen platform is bound, and its
-  remembered choices key off which arguments were bound at all, so a form that
-  always passed `-Platform` would defeat the memory it exists to use.
-
-  A dropdown opens on a row that NAMES its default and binds nothing. Showing
-  the default and passing it look identical and are not.
-
-  The preview says exactly what will run, by the same rules, because a preview
-  that disagrees with the run is worse than none.
-
-The WPF side of each is pinned in the toolkit's own `manifest.Tests.ps1`.
-"""
+"""The run panel answers a form the way the WPF dialog does."""
 
 import unittest
 
@@ -86,8 +68,6 @@ class UntouchedFormTest(unittest.TestCase):
         self.assertFalse(values["Preview"])
 
     def test_the_whole_form_adds_up_to_the_bare_command(self):
-        # The point of every rule above, in one assertion: opening the form and
-        # pressing Run is the same as typing the command with no arguments.
         session = opened_form()
         self.assertEqual(
             ".\\script.ps1 git/pull-updates",
@@ -97,8 +77,6 @@ class UntouchedFormTest(unittest.TestCase):
 
 class DefaultIsShownNotBoundTest(unittest.TestCase):
     def test_the_option_still_carries_the_default_to_name_the_row_with(self):
-        # Dropped from the VALUES, kept on the option: the row has to say
-        # "(default: development)" while binding nothing.
         option = next(
             o for o in action_options(the_action(), "/proj") if o.key == "Branch"
         )
@@ -133,9 +111,6 @@ class PreviewTest(unittest.TestCase):
 
 class StaleAnswerTest(unittest.TestCase):
     def test_an_answer_no_longer_offered_is_dropped_rather_than_restored(self):
-        # A fetched list changes between runs - the branch answered last time is
-        # exactly the one somebody has since deleted - and a Select built with a
-        # value outside its own options raises on mount and takes the app down.
         session = opened_form()
         session.values["Branch"] = "a-branch-that-went-away"
         session.load("Pull Updates", action_options(the_action(), "/proj"))
@@ -172,8 +147,6 @@ class ControlChoiceTest(unittest.TestCase):
         self.assertIs(OptionKind.PATH, options["root"])
 
     def test_a_secret_never_reaches_the_form(self):
-        # The manifest omits it, so there is nothing here to render. Asserted so
-        # that emitting one would fail here rather than being noticed on screen.
         flags = {o.key.lower() for o in action_options(the_action(), "/proj")}
         for banned in ("password", "secret", "token", "passphrase"):
             self.assertNotIn(banned, flags)
@@ -201,15 +174,12 @@ class FetchedChoicesTest(unittest.TestCase):
         self.assertIn("choices git/pull-updates Branch", self.argument().choices_command)
 
     def test_it_holds_no_values_of_its_own(self):
-        # The whole point: nothing local is written down.
         self.assertEqual((), self.argument().allowed_values)
 
     def test_an_argument_with_no_such_command_is_unaffected(self):
         self.assertEqual("", self.argument("Message").choices_command)
 
     def test_without_values_it_is_a_text_box_until_they_arrive(self):
-        # The desktop form falls back the same way when a provider answers nothing,
-        # so a fetch that fails costs a picker rather than the whole form.
         options = {o.key: o.kind for o in action_options(actions_from(self.DOC)[0], "/p")}
         self.assertIs(OptionKind.TEXT, options["Branch"])
 
@@ -228,7 +198,6 @@ class FetchedChoicesTest(unittest.TestCase):
         options = {o.key: o for o in action_options(filled, "/p")}
         self.assertIs(OptionKind.CHOICE, options["Branch"].kind)
         self.assertEqual(("development", "main"), options["Branch"].choices)
-        # And it still opens bound to nothing, naming its default.
         self.assertEqual("development", options["Branch"].default)
 
 class RowLabelTest(unittest.TestCase):
@@ -250,21 +219,16 @@ class RowLabelTest(unittest.TestCase):
         return {o.key: o for o in action_options(actions_from(self.DOC)[0], "/p")}
 
     def test_the_document_s_own_label_is_used(self):
-        # A form whose point is that anything picked can be typed next time should
-        # say the thing you would type.
         self.assertEqual("-Branch   [String]", self.options()["Branch"].label)
 
     def test_a_document_that_names_no_label_still_reads_well(self):
-        # React Native's generators write flags for people, not for a shell.
         self.assertEqual("Api Endpoint", self.options()["apiEndpoint"].label)
 
     def test_a_file_gets_the_file_picker_and_a_directory_the_directory_one(self):
-        # Browsing for a manifest in a tree that hides files finds nothing.
         self.assertIs(OptionKind.FILE, self.options()["ManifestPath"].kind)
         self.assertIs(OptionKind.PATH, self.options()["StageDir"].kind)
 
     def test_both_are_still_typeable(self):
-        # Browsing is the shortcut, not the only way in.
         for key in ("ManifestPath", "StageDir"):
             self.assertTrue(self.options()[key].is_input)
 

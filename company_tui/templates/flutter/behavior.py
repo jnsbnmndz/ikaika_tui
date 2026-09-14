@@ -1,9 +1,4 @@
-"""Flutter projects.
-
-Not implemented yet. When it is, `pubspec.yaml` is this stack's equivalent of
-Expo's `app.json` — the file besides `ikaika.script.json` that also carries the
-project's name — so it becomes an `IdentityRewrite` passed to the finalizer.
-"""
+"""Flutter projects."""
 
 from company_tui.domain.template_pack import (
     Generator,

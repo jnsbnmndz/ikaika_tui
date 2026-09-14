@@ -1,15 +1,4 @@
-"""Every menu step the console records has to be a step it knows about.
-
-`TRAIL_STEPS` is ordered, and `_enter_step` indexes into it to forget a step and
-everything after it. A name missing from that tuple raises `ValueError` — which
-is caught by the run supervisor as a failed workflow, written to a session log
-nobody is looking at, and answered by calmly putting the previous menu back. The
-capability appears to open and vanish, with no error anywhere the user can see.
-
-That is exactly what a new `script_section` step did, so this reads the step
-names back out of the source rather than listing them again here: a test that
-repeated the tuple would agree with itself and still miss the next one.
-"""
+"""Every menu step the console records has to be a step it knows about."""
 
 import ast
 import unittest
@@ -46,14 +35,10 @@ class TrailStepsTest(unittest.TestCase):
         )
 
     def test_the_source_really_does_record_steps(self):
-        # Guards the guard: if the AST walk stopped matching, the test above would
-        # pass by finding nothing at all.
         self.assertIn("capability", recorded_steps())
         self.assertIn("script_section", recorded_steps())
 
     def test_a_section_is_forgotten_before_the_action_under_it(self):
-        # Order decides what going back clears. A section listed after its own
-        # actions would leave a stale action behind when the section changes.
         self.assertLess(
             TRAIL_STEPS.index("script_section"), TRAIL_STEPS.index("script_action")
         )

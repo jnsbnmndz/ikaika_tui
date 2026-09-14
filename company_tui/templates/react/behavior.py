@@ -1,10 +1,4 @@
-"""React web projects.
-
-Not implemented yet. Once there is a structure repository for it, this becomes
-the same shape as `templates/react_native/behavior.py`: a `TemplateSource`, a
-clone, and the finalizer — plus whichever files besides `ikaika.script.json`
-carry the project's name for this stack.
-"""
+"""React web projects."""
 
 from company_tui.domain.template_pack import (
     Generator,

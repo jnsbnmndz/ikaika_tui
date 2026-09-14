@@ -1,14 +1,4 @@
-"""The Expo half of a React Native project's identity.
-
-`app.json` is not part of the IKAIKA project contract — only this stack has one
-— so the mapping from a project name onto Expo's fields lives with the stack
-that owns the file rather than in the finalizer every stack shares.
-
-Expo spells the same name four ways, and each one has to be right or the
-consequence is silent: a slug that still says `react-native-structure` publishes
-over the template's project, and a scheme shared with another app means the
-wrong one opens the link.
-"""
+"""The Expo half of a React Native project's identity."""
 
 from collections.abc import Callable
 
@@ -42,9 +32,6 @@ def rewriter(bundle_prefix: str) -> Callable[[str, ProjectIdentity], str]:
         json_document.put(document, IOS_BUNDLE_ID, identifier)
         json_document.put(document, ANDROID_PACKAGE, identifier)
 
-        # The template's EAS project belongs to the template. Left in place, every
-        # project scaffolded from it would build into the same one, and the first
-        # anybody would know is a build appearing under the wrong app.
         json_document.discard(document, EAS_PROJECT_ID)
 
         return json_document.dump(document, json_document.detect_indent(source))

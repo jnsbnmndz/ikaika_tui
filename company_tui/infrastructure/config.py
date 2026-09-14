@@ -1,33 +1,4 @@
-"""Settings read from and written to the toolbox's own TOML file.
-
-Looked for beside the project first and in the user's home second, so a team can
-pin a template for one repository without changing what everyone else gets.
-
-    [scaffold]
-    workspace_root = "~/work"
-    bundle_prefix  = "com.dti"
-    scripts_root   = "~/.dti/scripts"
-
-    [templates.react_native]
-    url = "https://github.com/JDM-Github/react_native_structure.git"
-    ref = "v1.2.0"
-
-    [scripts.react_native]
-    url = "https://github.com/JDM-Github/react_native_scripts.git"
-    ref = "v1.0.0"
-
-    [updates]
-    repository = "owner/name"
-
-Either filename is read - the one before the rename included - and a file that
-already exists keeps its name. Nothing here is required. A malformed or
-unreadable file falls back to the
-defaults rather than stopping the toolbox: settings that cannot be parsed are a
-reason to warn, not a reason to be unable to scaffold anything.
-
-Written by hand rather than with a library, because the shape is four keys and a
-table per stack, and `tomllib` only reads.
-"""
+"""Settings read from and written to the toolbox's own TOML file."""
 
 import tomllib
 from pathlib import Path
@@ -58,12 +29,7 @@ HOME_CONFIG = naming.store_dir() / CONFIG_NAME
 
 
 def settings_file(directory: Path) -> Path:
-    """This directory's settings file, whichever name it already goes by.
-
-    A file somebody has edited keeps its name: preferring the new one would read
-    an empty default over a real configuration and then write the answer
-    somewhere the old file is still sitting, saying something else.
-    """
+    """This directory's settings file, whichever name it already goes by."""
     for name in naming.config_names():
         candidate = directory / name
         if candidate.is_file():
@@ -78,8 +44,7 @@ HEADER = f"# {naming.APP_TITLE} settings."
 
 
 def quote(value: str) -> str:
-    """A TOML basic string. Windows paths are full of the one character that
-    would otherwise start an escape, so it is escaped rather than hoped about."""
+    """A TOML basic string. Windows paths are full of the one character that."""
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
@@ -93,19 +58,8 @@ def render(settings: Settings) -> str:
         f"bundle_prefix = {quote(settings.bundle_prefix)}",
         f"scripts_root = {quote(settings.scripts_root)}",
     ]
-    # Only when it differs from the defaults. An [updates] table repeating the
-    # built-in values in every settings file is noise that reads as configuration,
-    # and the next person to change a default would leave every existing file
-    # pinned to the old one.
     updates = settings.updates
     update_lines = []
-    # `repository` is the one field where an EMPTY value has to be WRITTEN DOWN, and
-    # it is the mirror of the absent/empty distinction in `update_source` above. Empty
-    # means off; the default is not empty; a file that merely omitted the line reads as
-    # "nothing said" and gets the default back. So clearing the field in Advanced would
-    # switch update checking off until the next read and then quietly on again.
-    #
-    # Omitted only when it IS the default, which is the noise this block exists to avoid.
     repository = updates.repository.strip()
     if not repository:
         update_lines.append('repository = ""')
@@ -128,9 +82,6 @@ def render(settings: Settings) -> str:
         if source.ref:
             lines.append(f"ref = {quote(source.ref)}")
 
-    # A script table is worth writing for a URL or for a `check = false`, and
-    # the second can outlive the first: somebody who stopped being asked about a
-    # stack has said something about it even after the URL goes back to default.
     for key in sorted(set(settings.scripts) | set(settings.script_checks)):
         source = settings.scripts.get(key, TemplateSource(url=""))
         checked = settings.script_checks.get(key, True)
@@ -187,12 +138,6 @@ class FileConfig(ConfigPort):
 
     def update_source(self) -> UpdateSource:
         section = self._section(UPDATES_SECTION)
-        # ABSENT AND EMPTY ARE DIFFERENT ANSWERS HERE, and this is the only field
-        # where that matters. A settings file with no `repository` line has not said
-        # anything, so it gets the default; one that says `repository = ""` has said
-        # "off", which is what clearing the field in Advanced writes. Collapsing the
-        # two - `.get("repository", "") or DEFAULT` - would turn update checking back
-        # on for the one person who deliberately turned it off.
         configured = section.get("repository")
         return UpdateSource(
             repository=(
@@ -202,25 +147,12 @@ class FileConfig(ConfigPort):
             channel=self._channel_of(section),
             asset_pattern=str(section.get("asset_pattern", "")).strip()
             or DEFAULT_ASSET_PATTERN,
-            # `is not False`, so a missing key and a malformed one both leave the
-            # check on. The same reading as `script_check` above: a setting nobody
-            # wrote is not a setting saying no.
             check_on_launch=section.get("check_on_launch", True) is not False,
         )
 
     @staticmethod
     def _channel_of(section: dict) -> str:
-        """The channel, falling back to the boolean this key replaced.
-
-        A settings file written before there were three channels says
-        `include_prereleases = true`, which meant "official or prereleases, whichever is
-        newest" - `any`, not `prerelease`. Reading it as prerelease-only would silently
-        stop offering official releases to somebody who never asked for that.
-
-        An unrecognised channel is the default rather than an error: this is one word in
-        a settings file, and refusing to start over a typo in it would be worse than
-        offering official releases to somebody who meant something else.
-        """
+        """The channel, falling back to the boolean this key replaced."""
         named = str(section.get("channel", "")).strip().lower()
         if named in CHANNELS:
             return named
@@ -275,8 +207,6 @@ class FileConfig(ConfigPort):
         path = self.location(scope)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(render(settings), encoding="utf-8")
-        # Everything holds one instance of this, so forgetting what was read is
-        # what makes the change take effect without restarting the toolbox.
         self._settings = None
         self._source = None
         self.problem = ""

@@ -1,3 +1,5 @@
+"""`TemplatePack` adapter for the React Native stack, dispatching to `behavior.py`."""
+
 from company_tui.domain.config import TemplateSource
 from company_tui.domain.options import Option, OptionValues
 from company_tui.domain.script_config import ScriptAction, ScriptCatalogue, ScriptUpdate

@@ -1,3 +1,5 @@
+"""The contract a stack implements to scaffold, generate and build a project."""
+
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -53,13 +55,7 @@ class TemplatePackInfo:
 
 @dataclass(frozen=True, slots=True)
 class ToolRequirement:
-    """An executable a pack needs, declared so it can be checked before it is used.
-
-    Doctor asks every pack for these and reports them together, and a pack asks
-    for its own before it starts, so a missing tool costs a sentence rather than
-    a half-finished directory. Tools behind an optional step are declared too —
-    they are worth reporting, just not worth refusing to start over.
-    """
+    """An executable a pack needs, declared so it can be checked before it is used."""
 
     executable: str
     purpose: str
@@ -75,7 +71,6 @@ class Generator:
     description: str
     folder: str
     """Where this kind of file conventionally lives, offered as an editable default."""
-
 
 NAME_OPTION = Option(
     key="name",
@@ -115,12 +110,7 @@ DESTINATION_OPTION = Option(
 )
 
 def project_options(parent: str = ".") -> tuple[Option, ...]:
-    """The form every new project starts from, rooted where the company keeps them.
-
-    The parent is a default rather than a constant because `workspace_root` in
-    The settings file is where a team says "projects live here", and a form that
-    ignored it would make everyone retype the same path.
-    """
+    """The form every new project starts from, rooted where the company keeps them."""
     return (
         NAME_OPTION,
         TITLE_OPTION,
@@ -137,11 +127,7 @@ FOLDER_KEY = "folder"
 
 
 def generator_options(generators: tuple[Generator, ...]) -> tuple[Option, ...]:
-    """The form for adding a file to a project that already exists.
-
-    Nothing here is a project name, so the destination is a folder inside the
-    current project rather than a new directory beside it.
-    """
+    """The form for adding a file to a project that already exists."""
     if not generators:
         return ()
     return (
@@ -192,12 +178,7 @@ class ScaffoldContext:
 
 
 def context_from(target: ScaffoldTarget, values: OptionValues) -> ScaffoldContext:
-    """Turn a filled-in form into something a pack can act on.
-
-    The name is parsed here, once, before any pack sees it — so `..`, a drive
-    letter or a lone dot is a message in the panel rather than a path handed to
-    the code that deletes directories.
-    """
+    """Turn a filled-in form into something a pack can act on."""
     name = ProjectName.parse(str(values.get("name", "")))
     identity = ProjectIdentity.derive(
         name,
@@ -229,11 +210,7 @@ class TemplatePack(ABC):
         raise NotImplementedError
 
     def options(self, target: ScaffoldTarget) -> tuple[Option, ...]:
-        """Flags this pack wants filled in before it scaffolds `target`.
-
-        The default is what every pack needs. Override to add your own; the
-        presentation renders whatever you return without knowing the stack.
-        """
+        """Flags this pack wants filled in before it scaffolds `target`."""
         if target is ScaffoldTarget.CONTROLLER:
             return generator_options(self.generators())
         return NEW_PROJECT_OPTIONS
@@ -243,30 +220,15 @@ class TemplatePack(ABC):
         return ()
 
     def template_source(self) -> TemplateSource | None:
-        """Where this pack clones from, if it clones at all.
-
-        Answered with the configured source rather than the shipped one, so
-        Settings shows what would actually be used and repointing a stack does
-        not mean editing the file by hand.
-        """
+        """Where this pack clones from, if it clones at all."""
         return None
 
     def script_source(self) -> TemplateSource | None:
-        """Where this stack's build scripts are cloned from, if it has any.
-
-        A separate repository from the template, cloned once into the toolbox's
-        own store rather than into each project: the scripts are what maintains
-        a project after it exists, so they outlive any one of them.
-        """
+        """Where this stack's build scripts are cloned from, if it has any."""
         return None
 
     async def script_actions(self) -> ScriptCatalogue:
-        """What this stack's script repository offers, fetching it if it is not there.
-
-        A stack with no scripts answers with an empty catalogue and no problem,
-        which is how `build` stays the thing that runs for a stack whose build
-        is built in rather than declared.
-        """
+        """What this stack's script repository offers, fetching it if it is not there."""
         return ScriptCatalogue()
 
     def script_options(self, action: ScriptAction) -> tuple[Option, ...]:
@@ -282,12 +244,7 @@ class TemplatePack(ABC):
         )
 
     async def script_status(self, *, compare: bool = False) -> ScriptCatalogue:
-        """What the store holds for this stack, cloning nothing to find out.
-
-        Settings shows this, so it has to answer before the user has asked for
-        anything: a form that fetched a repository to draw its own rows would
-        make opening Settings a network call.
-        """
+        """What the store holds for this stack, cloning nothing to find out."""
         return ScriptCatalogue()
 
     async def install_scripts(self, *, replace: bool = False) -> PackActionResult:

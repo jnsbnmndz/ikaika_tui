@@ -1,3 +1,5 @@
+"""The subprocess and filesystem ports the domain is written against."""
+
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
@@ -24,42 +26,18 @@ class ProcessRunner(ABC):
         on_output: Callable[[str], None],
         cwd: Path | None = None,
     ) -> ProcessResult:
-        """Run `command`, handing each output line over as it arrives.
-
-        For anything slow enough that the user should see it working. `run`
-        stays for short commands whose output only matters once it is complete.
-
-        `cwd` is where the command is run from, which is not always where the
-        toolbox was started. A script repository writes its commands against
-        its own directory — `node scripts/finalize.mjs` means the copy of that
-        script beside the config that named it — so the directory a command came
-        from travels with it rather than being guessed at from the argument.
-
-        Cancelling the caller must kill the command rather than orphan it: a
-        stopped run means the work stops, not just the waiting.
-        """
+        """Run `command`, handing each output line over as it arrives."""
         raise NotImplementedError
 
     async def capture(
         self, command: tuple[str, ...], cwd: Path | None = None
     ) -> ProcessResult:
-        """`run`, off the interface's thread.
-
-        `run` blocks until the command is done, which from inside a workflow
-        means the interface stops redrawing and stops answering the key that
-        would stop it. Anything called while a screen is up goes through here;
-        `run` stays for the plain console, where there is no frame to hold up.
-        """
+        """`run`, off the interface's thread."""
         return await asyncio.to_thread(self.run, command, cwd)
 
     @abstractmethod
     def locate(self, executable: str) -> str | None:
-        """Where `executable` is, or `None` if it is not on this machine.
-
-        Asked before a workflow starts rather than discovered halfway through
-        it: a missing `git` should be one sentence up front, not a half-cloned
-        directory and a subprocess error.
-        """
+        """Where `executable` is, or `None` if it is not on this machine."""
         raise NotImplementedError
 
 
@@ -70,11 +48,7 @@ class FileSystemPort(ABC):
 
     @abstractmethod
     def entries(self, path: Path) -> tuple[str, ...]:
-        """The names directly inside `path`, sorted; empty if it is not a directory.
-
-        Enough to show someone what a destructive step is about to take, which
-        is the difference between confirming a delete and guessing at one.
-        """
+        """The names directly inside `path`, sorted; empty if it is not a directory."""
         raise NotImplementedError
 
     @abstractmethod
@@ -92,24 +66,10 @@ class FileSystemPort(ABC):
 
     @abstractmethod
     def remove_file(self, path: Path) -> None:
-        """Delete one file, and say nothing if it was not there.
-
-        For undoing a single write when the step after it failed. A staged
-        template left behind by a command that never finished is not a partial
-        project file — it is the template itself, comment wrapper and
-        placeholders intact, sitting where the finished thing was meant to be.
-        """
+        """Delete one file, and say nothing if it was not there."""
         raise NotImplementedError
 
     @abstractmethod
     async def remove_tree(self, path: Path) -> None:
-        """Delete a directory and everything beneath it.
-
-        Destructive and not undoable: callers are responsible for confirming
-        with the user first, and for passing a path they created themselves.
-
-        Async because a project directory can hold tens of thousands of files,
-        and deleting them inline would freeze the interface for the duration —
-        including whatever the user would press to stop it.
-        """
+        """Delete a directory and everything beneath it."""
         raise NotImplementedError

@@ -1,3 +1,5 @@
+"""The frame, header, footer and key hints every screen sits inside."""
+
 from collections.abc import Sequence
 
 from textual import events
@@ -23,22 +25,12 @@ FOOTER_HEIGHT = 2
 
 SIGNATURE_MIN_WIDTH = 78
 
-# Size of the app inside the terminal. `100%` fills it. Set these to viewport
-# units to float the app as a smaller centred panel instead — the screens that
-# host AppFrame already centre it, and `max-*` keeps whatever you choose inside
-# the terminal. Note that a terminal cell is about twice as tall as it is wide,
-# so a panel that reads as square needs roughly twice as many columns as rows.
 FRAME_WIDTH = "100%"
 FRAME_HEIGHT = "100%"
 
 
 class AppFrame(Vertical):
-    """Outer border every screen sits inside, so the app reads as one surface.
-
-    Sized rather than filling the terminal, so the app stays a panel on a large
-    monitor instead of stretching edge to edge. The screen holding it is what
-    centres it.
-    """
+    """Outer border every screen sits inside, so the app reads as one surface."""
 
     DEFAULT_CSS = f"""
     AppFrame {{
@@ -51,7 +43,6 @@ class AppFrame(Vertical):
         padding: 0;
     }}
     """
-
 
 class AppHeader(Widget):
     DEFAULT_CSS = f"""
@@ -210,30 +201,18 @@ class AppHeader(Widget):
 
     @classmethod
     def _update_text(cls, notice: str) -> str:
-        """The notice with the key that acts on it, the way the runs badge does.
-
-        The key is in the badge rather than in a footer hint because the notice can
-        appear on any screen - it is chrome, not a menu - and a hint that came and
-        went as the user walked would be a control that moves.
-        """
+        """The notice with the key that acts on it, the way the runs badge does."""
         return f"{notice} · {cls.UPDATE_HINT}" if notice else ""
 
     def _resolve_runs(self) -> str:
         return getattr(self.app, "runs_summary", "") or ""
 
     def _resolve_window(self) -> str:
-        """Read at compose time as well as on change.
-
-        Every step of a workflow composes a fresh header, and a notice only ever
-        pushed on change would be lost by the next screen and reappear whenever
-        the window next happened to move.
-        """
+        """Read at compose time as well as on change."""
         return getattr(self.app, "window_notice", "") or ""
 
     def _resolve_update(self) -> str:
-        """Read at compose time as well as on change, exactly as the window notice
-        is: every step of a workflow composes a fresh header, and an update found
-        once at launch would otherwise vanish at the first menu."""
+        """Read at compose time as well as on change, exactly as the window notice."""
         return getattr(self.app, "update_notice", "") or ""
 
     def _resolve_workspace(self) -> str:
@@ -243,19 +222,7 @@ class AppHeader(Widget):
 
 
 class HoverLight:
-    """Lights a whole widget when the pointer is anywhere inside it.
-
-    Textual puts `:hover` on the innermost widget under the pointer, so a rule
-    naming a descendant asks about a state its ancestor never has, and
-    `Parent:hover .child` silently never matches — the reason a hint made of a
-    key and a label, or a tab made of a name and a close mark, can only ever
-    light up the half the pointer happens to be over. Mixed into the parent it
-    gives that parent a `-hovered` class of its own to hang the rule on.
-
-    Both events are read because crossing between two children is a leave and
-    an enter, and either way the pointer has already been recorded where it
-    now is. Mix in before the widget base, so these handlers are found first.
-    """
+    """Lights a whole widget when the pointer is anywhere inside it."""
 
     def on_enter(self, event: events.Enter) -> None:
         self._sync_hover()
@@ -273,13 +240,7 @@ KEY_ALIASES = {"esc": "escape", "pgup": "pageup", "pgdn": "pagedown"}
 
 
 def key_for(hint: str) -> str:
-    """The key press a hint stands for, or `""` when it does not name one.
-
-    A hint is labelled with the key it describes, so the press is that label
-    read back. `↑↓/←→` and `1–6` name a range rather than a key and come out
-    empty — which is what stops a hint from offering a click that could only
-    ever send nothing.
-    """
+    """The key press a hint stands for, or `""` when it does not name one."""
     parts = [KEY_ALIASES.get(part, part) for part in hint.lower().split("+")]
     if not all(part.isascii() and part.isalnum() for part in parts):
         return ""
@@ -287,16 +248,7 @@ def key_for(hint: str) -> str:
 
 
 class KeyHint(HoverLight, Widget):
-    """A key, what it does, and a click that presses it.
-
-    Reading the hint and reaching for the key it names are the same thought, so
-    the hint is the button: the mouse gets everywhere the keyboard does without
-    a second set of controls to keep in step with the first. Whether a click
-    does anything is the `-pressable` class and nothing else, so a key that is
-    inert right now — a hint naming a range, or `Enter` while nothing is asking
-    for input — stops offering itself rather than firing into whatever happens
-    to hold the focus.
-    """
+    """A key, what it does, and a click that presses it."""
 
     DEFAULT_CSS = """
     KeyHint {
@@ -428,32 +380,13 @@ class AppFooter(Widget):
 
 
 BUSY_FRAMES = ("◐", "◓", "◑", "◒")
-"""The turning mark, from the same geometric block as everything else here.
-
-Four quarters of one circle, so the motion is a rotation rather than a set of
-shapes taking turns. Nothing from the emoji planes — see `presentation/icons.py`
-and `tests/test_glyphs.py` for why a spinner is exactly the sort of thing that
-gets one in."""
+"""The turning mark, from the same geometric block as everything else here."""
 
 BUSY_INTERVAL = 0.12
-"""Seconds a frame is held. Eight or so a second reads as turning rather than
-as a character changing, and the line is one cell wide: this is a repaint of one
-row, and only while something is actually being waited on."""
-
+"""Seconds a frame is held. Eight or so a second reads as turning rather than."""
 
 class BusyLine(Widget):
-    """What the app has to say for itself while a step is taking a while.
-
-    Every workflow step pops one screen before pushing the next, and what shows
-    in between is the app's own frame. That is deliberate — the same chrome
-    reads as the same surface — but it means a step that goes away to the
-    network has nothing on screen saying so, and an empty frame that stays for
-    five seconds is indistinguishable from one that is never going to change.
-
-    A line rather than a screen of its own, in the margin the activity log
-    would use, so a step that also narrates itself reads as this line and then
-    its output rather than as two different things.
-    """
+    """What the app has to say for itself while a step is taking a while."""
 
     DEFAULT_CSS = """
     BusyLine {
@@ -479,13 +412,7 @@ class BusyLine(Widget):
         return Content.assemble((f"{glyph}  ", "$secondary"), self._label)
 
     def show(self, label: str) -> None:
-        """Say `label` and start turning, or stop and go away when it is empty.
-
-        The timer only exists while there is something to wait for. A mark that
-        kept turning over a finished step would be the interface reporting work
-        nobody is doing, and a repaint every eighth of a second for the life of
-        the app to do it.
-        """
+        """Say `label` and start turning, or stop and go away when it is empty."""
         self._label = label
         self.set_class(bool(label), "-busy")
         if label and self._turning is None:

@@ -1,3 +1,5 @@
+"""Every screen the app pushes: menus, dialogs, the run picker and the splash."""
+
 from collections.abc import Callable, Sequence
 
 from rich.text import Text
@@ -35,21 +37,13 @@ from company_tui.presentation.hints import hint_for
 from company_tui.presentation.session import RunSession
 
 CARD_ENTRANCE_DURATION = 0.12
-"""One short fade for the whole grid.
-
-Cards used to fade in one at a time, which read as the menu loading rather than
-arriving: the last of six started a third of a second after the first, and every
-step of every workflow paid it. Entrances are for taking the edge off a repaint,
-not for being watched."""
+"""One short fade for the whole grid."""
 
 TRAIL_SEPARATOR = " › "
 
 CARDS_PER_ROW = 3
-"""Widest the card grid ever gets. More than three tiles across stops reading as
-a set of choices and starts reading as a wall, so extra entries wrap instead."""
+"""Widest the card grid ever gets. More than three tiles across stops reading as."""
 
-# All measured against the menu body, not the terminal, so they keep holding if
-# the frame is ever sized smaller than the terminal.
 CARD_MIN_WIDTH = 26
 CARD_MIN_HEIGHT = 16
 ROW_GUTTER = 1
@@ -67,10 +61,7 @@ class CardMenuScreen(Screen[int | None]):
     ]
 
     ALLOW_SELECT = False
-    """A menu is buttons, not a document. Left as selectable, a press-and-drag
-    across a card starts a text selection instead of pressing it — and a drag
-    that is still open when the window is deactivated comes back as a highlight
-    that follows the mouse and swallows the next click."""
+    """A menu is buttons, not a document. Left as selectable, a press-and-drag."""
 
     DEFAULT_CSS = """
     CardMenuScreen {
@@ -216,10 +207,6 @@ class CardMenuScreen(Screen[int | None]):
                 )
                 yield Static(self._title, id="menu-title")
                 yield Static(self._subtitle, id="menu-subtitle")
-                # A plain container, not a scrollable one: a scrollable container
-                # binds the arrow keys to scrolling and would swallow them before
-                # the grid could move the focus. The focused card scrolls itself
-                # into view anyway.
                 with Container(id="cards-scroll"), Grid(id="cards"):
                     for index, entry in enumerate(self._entries):
                         yield Card(entry, index)
@@ -230,65 +217,37 @@ class CardMenuScreen(Screen[int | None]):
 
     def _footer_hints(self) -> list[tuple[str, str]]:
         hints = [("↑↓/←→", "Navigate"), ("Enter", "Select")]
-        # Only as far as a single keypress reaches. A menu long enough to run
-        # out of digits is one a script repository grew, and a hint offering a
-        # jump the keyboard cannot make is worse than one that stops short.
         jumpable = min(len(self._entries), 9)
         if jumpable > 1:
             hints.append((f"1–{jumpable}", "Jump"))
-        # A run left going has to be reachable from here, or leaving it was the
-        # same thing as losing it.
         if self._runs:
             hints.append(("Ctrl+B", self._runs))
         hints.append(("Esc", self._back_label))
         return hints
 
     def show_runs(self, runs: str) -> None:
-        """Say what is still going, as it changes.
-
-        Said once at compose time it would be a snapshot, and a menu offering a
-        way back into a run that has already finished is worse than a menu that
-        never mentioned it.
-        """
+        """Say what is still going, as it changes."""
         if runs == self._runs or not self.is_mounted:
             return
         self._runs = runs
         self.query_one(AppFooter).show_hints(self._footer_hints())
 
     def show_counts(self, running_under: Callable[[tuple[str, ...]], int]) -> None:
-        """Re-read what is going on behind each card.
-
-        The menu knows where it stands; what each card leads to is that plus
-        the card's own name, which is the context a run there would belong to.
-        """
+        """Re-read what is going on behind each card."""
         for card in self.query(Card):
             card.show_running(running_under((*self._trail, card.entry.name)))
 
     def on_mount(self) -> None:
         self.query_one("#cards").styles.grid_size_columns = self._columns
-        # The whole body, not just the grid. Density can only be measured once
-        # there is a layout to measure, so the cards cannot be there on the
-        # first frame — and a trail, a title and a subtitle that arrive ahead of
-        # them is a menu caught half-built, which at a glance is indistinguishable
-        # from a different menu. Hidden rather than absent, so nothing shifts
-        # when it arrives and what shows meanwhile is the same chrome the gap
-        # between screens already shows.
         self.query_one("#menu-body").styles.opacity = 0.0
         first = next(iter(self.query(Card)), None)
         if first is not None:
-            # Focused before the reveal, not after: a keypress in the frame in
-            # between should land on the menu, not on nothing.
             first.focus()
             self._show_hint(first)
         self.call_after_refresh(self._reveal)
 
     def _reveal(self) -> None:
-        """Size the grid, then bring the menu in — in that order, and as one.
-
-        Sizing first is what keeps the cards from being shown at one size and
-        then visibly re-flowing to another; revealing as one is what keeps the
-        menu from being read before it is all there.
-        """
+        """Size the grid, then bring the menu in — in that order, and as one."""
         self._sync_density()
         self.query_one("#menu-body").styles.animate(
             "opacity", value=1.0, duration=CARD_ENTRANCE_DURATION, easing="out_cubic"
@@ -312,9 +271,6 @@ class CardMenuScreen(Screen[int | None]):
             + (self._rows - 1) * ROW_GUTTER
             + MENU_CHROME_HEIGHT
         )
-        # Only a narrow body collapses the tiles into a list — a short one keeps
-        # the cards at full size and scrolls them, because a squashed card stops
-        # being a card while a scrollbar costs nothing.
         compact = width < needed_width
         scroll = compact or height < needed_height
 
@@ -323,8 +279,6 @@ class CardMenuScreen(Screen[int | None]):
         cards = self.query_one("#cards")
         cards.set_class(compact, "-compact")
         self.query_one("#cards-scroll").set_class(scroll, "-scroll")
-        # A grid row only keeps its height if it is told one; left to itself it
-        # divides whatever room there is, which is the squashing we are avoiding.
         cards.styles.grid_rows = str(CARD_MIN_HEIGHT) if scroll else "1fr"
         for card in self.query(Card):
             card.set_class(compact, "-compact")
@@ -372,8 +326,6 @@ class CardMenuScreen(Screen[int | None]):
             return
         current = next((index for index, card in enumerate(cards) if card.has_focus), 0)
         target = current + delta
-        # Wrapping along a row is helpful; wrapping between rows would jump the
-        # focus somewhere the arrow key did not point.
         target = target % len(cards) if wrap else max(0, min(len(cards) - 1, target))
         cards[target].focus()
 
@@ -480,24 +432,11 @@ class DialogScreen(ModalScreen[ScreenResultType]):
     }
     """
 
-
 CONFIRM_MARK = "▲"
-"""What a confirmation is about, before the sentence is read.
-
-Not the warning sign it looks like in a design: `U+26A0` has an emoji form, so it
-comes out double width in a colour of its own — see `tests/test_glyphs.py`. This
-is the plain geometric triangle, and the colour does the rest.
-"""
-
+"""What a confirmation is about, before the sentence is read."""
 
 class ConfirmScreen(DialogScreen[bool]):
-    """A question with two answers, one of which usually cannot be undone.
-
-    Colour says which is which and the border says which one is focused, rather
-    than the focused answer being filled in. Everything this asks about — quit
-    with runs going, overwrite an existing tree, close a live tab — is a step
-    the user does not get back, so neither answer may look pre-selected.
-    """
+    """A question with two answers, one of which usually cannot be undone."""
 
     DEFAULT_CSS = """
     ConfirmScreen .dialog--mark {
@@ -578,12 +517,7 @@ class ConfirmScreen(DialogScreen[bool]):
                 yield Button(self._answer(), id="yes", flat=True)
 
     def _answer(self) -> Text:
-        """The affirmative, with the key that also does it under the label.
-
-        The key is on the button rather than only in a hint, because this is the
-        one dialog reached by a chord: someone who pressed `Ctrl+Q` to get here
-        should be able to see that pressing it again is the same answer.
-        """
+        """The affirmative, with the key that also does it under the label."""
         label = Text(self._confirm, style="bold")
         if self._key:
             label.append("\n")
@@ -591,25 +525,7 @@ class ConfirmScreen(DialogScreen[bool]):
         return label
 
     def on_key(self, event: events.Key) -> None:
-        """The key printed on the affirmative is the affirmative.
-
-        IT WAS DRAWN AND NEVER BOUND
-
-        `_answer` puts the chord under the label so somebody who pressed `Ctrl+U`
-        to get here can see that pressing it again is the same answer. It said so
-        and it was not true: `BINDINGS` carries `escape` and nothing else, and a
-        `ModalScreen` stops the app's own copy of the chord reaching past it - so
-        the one key the dialog names was the one key that did nothing at all.
-        What that looks like is an update that will not install: the button says
-        Ctrl+U, Ctrl+U does nothing, and Enter is on CANCEL because neither answer
-        may look pre-selected.
-
-        Bound here rather than in `BINDINGS` because the key is per-question:
-        `ConfirmScreen` is one class and the chord belongs to whichever dialog was
-        reached by one. Everything else this app draws as a key is a `KeyHint`,
-        which reads its own label back into the key it presses and so cannot drift
-        from what it does; this label is the one that could, and did.
-        """
+        """The key printed on the affirmative is the affirmative."""
         if self._key and event.key == self._key.lower():
             event.stop()
             event.prevent_default()
@@ -740,13 +656,7 @@ class RunRow(Widget, can_focus=True):
 
 
 class RunsScreen(DialogScreen[RunSession | None]):
-    """Everything in flight, in one list, from wherever the user is.
-
-    Each context keeps its own strip, so no one strip can show them all. This
-    is the view that can: what is running, what is waiting on an answer and
-    what has finished and not been read, each saying where it lives — and one
-    press or click away from being on screen.
-    """
+    """Everything in flight, in one list, from wherever the user is."""
 
     BINDINGS = [
         ("escape", "cancel", "Cancel"),
@@ -869,10 +779,6 @@ class SplashScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Container():
-            # The mark is sized to the art, so it needs something that centres a
-            # child narrower than itself. `align-horizontal` on the container
-            # does not: its other children are full width, so the row of content
-            # already fills it and there is nothing left to centre.
             with Center():
                 yield Static(SPLASH_MARK, id="mark")
             yield Static(WORDMARK, id="wordmark")
@@ -897,37 +803,7 @@ INSTALLING_DETAIL = "This window closes and reopens on the new version."
 
 
 class InstallingScreen(ModalScreen[None]):
-    """What the app shows between saying yes to an update and going away.
-
-    THE WINDOW VANISHING IS THE PROBLEM THIS SOLVES
-
-    Pressing INSTALL AND RESTART used to close the app on the spot. Everything
-    after that is correct and none of it is visible: a detached waiter sits on
-    this pid, the installer runs silently, and a few seconds later a window
-    opens on the new version. What the user gets is their terminal disappearing
-    and something new appearing by itself, which is what a crash looks like and
-    what a program they did not start looks like - so the one moment the app is
-    doing exactly what it was asked to do is the one moment it looks like it is
-    not.
-
-    So the app says so, and says it on the way out rather than not at all.
-
-    IT IS THE SPLASH, DELIBERATELY
-
-    The same mark and the same wordmark the app opens on. The new build comes up
-    on `SplashScreen` moments later, so leaving on the same picture makes the
-    two windows read as one app restarting rather than as one closing and
-    another opening - which is the half of the jump the old process can still do
-    something about.
-
-    NOTHING DISMISSES IT
-
-    No bindings and no click handler. By the time this is on screen the handover
-    is armed, something else is waiting on this pid, and there is nowhere to go
-    back to - so a key that appeared to cancel would be a control that lies. It
-    is the only screen in the app with no way out, and that is the honest shape
-    for it.
-    """
+    """What the app shows between saying yes to an update and going away."""
 
     BINDINGS = []
 
@@ -988,10 +864,6 @@ class InstallingScreen(ModalScreen[None]):
             yield Static(INSTALLING_DETAIL, id="detail")
 
     def on_mount(self) -> None:
-        # Turning rather than still. This screen is up for as long as shutting
-        # down takes, which is one moment with nothing running and several with
-        # a subprocess tree to kill - and a still frame held for four seconds is
-        # the wedged window the mark exists to rule out.
         self._turn()
         self.set_interval(BUSY_INTERVAL, self._turn)
 

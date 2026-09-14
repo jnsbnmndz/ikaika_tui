@@ -1,17 +1,4 @@
-"""The strip of tabs above the terminal, one per run of this context.
-
-Tabs read the way terminal tabs do: the one on screen is lit and the rest say
-what they are up to with a glyph. Each carries its own close mark, and the strip
-scrolls, so ten runs are ten reachable tabs rather than three tabs and a guess.
-
-Only this context's runs are here. A run started from another stack is in that
-stack's strip, and what says so is the count on the menu card leading back to it
-(`SessionRegistry.running_under`), the running total in the chrome, and `Ctrl+B`.
-
-The strip only reports; the console decides. Every gesture leaves here as a
-message so that adding, closing and renaming stay one decision made in one
-place, next to the tasks they affect.
-"""
+"""The strip of tabs above the terminal, one per run of this context."""
 
 from collections.abc import Sequence
 
@@ -34,9 +21,7 @@ TAB_KEYS = (
 """The keys that act on the strip, shown directly beneath it."""
 
 TAB_SCROLL_STEP = 8
-"""Columns per wheel notch — about a short tab, so one notch moves the strip by
-something you can follow rather than by a character or by the whole width."""
-
+"""Columns per wheel notch — about a short tab, so one notch moves the strip by."""
 
 class SessionTabLabel(Static):
     """Keep the status-bearing label while painting an uncluttered idle tab."""
@@ -157,12 +142,7 @@ class SessionTab(HoverLight, Horizontal):
 
 
 class NewSessionTab(Static):
-    """Another run in this context, one press away.
-
-    Held away from the last tab rather than following it at the same spacing:
-    it is a control among names, and a click meant for a tab's close mark that
-    lands here starts a run instead of ending one.
-    """
+    """Another run in this context, one press away."""
 
     DEFAULT_CSS = """
     NewSessionTab {
@@ -190,12 +170,7 @@ class NewSessionTab(Static):
 
 
 class SessionTabs(HorizontalScroll):
-    """The strip itself, rebuilt from the registry whenever anything changes.
-
-    The whole width is the tabs'. The keys that act on them live at the foot of
-    the pane instead, because anything sharing this row is width the tabs do not
-    get — and tabs are the one thing here that has no fixed size.
-    """
+    """The strip itself, rebuilt from the registry whenever anything changes."""
 
     DEFAULT_CSS = """
     /* Two rows, not one: the border takes a row of its own, and a strip sized
@@ -217,12 +192,7 @@ class SessionTabs(HorizontalScroll):
         self._shown: tuple = ()
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
-        """A strip one row tall has nowhere to go but sideways.
-
-        Textual sends the wheel to the vertical axis unless a modifier is held,
-        and there is no vertical axis here — so without this the wheel does
-        nothing over the one thing on screen that most looks like it takes one.
-        """
+        """A strip one row tall has nowhere to go but sideways."""
         self._wheel(event, 1)
 
     def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
@@ -235,18 +205,11 @@ class SessionTabs(HorizontalScroll):
         self.scroll_to(x=self.scroll_x + direction * TAB_SCROLL_STEP, animate=False)
 
     def show(self, sessions: Sequence[RunSession], active: RunSession) -> None:
-        # Rebuilt only when it would come out different. The panel re-renders on
-        # every state change a run reports, and tearing the strip down that
-        # often costs more than the strip does.
         signature = tuple((id(s), s.name, s.status, s is active) for s in sessions)
         if signature == self._shown:
             return
         self._shown = signature
 
-        # Rebuilt in one go, on the message pump, rather than in a worker that
-        # awaits the removal: a worker can be cancelled by the next rebuild
-        # halfway through mounting, and a half-mounted subtree leaves the app
-        # waiting forever for messages that will never be processed.
         self.remove_children()
         tabs: list[Static] = [
             SessionTab(session, session is active) for session in sessions

@@ -1,14 +1,4 @@
-"""The part of scaffolding that does not vary by stack.
-
-A pack decides how a tree appears — cloned from a structure repository, or
-written file by file. What happens to it next is the same either way: it is
-stamped with its own identity instead of the template's, it stops being a copy
-of someone else's repository and starts being its own, and the examples the
-template left behind become the real thing.
-
-Packs hand that to a finalizer rather than each getting it slightly wrong. It
-reaches the disk through ports, so this stays testable without one.
-"""
+"""The part of scaffolding that does not vary by stack."""
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -39,13 +29,8 @@ FIRST_COMMIT = "Initial commit"
 class CannotStampIdentity(Exception):
     """The project carries the files, but they are not shaped the way they must be."""
 
-
 def display_path(path: Path) -> str:
-    """A path the way the user would have typed it.
-
-    Kept in one place because `./` in front of an absolute path is nonsense, and
-    a destination is named in nearly every line a scaffold reports.
-    """
+    """A path the way the user would have typed it."""
     if path == Path("."):
         return "the current directory"
     return path.as_posix() if path.is_absolute() else f"./{path.as_posix()}"
@@ -53,12 +38,7 @@ def display_path(path: Path) -> str:
 
 @dataclass(frozen=True, slots=True)
 class IdentityRewrite:
-    """A stack-specific file that also spells out who the project is.
-
-    `ikaika.script.json` is the contract every project shares; this is for the
-    rest — an Expo `app.json`, a `pubspec.yaml` — which belong to one stack and
-    so are declared by that stack rather than assumed here.
-    """
+    """A stack-specific file that also spells out who the project is."""
 
     relative_path: str
     rewrite: Callable[[str, ProjectIdentity], str]
@@ -88,13 +68,7 @@ class ProjectFinalizer:
         self._report = report
 
     def require_project(self, root: Path) -> ProjectIdentity:
-        """Confirm `root` is an IKAIKA project, and say which one.
-
-        Both halves of scaffolding lean on this: a clone that arrives without a
-        manifest is not a template this toolbox produced, and a generator asked
-        to add a file to the current directory has no business writing into a
-        tree it cannot identify.
-        """
+        """Confirm `root` is an IKAIKA project, and say which one."""
         manifest = naming.manifest_path(root)
         if not self._file_system.exists(manifest):
             raise NotAProjectError(
@@ -126,12 +100,7 @@ class ProjectFinalizer:
     def record_template(
         self, root: Path, source: TemplateSource, commit: str, stack: str
     ) -> None:
-        """Write down which template this came from, and exactly which revision.
-
-        Cloning the default branch means "whatever it looked like today", and a
-        project that cannot answer which revision it started from cannot be told
-        what it is now missing.
-        """
+        """Write down which template this came from, and exactly which revision."""
         self._file_system.write_text(
             root / TEMPLATE_RECORD,
             dump(
@@ -151,8 +120,6 @@ class ProjectFinalizer:
         rewrites: Sequence[IdentityRewrite],
     ) -> tuple[str, ...]:
         self.require_project(root)
-        # Stamped where it already is: renaming the file while rewriting what is
-        # inside it would leave the old one holding a stale copy of the same keys.
         existing = naming.manifest_path(root)
         stamped = [existing.name]
         self._rewrite(existing, apply_identity, identity)
@@ -194,12 +161,7 @@ class ProjectFinalizer:
         return (ENVIRONMENT,)
 
     async def _adopt_repository(self, root: Path, identity: ProjectIdentity) -> str:
-        """Drop the template's history and start one belonging to this project.
-
-        Best effort on purpose. A machine with no `git`, or one that has never
-        been told who its user is, still gets a complete project — it just gets
-        it without the first commit, and is told so.
-        """
+        """Drop the template's history and start one belonging to this project."""
         history = root / GIT_DIRECTORY
         if self._file_system.exists(history):
             self._report("Removing template Git history...")

@@ -1,12 +1,4 @@
-"""Monochrome line art for menu cards.
-
-Emoji were dropped here on purpose: terminals disagree about their width, which
-shifts card layout, and their built-in colour competes with the accent colour
-that marks selection. Box-drawing art is single-width and takes the theme colour.
-
-Every line of an entry is left-padded relative to a shared centre, so the art is
-rendered left-aligned inside an auto-width box and that box is centred as a unit.
-"""
+"""Monochrome line art for menu cards."""
 
 DEFAULT_ART = "\n".join(
     (
@@ -70,7 +62,6 @@ _ART = {
             "       ╰○",
         )
     ),
-    # A document leaving a box and coming back: export and import as one picture.
     "app_setup": "\n".join(
         (
             " ╭─────╮ ▸▸",
@@ -79,7 +70,6 @@ _ART = {
             " ╰─────╯ ◂◂",
         )
     ),
-    # An arrow pointing into a tray - where every update check ends up.
     "updates": "\n".join(
         (
             "    ▼",
@@ -88,8 +78,6 @@ _ART = {
             " ═══════",
         )
     ),
-    # Sliders pushed further than the ones on the Settings card, which is the
-    # whole distinction between the two screens.
     "advanced": "\n".join(
         (
             " ╶───────●╴",
@@ -156,9 +144,6 @@ _ART = {
             " ╰╌╌╌╌╌╌╯",
         )
     ),
-    # What a script repository declares. Keyed by the manifest's own words, so a
-    # repository that adds a section gets a placeholder rather than nothing —
-    # `art_for` already falls back, and these are the ones the stacks use today.
     "android": "\n".join(
         (
             "  ╲     ╱",
@@ -299,11 +284,6 @@ _ART = {
             " ● ───────",
         )
     ),
-    # The three ways out of a store that has fallen behind.
-    # Sections of a project's own script config, keyed by the domain names the
-    # IKAIKA PowerShell toolkit emits. A document naming its sections anything
-    # else gets DEFAULT_ART, which is what art_for's fallback exists for.
-    # A branch leaving a line of commits and coming back to it.
     "git": "\n".join(
         (
             "    ╭─●─╮",
@@ -312,7 +292,6 @@ _ART = {
             "  ╰───────╯",
         )
     ),
-    # A ribboned seal: a signature, which is what these commands produce.
     "windows": "\n".join(
         (
             " ╭─────╮",
@@ -322,7 +301,6 @@ _ART = {
             "  ╵   ╵",
         )
     ),
-    # A prompt with a caret, for a project's own commands.
     "commands": "\n".join(
         (
             " ╭────────╮",
@@ -331,7 +309,6 @@ _ART = {
             " ╰────────╯",
         )
     ),
-    # Plates coming off a compiler and stacking up.
     "dotnet": "\n".join(
         (
             "  ╭─────╮",
@@ -341,7 +318,6 @@ _ART = {
             "     ╵",
         )
     ),
-    # A wireframe solid - a model, which is what the host add-in works on.
     "navisworks": "\n".join(
         (
             "   ╭───╮",
@@ -351,7 +327,6 @@ _ART = {
             " ╰───╯",
         )
     ),
-    # A crate with a version band: the tooling as the thing being shipped.
     "toolkit": "\n".join(
         (
             " ╭───────╮",
@@ -360,7 +335,6 @@ _ART = {
             " ╰───────╯",
         )
     ),
-    # An elephant's head in profile, the way the language is usually drawn.
     "php": "\n".join(
         (
             " ╭──────╮",
@@ -404,9 +378,7 @@ TERMINAL_ART = "\n".join(
         "╰─────╯",
     )
 )
-"""Shown in the middle of a run panel's terminal while it has nothing in it —
-the same line-art vocabulary the cards use, for the same reason."""
-
+"""Shown in the middle of a run panel's terminal while it has nothing in it —."""
 
 def art_for(key: str) -> str:
     return _ART.get(key, DEFAULT_ART)

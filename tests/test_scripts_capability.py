@@ -1,15 +1,4 @@
-"""The walk through a project's own commands, and what it says when there are none.
-
-No disk and no subprocess: the filesystem and the process runner are ports, so a
-fake for each is enough to drive the whole capability. What is checked is the
-part that is easy to get wrong and impossible to see - which menu the user lands
-on after backing out of another, and whether a missing manifest is told apart
-from one that simply declares nothing.
-
-The run itself goes through `templates/scripts.py: run_action`, the same function
-Build uses, so the assertion worth making here is that the declared command line
-reaches the runner filled in - not that a subprocess happened.
-"""
+"""The walk through a project's own commands, and what it says when there are none."""
 
 import asyncio
 import os
@@ -53,7 +42,6 @@ MANIFEST = """
   }
 }
 """
-
 
 @dataclass
 class FakeIdentity:
@@ -179,11 +167,7 @@ def run(capability):
 
 
 class NothingToRunTest(unittest.TestCase):
-    """A directory with no commands is a question, not a dead end.
-
-    It used to report and exit, which left somebody who had opened the toolbox in
-    the wrong place with nothing to do but quit and start again somewhere else.
-    """
+    """A directory with no commands is a question, not a dead end."""
 
     def setUp(self):
         os.environ[PROJECT_ROOT] = str(ROOT)
@@ -197,9 +181,6 @@ class NothingToRunTest(unittest.TestCase):
         self.assertIn(SCRIPT_MANIFEST, console.asked_where[0])
 
     def test_a_manifest_declaring_no_commands_is_told_apart_from_a_missing_one(self):
-        # Both are "nothing to run", and reporting the second as unreadable would
-        # send somebody looking for a syntax error that is not there. The wording
-        # is what the folder question is asked with, so it still has to be right.
         console = StubUi()
         capability, _ = build(
             console, {str(ROOT / SCRIPT_MANIFEST): '{"name": "demo"}'}
@@ -223,7 +204,6 @@ class NothingToRunTest(unittest.TestCase):
         console = StubUi(folders=[str(elsewhere)])
         capability, _ = build(console, {str(elsewhere / SCRIPT_MANIFEST): MANIFEST})
         self.assertEqual(CANCELLED, run(capability))
-        # Asked once, then straight to the sections of the folder it was given.
         self.assertEqual(1, len(console.asked_where))
         self.assertEqual([["git", "windows"]], console.offered_sections)
 
@@ -240,8 +220,6 @@ class LauncherNamedProjectTest(unittest.TestCase):
     """Who decides which project, and when the toolbox has to ask."""
 
     def test_a_named_project_is_opened_without_a_question(self):
-        # `.\script.ps1` names one. Asking anyway would put a prompt in front of
-        # the common path for no information.
         os.environ[PROJECT_ROOT] = str(ROOT)
         self.addCleanup(os.environ.pop, PROJECT_ROOT, None)
         console = StubUi()
@@ -250,8 +228,6 @@ class LauncherNamedProjectTest(unittest.TestCase):
         self.assertEqual([], console.asked_where)
 
     def test_with_no_project_named_it_asks_before_reading_anything(self):
-        # Started on its own, the toolbox is in whatever directory it happens to
-        # be in, and that is a guess rather than an answer.
         os.environ.pop(PROJECT_ROOT, None)
         console = StubUi(folders=[str(ROOT)])
         capability, _ = build(console, {str(ROOT / SCRIPT_MANIFEST): MANIFEST})
@@ -274,8 +250,6 @@ class WalkTest(unittest.TestCase):
         self.assertEqual([], runner.commands)
 
     def test_backing_out_of_the_workflow_menu_returns_to_the_sections(self):
-        # One step back rather than out to the front. Getting this wrong is invisible
-        # in code and immediately obvious to anyone using it.
         console = StubUi(sections=["git"])
         capability, _ = build(console, self.files)
         self.assertEqual(CANCELLED, run(capability))
@@ -299,8 +273,6 @@ class WalkTest(unittest.TestCase):
         command, cwd = runner.commands[0]
         self.assertEqual(ROOT, cwd)
         self.assertIn("git/pull-updates", command)
-        # The reference is replaced, not left standing, and a boolean arrives as a
-        # word rather than as an empty token.
         self.assertEqual("development", command[command.index("-Branch") + 1])
         self.assertEqual("true", command[command.index("-Prune") + 1])
 
@@ -311,7 +283,6 @@ class WalkTest(unittest.TestCase):
         capability, runner = build(console, self.files)
         run(capability)
         self.assertEqual(2, len(runner.commands))
-        # And it did not walk back through either menu to do it.
         self.assertEqual(1, len(console.offered_actions))
 
     def test_a_finished_run_reports_success(self):
@@ -338,8 +309,6 @@ REFRESHABLE = """
   }}}
 }
 """
-
-
 
 class CapturingRunner(FakeProcessRunner):
     """Answers `capture`, and remembers what it was asked to run."""
@@ -406,7 +375,6 @@ class RefreshTest(unittest.TestCase):
         self.assertIn("-Preview", runner.captured[0][0])
 
     def test_a_preview_offers_no_choices_because_it_changed_nothing(self):
-        # The panel must not repaint the field off the back of a dry run.
         runner = CapturingRunner(stdout="Delete 2 local branches?")
         capability, option, _ = self.build(runner)
         self.assertEqual((), self.refresh(capability, option, True).choices)
@@ -423,24 +391,17 @@ class RefreshTest(unittest.TestCase):
         self.assertEqual(ROOT, runner.captured[0][1])
 
     def test_acting_reads_the_list_back_through_the_fetch(self):
-        # A declared refresh CHANGES something and reports what it did - it does
-        # not print the new list. That used to be re-read from the document, and
-        # then the document stopped carrying fetched values, so Update reported a
-        # success and left the dropdown exactly as it was.
         runner = CapturingRunner(stdout="removed 1")
         capability, option, _ = self.build(runner)
         self.assertTrue(option.refresh.values_command)
 
         outcome = self.refresh(capability, option, False)
         self.assertTrue(outcome.ok)
-        # Two commands, in this order: act, then read back.
         self.assertEqual(2, len(runner.captured))
         self.assertNotIn("choices", " ".join(runner.captured[0][0]))
         self.assertIn("choices", " ".join(runner.captured[1][0]))
 
     def test_exit_two_is_a_button_with_nothing_behind_it_not_a_failure(self):
-        # The dispatcher answers 2 when the command declares no refresh for this
-        # parameter. Every fetched choice gets a button, so this is ordinary.
         capability, option, _ = self.build(CapturingRunner(exit_code=2))
         self.assertTrue(self.refresh(capability, option, True).ok)
 
@@ -453,10 +414,6 @@ class RefreshTest(unittest.TestCase):
         self.assertEqual((), outcome.choices)
 
     def test_a_declared_refresh_reads_the_list_back_through_the_fetch(self):
-        # It CHANGES something and reports what it did; it does not print the new
-        # list. The values used to be re-read from the document, and then the
-        # document stopped carrying them - so Update reported a success and left
-        # the dropdown exactly as it was.
         runner = CapturingRunner(stdout="removed 1")
         capability, option, _ = self.build(runner)
         self.assertTrue(option.refresh.values_command)
@@ -464,7 +421,6 @@ class RefreshTest(unittest.TestCase):
         runner.stdout = "alpha\nbeta"
         outcome = self.refresh(capability, option, False)
         self.assertEqual(("alpha", "beta"), outcome.choices)
-        # Acting, then reading back: two commands, in that order.
         self.assertEqual(2, len(runner.captured))
         self.assertIn("choices", " ".join(runner.captured[1][0]))
 

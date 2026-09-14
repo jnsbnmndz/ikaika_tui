@@ -1,20 +1,4 @@
-"""Running the workflows a stack's script repository declares.
-
-Build is a menu of whatever that repository says it can run rather than a list
-kept in this file: a stack adds a workflow by editing its own
-`ikaika.script.json`, not by a release of the toolbox. Which is why the actions
-are asked for between the stack menu and the panel — that is the first moment
-there is a stack to ask, and the last one before the user is looking at a form.
-
-What it does *not* offer is the same repository's generators. An action that
-carries a template and a filename puts a file into a project that already
-exists, which is Scaffold's Components and not a build; listing it in both
-would be the same action reachable two ways, each with its own breadcrumb and
-its own tab. `capabilities/script_actions.py` is the walk they share.
-
-A stack with no declared workflow still has whatever build it ships with. There
-is nothing to choose between there, so it simply runs.
-"""
+"""Running the workflows a stack's script repository declares."""
 
 from company_tui.application.template_registry import TemplatePackRegistry
 from company_tui.capabilities import script_actions
@@ -54,18 +38,12 @@ class BuildCapability(Capability):
 
             if walk.ending is script_actions.Ending.NOTHING:
                 if walk.notice:
-                    # The store was asked about on the way here, and nothing
-                    # after this puts up a screen — both lines land in the
-                    # activity log at the same pause, in the order they happened.
                     self._console.write(walk.notice)
                 result = await pack.build()
                 self._console.write(result.message)
                 return result.exit_code
 
             if walk.ending is script_actions.Ending.BACK:
-                # Fetching the scripts is the one step with no panel behind it,
-                # so what went wrong is carried onto the menu the user lands on
-                # rather than written where the next screen covers it.
                 notice = walk.notice
                 pack = None
                 continue

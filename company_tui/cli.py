@@ -1,18 +1,4 @@
-"""The command line: four commands, three switches, and the app's own name.
-
-EVERY NAME HERE IS DERIVED, NOT WRITTEN
-
-`prog` was the literal "company" and the description was "Company developer
-toolbox", so `dti --help` introduced itself as a program nobody has been able to
-invoke by that name since the rename. Both come out of `domain/naming.py` now,
-which is the file CLAUDE.md points at for exactly this reason: a name written
-twice is a name that goes stale in the copy nobody looks at.
-
-`--version` prints the same string the header shows, from the same `VERSION`
-file (`docs/decisions/0002`). It is a switch rather than a command because it is
-what every other program on the machine answers to, and somebody typing it is
-not choosing between `tui` and `doctor`.
-"""
+"""The command line: four commands, three switches, and the app's own name."""
 
 import argparse
 import asyncio
@@ -27,21 +13,13 @@ COMMANDS = """commands:
   list      every capability, as plain text
   doctor    what this machine is missing
   check     the definition of done: tests, list, doctor"""
-"""Laid out rather than left to argparse's choices list.
-
-`{tui,list,doctor,check}` is four words with no hint of what any of them does,
-and the epilog is the only place a formatter will not reflow. Same shape as
-`script.ps1`'s own listing, for the same reason.
-"""
-
+"""Laid out rather than left to argparse's choices list."""
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=naming.APP_SLUG,
         description=f"{naming.APP_TITLE} - project scaffolding and automation",
         epilog=COMMANDS,
-        # Raw, so COMMANDS keeps its columns. Without it argparse rewraps the
-        # block into one paragraph and the alignment that makes it readable goes.
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

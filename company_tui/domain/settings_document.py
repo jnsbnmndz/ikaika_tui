@@ -1,34 +1,4 @@
-"""Settings as a JSON document, for carrying them between machines.
-
-The settings themselves live in TOML, which is the right format for a file
-people hand-edit beside a repository. This is a different job: one file holding
-everything, moved to another machine, checked into a gist, or kept as a
-before-picture of a configuration somebody is about to change. JSON because it
-is what every other tool can already read, and because a document that travels
-should be one obvious blob rather than a format with a section layout to respect.
-
-
-IMPORTING IS FORGIVING AND SAYS WHAT IT IGNORED
-
-A document written by a newer version, or hand-edited into something odd, must
-not lose the parts that were fine. So every field is read independently, an
-unreadable one falls back to its current value, and each one is REPORTED. The
-alternative - refusing the whole file over one bad key - means a person with a
-typo has no way to get the other twenty settings across.
-
-What is never done is silent partial success. `read_document` hands back the
-problems it found alongside the settings, and the capability shows them; a
-document that half-applied while reporting "imported" is the outcome this shape
-exists to prevent.
-
-
-THE SCHEMA NUMBER IS WRITTEN AND CHECKED, NOT ENFORCED
-
-A higher number than this code knows is a warning, not a refusal: the fields it
-does recognise are still worth having, and refusing would make the export
-useless for exactly the case it is for - moving settings onto a machine running
-a slightly different build.
-"""
+"""Settings as a JSON document, for carrying them between machines."""
 
 from collections.abc import Mapping
 from typing import Any
@@ -55,26 +25,13 @@ SCHEMA_KEY = "schema"
 KIND_KEY = "kind"
 
 KIND = f"{naming.APP_SLUG}-settings"
-"""What an exported document calls itself.
-
-Derived, because it is a name and every name here comes from one place. It is also
-a wire format: a document written before a rename still says the old thing, so
-`KNOWN_KINDS` accepts those without complaining. A warning about the product's own
-former name would be a warning nobody can act on.
-"""
+"""What an exported document calls itself."""
 
 KNOWN_KINDS: tuple[str, ...] = (KIND, "generic-toolbox-settings")
 
 
 def write_document(settings: Settings) -> dict[str, Any]:
-    """Everything, including values equal to the defaults.
-
-    Deliberately unlike the TOML writer, which omits defaults to keep a
-    hand-edited file quiet. An exported document is a snapshot: a reader cannot
-    tell an omitted key from one that was deliberately set to what happens to be
-    today's default, and a default that changes between versions would silently
-    rewrite the setting this file exists to preserve.
-    """
+    """Everything, including values equal to the defaults."""
     return {
         SCHEMA_KEY: SCHEMA,
         KIND_KEY: KIND,
@@ -104,12 +61,7 @@ def write_document(settings: Settings) -> dict[str, Any]:
 def read_document(
     document: Any, current: Settings
 ) -> tuple[Settings, tuple[str, ...]]:
-    """Reads what it can, keeps `current` for the rest, and reports the gaps.
-
-    `current` rather than the built-in defaults: a document that says nothing
-    about a setting is not asking for it to be reset, and importing one written
-    before a field existed should not silently clear that field.
-    """
+    """Reads what it can, keeps `current` for the rest, and reports the gaps."""
     problems: list[str] = []
 
     if not isinstance(document, Mapping):
@@ -176,9 +128,6 @@ def _sources(
             continue
         url = str(entry.get("url", "")).strip()
         if not url:
-            # A pin with no URL pins nothing; the TOML writer drops these too,
-            # so keeping one here would produce a document that does not survive
-            # a save.
             continue
         sources[str(name)] = TemplateSource(
             url=url, ref=str(entry.get("ref", "")).strip()
@@ -218,9 +167,6 @@ def _updates(
         problems.append("'updates' is not an object, so it was ignored")
         return fallback
 
-    # `channel` first, then the boolean it replaced. A document written before there
-    # were three channels says include_prereleases, which meant "either kind, whichever
-    # is newest" - CHANNEL_ANY, and never prerelease-only.
     channel = fallback.channel
     named = _text(section, "channel", "").strip().lower()
     if named and named in CHANNELS:

@@ -1,3 +1,5 @@
+"""Reports what this machine has against what the packs and their scripts need."""
+
 import platform
 import sys
 
@@ -17,12 +19,7 @@ def _want(
     wanted_by: str,
     required: bool,
 ) -> None:
-    """Record that something wants `executable`, keeping the strongest claim.
-
-    Optional only while everything asking for it can do without it: a tool one
-    stack treats as a nicety and another cannot run without is not optional on
-    this machine.
-    """
+    """Record that something wants `executable`, keeping the strongest claim."""
     names, optional = tools.setdefault(executable, ([], True))
     if wanted_by not in names:
         names.append(wanted_by)
@@ -58,8 +55,6 @@ class DoctorCapability(Capability):
         self._console.write(f"Workspace root: {self._config.workspace_root()}")
         self._console.write()
 
-        # Reported per tool rather than per pack: `git` being absent is one fact
-        # about this machine, not one fact per stack that happens to need it.
         for executable, (wanted_by, optional) in (await self._tools()).items():
             location = self._process_runner.locate(executable)
             note = f"{', '.join(wanted_by)}{', optional' if optional else ''}"
@@ -70,23 +65,12 @@ class DoctorCapability(Capability):
         return 0
 
     async def _tools(self) -> dict[str, tuple[list[str], bool]]:
-        """Every program this machine is expected to hold, and who expects it.
-
-        Two sources, because they are two different claims. A pack declares
-        what its own code shells out to, which is knowable without a disk. A
-        script repository *calls* things, and what it calls is read out of the
-        store — derived from the commands themselves rather than from a list
-        beside them, so a repository that starts calling `pnpm` is reported as
-        needing `pnpm` without anyone remembering to say so.
-        """
+        """Every program this machine is expected to hold, and who expects it."""
         tools: dict[str, tuple[list[str], bool]] = {}
         for pack in self._pack_registry.all():
             for requirement in pack.preflight():
                 _want(tools, requirement.executable, pack.info.name, requirement.required)
 
-            # Never a fetch. Doctor reports on the machine as it is, and a
-            # report that cloned a repository to write itself would be a
-            # different act than the one the user asked for.
             catalogue = await pack.script_status()
             for executable in catalogue.executables:
                 _want(tools, executable, f"{pack.info.name} scripts", True)

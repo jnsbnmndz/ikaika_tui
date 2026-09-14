@@ -1,22 +1,4 @@
-"""Everything the definition of done asks for, in one command.
-
-`python -m company_tui check`. This repository has no cloud CI, so this is the
-gate - the same role `check-all` plays in the PowerShell toolkit, and written to
-the same two rules that make such a gate worth having:
-
-  A skip is REPORTED, never omitted. A run must never be able to look like it
-  verified something it did not, so a missing tool prints SKIP and says why. The
-  alternative - quietly dropping the check - is the failure mode the gate exists
-  to prevent.
-
-  A check that stops checking is a failure. `unittest` finding zero tests is
-  reported as FAIL rather than PASS: this repository shipped with `tests/`
-  gitignored and `discover` cheerfully answering OK over nothing at all, which
-  is exactly how two documented, non-existent test files went unnoticed.
-
-Every check is a subprocess of this same interpreter, so the venv running the
-gate is the venv the checks run in - `sys.executable`, never a bare `python`.
-"""
+"""Everything the definition of done asks for, in one command."""
 
 import subprocess
 import sys
@@ -35,14 +17,12 @@ HOOK_BODY = """#!/bin/sh
 exec "{python}" -m company_tui check
 """
 
-
 @dataclass(frozen=True, slots=True)
 class Check:
     name: str
     argv: tuple[str, ...]
     expect_output: str = ""
     """A string the output must contain for the check to count as having run."""
-
 
 CHECKS = (
     Check("unit tests", ("-m", "unittest", "discover", "-v"), expect_output="Ran "),

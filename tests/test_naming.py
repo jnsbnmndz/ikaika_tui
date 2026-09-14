@@ -1,12 +1,4 @@
-"""Every name derives from `APP_SLUG`, and the old ones are still accepted.
-
-Four of these names are a wire format something else on the machine already
-speaks - a manifest filename, an environment variable, a store directory, a
-settings file - so the rule is that the NEW name is written and EITHER is read.
-Getting that backwards is silent in both directions: writing the old name looks
-fine because the resolvers accept it, and refusing to read it makes every project
-that has one stop being recognised.
-"""
+"""Every name derives from `APP_SLUG`, and the old ones are still accepted."""
 
 import tempfile
 import unittest
@@ -28,9 +20,6 @@ class NamesDeriveFromOneSlug(unittest.TestCase):
         self.assertEqual(f"{naming.APP_NAME}_PROJECT_ROOT", naming.PROJECT_ROOT_VAR)
 
     def test_no_name_still_carries_a_former_brand(self):
-        # Both of them. There have been two renames, and the second was undone in
-        # one place at a time - a check for only the oldest would have passed while
-        # `generic` was still written into a filename, a hint and a document kind.
         for value in (
             naming.APP_SLUG,
             naming.APP_NAME,
@@ -66,8 +55,6 @@ class TheOldNamesAreStillRead(unittest.TestCase):
                 root = Path(folder)
                 (root / legacy).write_text("{}", encoding="utf-8")
                 self.assertEqual(legacy, naming.manifest_in(root).name)
-                # And it keeps its name: rewriting the identity must not leave the
-                # old file behind holding a stale copy of the same four keys.
                 self.assertEqual(legacy, naming.manifest_path(root).name)
 
     def test_a_directory_with_neither_gets_the_preferred_name(self):
@@ -86,9 +73,6 @@ class TheOldNamesAreStillRead(unittest.TestCase):
         self.assertEqual("", naming.project_root_from_env({}))
 
     def test_an_existing_store_is_used_where_it_is(self):
-        # Preferring the new name and creating it would leave every cloned script
-        # repository and every remembered tab behind a directory nothing reads,
-        # which looks exactly like the toolbox having lost them.
         with tempfile.TemporaryDirectory() as folder:
             home = Path(folder)
             legacy = home / naming.LEGACY_STORE_DIR_NAMES[0]
@@ -104,14 +88,7 @@ class TheOldNamesAreStillRead(unittest.TestCase):
 
 
 class WhatAScaffoldWrites(unittest.TestCase):
-    """THE REGRESSION. The reference pack hardcoded the old filename.
-
-    `ikaika.script.json` was written verbatim into every project the Python pack
-    scaffolded, while `domain/identity.py` already exported the right constant.
-    Nothing failed: the resolvers accept the old name, so a project created with it
-    is read back perfectly - it is only wrong on the way out, which is why it
-    survived a whole de-brand. Found by a linter, not by a person.
-    """
+    """THE REGRESSION. The reference pack hardcoded the old filename."""
 
     def _files(self) -> dict[str, str]:
         identity = ProjectIdentity(

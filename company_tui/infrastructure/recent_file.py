@@ -1,11 +1,4 @@
-"""The recently-picked directories, in one JSON file under the user's home.
-
-Beside `sessions.json` and `updates.json`, and for the same three reasons: it is one
-person's machine state rather than a setting a team shares, an installer update cannot
-reach it there, and every failure is swallowed. A history that cannot be read is an empty
-one and the picker simply opens on a tree; a history that cannot be written costs the
-next glance, not the workflow.
-"""
+"""The recently-picked directories, in one JSON file under the user's home."""
 
 from __future__ import annotations
 
@@ -19,9 +12,7 @@ from company_tui.domain.recent import LIMIT, RecentPathsPort, remember
 RECENT_PATH = naming.store_dir() / "recent.json"
 
 VERSION = 1
-"""Written into the file, checked before anything is read out of it. A file from a
-future build is treated as empty rather than guessed at."""
-
+"""Written into the file, checked before anything is read out of it. A file from a."""
 
 class FileRecentPaths(RecentPathsPort):
     """`RecentPathsPort` over a JSON file."""
@@ -31,13 +22,7 @@ class FileRecentPaths(RecentPathsPort):
         self._limit = limit
 
     def recent(self) -> tuple[str, ...]:
-        """The list, newest first, dropping anything that is no longer a directory.
-
-        Filtered on the way OUT rather than pruned on the way in: a project on a drive
-        that is not mounted this morning should come back when it is, and a history that
-        forgot it the first time somebody unplugged the disk would be a history that
-        quietly empties itself.
-        """
+        """The list, newest first, dropping anything that is no longer a directory."""
         document = self._read()
         if document.get("version") != VERSION:
             return ()
@@ -54,9 +39,6 @@ class FileRecentPaths(RecentPathsPort):
         return tuple(found[: self._limit])
 
     def remember(self, chosen: str) -> None:
-        # Read RAW rather than through `recent()`: that filters out what is not mounted
-        # today, and writing the filtered list back is how an unplugged drive loses its
-        # projects permanently.
         document = self._read()
         stored = document.get("paths") if document.get("version") == VERSION else []
         existing = tuple(entry for entry in stored if isinstance(entry, str)) if isinstance(stored, list) else ()
