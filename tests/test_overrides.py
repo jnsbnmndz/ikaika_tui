@@ -65,7 +65,7 @@ class NothingShadowsTextual(unittest.TestCase):
         from textual.widget import Widget
 
         class Offender(Widget):
-            def render(self, extra):  # noqa: ANN001, ANN201 - the point is the signature
+            def render(self, extra):
                 return extra
 
         self.assertTrue(_clashes(Offender), "the detector has stopped detecting")

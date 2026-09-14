@@ -565,7 +565,7 @@ class TuiConsole(App):
                 await session.workflow()
             except asyncio.CancelledError:
                 raise
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - the run supervisor; it reports
                 self._here(session).report_failure(error)
             finally:
                 self._retire(self._here(session))
@@ -687,7 +687,7 @@ class TuiConsole(App):
             if not session.stop_requested:
                 raise
             return None
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - the run supervisor; it reports
             session.report_failure(error)
             return None
         finally:

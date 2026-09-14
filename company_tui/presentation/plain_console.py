@@ -214,7 +214,7 @@ class PlainConsole:
         self._failure = ""
         try:
             return await work
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - reported, never swallowed
             self._failure = f"{type(error).__name__}: {error}"
             self.error(self._failure)
             return None

@@ -62,14 +62,24 @@ include = ["company_tui*"]
 target-version = "py311"
 
 [tool.ruff.lint]
-# Correctness first: pyflakes, the pycodestyle errors, import order, and bugbear.
+# Correctness first: pyflakes, the pycodestyle errors, import order, bugbear, the
+# security family, and blind-except.
 #
-# The style families - SIM, RET, RUF, PLW, DTZ, BLE, FURB - are deliberately NOT
+# BLE was turned on because five `# noqa: BLE001` were already written, each with a
+# reason - the rule was being obeyed by hand while not being enforced. Enabling it
+# made those five real and surfaced three more, all of them run supervisors that
+# report a failure rather than swallow it.
+#
+# The style families - SIM, RET, RUF, PLW, DTZ, FURB - are deliberately NOT
 # here yet. Turning them on surfaced seventeen findings across code this change
 # does not touch, and a lint that fails on unrelated files is one that gets run
 # with a flag to shut it up. They are worth adopting; adopting them is its own
 # change, with the findings actually read rather than blanket-suppressed.
-select = ["E", "F", "I", "B", "ISC", "S"]
+select = ["E", "F", "I", "B", "ISC", "S", "BLE", "RUF100"]
+
+# RUF100 is "unused noqa". A suppression for a rule nobody runs is a lie in the
+# source: `handover.py` carried `# noqa: S603` for months while S was not selected
+# at all, which is part of why nobody noticed there was no security lint.
 
 # S is flake8-bandit. This is a public repository that signs installers, fetches a
 # certificate over a link and executes what it downloads, so the security family is

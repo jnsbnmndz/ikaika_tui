@@ -282,7 +282,31 @@ if ($Build) {
         Add-Result 'build-app' 'FAIL' ''
         $buildOutput | Select-Object -Last 20 | ForEach-Object { Write-Host "        $_" -ForegroundColor DarkGray }
     } else {
-        Add-Result 'build-app' 'PASS' 'froze without error'
+        # A FREEZE THAT SUCCEEDS IS NOT A BUILD THAT STARTS.
+        #
+        # PyInstaller reports success and still produces an exe that dies on the first
+        # import it could not see - a hidden import, a missing data file. Nothing else
+        # in this gate runs the frozen tree, so without this the one failure that only
+        # appears at release time is the one nothing checks for.
+        #
+        # `--version` is the cheapest thing that exercises the whole bootloader: it
+        # starts the exe, unpacks _internal, imports the package, and reads the bundled
+        # VERSION - which is also the file build-app has just confirmed is in there.
+        $frozen = Get-ChildItem -Path (Join-Path $root 'dist') -Filter '*.exe' -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -like 'dti-*' } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if (-not $frozen) {
+            Add-Result 'build-app' 'FAIL' 'froze, but no exe under dist'
+        } else {
+            $started = & $frozen.FullName --version 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Add-Result 'build-app' 'FAIL' "froze, but $($frozen.Name) does not start"
+                $started | Select-Object -Last 20 | ForEach-Object { Write-Host "        $_" -ForegroundColor DarkGray }
+            } else {
+                Add-Result 'build-app' 'PASS' "froze and starts - $($started | Select-Object -First 1)"
+            }
+        }
     }
 } else {
     Add-Result 'build-app' 'SKIP' 'not asked for - pass -Build'

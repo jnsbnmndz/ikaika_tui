@@ -123,7 +123,7 @@ class WindowsHandover(HandoverPort):
             return NO_SCRIPT.format(error=error)
 
         try:
-            subprocess.Popen(  # noqa: S603 - a fixed argv, no shell, paths as arguments
+            subprocess.Popen(
                 self._argv(script, installer),
                 creationflags=(
                     subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
