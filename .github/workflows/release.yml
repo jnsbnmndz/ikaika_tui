@@ -5,7 +5,7 @@
 #     .\script.ps1 check-all
 #     .\script.ps1 setup-signing -FetchOnly
 #     .\script.ps1 bump-version -Bump patch [-Released] [-WhatIf] -Yes
-#     .\script.ps1 build-app -Sign [-Released] [-Clean] [-Optimize 0|1|2]
+#     .\script.ps1 build-app -Sign [-Released] [-Clean] [-Optimize 0|1|2] [-Python 3.14]
 #     .\script.ps1 build-installer -Sign [-Released]
 #
 # so a release can be rehearsed locally in full. What this file adds is the two things
@@ -162,6 +162,16 @@ on:
         type: boolean
         required: true
         default: false
+      python:
+        # Empty is the checkout's own .venv, which is what the gate uses and what every
+        # release so far has shipped. A version here is handed to uv, which fetches that
+        # interpreter for the freeze - see scriptsenchmark.ps1 before choosing one:
+        # 3.14 started the bare interpreter 21% faster and still lost every real command,
+        # because this app is import-bound.
+        description: 'CPython to freeze against (blank = the checkout venv)'
+        type: string
+        required: false
+        default: ''
       optimize:
         # A choice rather than a constant because the app has to start on low-end
         # machines. `.\script.ps1 benchmark` measures the levels against each other, and
@@ -362,8 +372,31 @@ jobs:
       - name: Build the app
         shell: pwsh
         run: |
-          .\script.ps1 build-app ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }} ${{ inputs.clean && '-Clean' || '' }} -Optimize ${{ inputs.optimize }}
+          .\script.ps1 build-app ${{ inputs.released && '-Released' || '' }} ${{ inputs.sign && '-Sign' || '' }} ${{ inputs.clean && '-Clean' || '' }} -Optimize ${{ inputs.optimize }} ${{ inputs.python && format('-Python {0}', inputs.python) || '' }}
           if ($LASTEXITCODE -ne 0) { throw 'build-app failed' }
+
+      # BEFORE THE PUSH, AND INTO THE COMMIT THE TAG POINTS AT.
+      #
+      # bump-version commits and tags locally and the push happens further down, which
+      # leaves exactly one window where the README can be given the numbers for the build
+      # being published and still ship inside that tag. Amending moves the commit, so the
+      # tag is moved with it - safe only because neither has left the runner yet.
+      #
+      # It measures the build that was just made rather than three of them: -Levels is the
+      # one level this release asked for, and benchmark falls back to dist\<name>-<version>
+      # when there is no per-level folder.
+      - name: Record the benchmark in the README
+        shell: pwsh
+        run: |
+          .\script.ps1 benchmark -NoBuild -Levels ${{ inputs.optimize }} -Runs 9 -UpdateReadme
+          if ($LASTEXITCODE -ne 0) { throw 'benchmark failed' }
+          if ('${{ inputs.tag }}' -eq 'true') {
+            git add README.md
+            git commit --amend --no-edit
+            git tag -f '${{ steps.bump.outputs.tag }}'
+          } else {
+            Write-Host 'Rehearsal: README written, nothing committed.'
+          }
 
       - name: Build the installer
         if: ${{ inputs.installer }}

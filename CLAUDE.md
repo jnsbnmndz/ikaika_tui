@@ -40,8 +40,8 @@ answer to what a release is, and it is the one nobody can run locally.
 .\script.ps1 check-all                    # the gate; -InstallHook for pre-push
 .\script.ps1 setup-signing                # release and debug certificates
 .\script.ps1 bump-version -Bump patch     # rewrite VERSION, commit, tag
-.\script.ps1 build-app -Sign              # freeze with PyInstaller; -Optimize 0|1|2
-.\script.ps1 benchmark                    # time each level, print the matrix
+.\script.ps1 build-app -Sign              # freeze; -Optimize 0|1|2, -Python 3.14
+.\script.ps1 benchmark -UpdateReadme      # time the variants, write README's table
 .\script.ps1 build-installer -Sign        # wrap it in NSIS
 ```
 
@@ -68,6 +68,8 @@ PATH edit goes through `scripts/lib/path-entry.ps1` and .NET, never NSIS**:
 `NSIS_MAX_STRLEN` is 1024, `ReadRegStr` truncates silently at it, and writing that
 back is how an installer eats somebody's PATH. That file carries the numbers that
 make it a real risk on this machine rather than a theoretical one.
+
+`build-app` takes `-Optimize 0|1|2` (bytecode level) and `-Python <spec>` (the CPython to freeze against, fetched by uv), both exposed as release-workflow inputs. They exist to be measured, not assumed: `benchmark` builds each variant and times the commands that start and exit, **interleaved** — a round times every variant once and the rounds repeat, because measuring them in blocks charges whatever the machine was doing to whichever variant was under the clock, and that turned a 2% difference into a 19% one between two runs. It reports the **minimum**, since nothing starts faster than it can and every millisecond above that floor is interference, and it prints the spread between repeat runs so a difference smaller than the noise is reported as no result. `-UpdateReadme` writes the table into `README.md` between `<!-- benchmark:start -->` markers; the release workflow runs it after the build and amends it into the commit the tag points at, which is the one window where a published number can describe the build being published. On this machine every level and 3.14 were inside the noise — what actually mattered was an import, see `README.md`.
 
 The build number rises **globally** and comes from the **tags**, not from
 `VERSION`: an installer compares it, so a reset makes an upgrade look older than

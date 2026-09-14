@@ -46,6 +46,18 @@ param(
     # against another: `scriptsenchmark.ps1` does that.
     [ValidateSet('0', '1', '2')]
     [string]$Optimize = '0',
+    # Which CPython to freeze against, as a uv version spec (3.13, 3.14, 3.15.0rc1).
+    #
+    # Empty means the checkout's own .venv, which is the normal answer and the only one
+    # the gate uses. A version here is handed to `uv run`, which fetches that interpreter
+    # and brings PyInstaller and textual with it - so the build never depends on somebody
+    # having made a venv per version by hand.
+    #
+    # It exists to be MEASURED rather than guessed at: on the machine this was written
+    # for, 3.14 started the bare interpreter 21% faster and still lost every real command
+    # by 8-13%, because this app is import-bound. `scriptsenchmark.ps1` is how that was
+    # found and how the next version should be judged.
+    [string]$Python = '',
     [switch]$Help
 )
 
@@ -89,19 +101,40 @@ Write-Host "[1/5] Building $AppName $text ($kind, -O$Optimize)"
 # The interpreter that is going to do the building, and the one whose packages get frozen.
 # A checkout's own .venv where there is one, because that is where textual is - a global
 # python would freeze an app missing its only dependency and only say so at runtime.
-$python = Join-Path $root '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $python)) { $python = 'python' }
+$interpreter = Join-Path $root '.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $interpreter)) { $interpreter = 'python' }
 
-$probe = & $python -c "import PyInstaller, sys; sys.stdout.write(PyInstaller.__version__)" 2>&1
+# A chosen version goes through uv, which supplies the interpreter AND the two packages
+# the freeze needs. `company_tui` itself is not installed into it - PyInstaller finds it
+# through --paths, the same way it does from the venv.
+$launcher = $interpreter
+$prefix = @()
+if ($Python) {
+    if (-not (Get-Command 'uv' -ErrorAction SilentlyContinue)) {
+        Write-Host ''
+        Write-Host "  -Python $Python needs uv, which is not on PATH." -ForegroundColor Red
+        Write-Host '    https://docs.astral.sh/uv/' -ForegroundColor Yellow
+        Write-Host ''
+        exit 1
+    }
+    $launcher = 'uv'
+    $prefix = @('run', '--python', $Python, '--no-project',
+                '--with', 'pyinstaller', '--with', 'textual>=8.2,<9', '--', 'python')
+}
+
+# Last line, not all of it: uv writes what it is downloading to stderr, and 2>&1 is
+# kept so a missing PyInstaller still has something to report.
+$probe = @(& $launcher @prefix -c "import PyInstaller, sys; sys.stdout.write(PyInstaller.__version__)" 2>&1)
+$version_line = "$($probe | Where-Object { "$_".Trim() } | Select-Object -Last 1)".Trim()
 if ($LASTEXITCODE -ne 0) {
     Write-Host ''
     Write-Host '  PyInstaller is not in the environment doing the build.' -ForegroundColor Red
-    Write-Host "    $python -m pip install pyinstaller" -ForegroundColor Yellow
+    Write-Host "    $interpreter -m pip install pyinstaller" -ForegroundColor Yellow
     Write-Host ''
     Write-Verbose "$probe"
     exit 1
 }
-Write-Host "[2/5] PyInstaller $probe"
+Write-Host "[2/5] PyInstaller $version_line$(if ($Python) { " on CPython $Python" })"
 
 # THE EXE IS NAMED FOR THE APP, THE FOLDER FOR THE VERSION.
 #
@@ -143,7 +176,7 @@ $arguments = @(
 if ($Clean) { $arguments = @($arguments[0..1]) + @('--clean') + @($arguments[2..($arguments.Count - 1)]) }
 
 Write-Host '[3/5] Freezing...'
-& $python @arguments
+& $launcher @prefix @arguments
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  PyInstaller failed - its output is above.' -ForegroundColor Red
     exit 1
