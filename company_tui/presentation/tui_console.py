@@ -147,7 +147,10 @@ UPDATE_ANSWER = "INSTALL AND RESTART"
 UPDATE_DECLINED = "Left alone - nothing was installed."
 
 UPDATE_RUNS = "\n{count} other run{s} will be stopped."
-"""Added to the install question when something else is going."""
+"""Added to the card's install question, where a run is the one asking."""
+
+UPDATE_RUNS_ALL = "\n{count} run{s} will be stopped."
+"""The same for the chord, where nothing is asking and none of them is "other"."""
 NO_INSTALLER_AT = "There is no installer at {path} any more."
 
 NOTHING_TO_INSTALL = "Nothing to install - no newer build has been downloaded."
@@ -395,7 +398,7 @@ class TuiConsole(App):
         )
         live = self._sessions.live()
         if live:
-            detail += UPDATE_RUNS.format(count=len(live), s="" if len(live) == 1 else "s")
+            detail += UPDATE_RUNS_ALL.format(count=len(live), s="" if len(live) == 1 else "s")
         answer = await self.push_screen_wait(
             ConfirmScreen(
                 UPDATE_CONFIRM,
@@ -587,7 +590,7 @@ class TuiConsole(App):
         if not session.ran:
             self._sessions.remove(session)
         if self._attached is session:
-            self._detach()
+            self._detach_session()
         else:
             self._settle()
             self._refresh_panel()
@@ -618,13 +621,13 @@ class TuiConsole(App):
                 preview,
                 subtitle,
             )
-        self._attach(session)
+        self._attach_session(session)
 
         values = await session.wait_for_values()
         if values is None:
             session.panel_open = False
             if self._attached is session:
-                self._detach()
+                self._detach_session()
             return None
         return values
 
@@ -636,7 +639,7 @@ class TuiConsole(App):
         free = self._free_at(session.place)
         busy = tuple(s for s in self._sessions.visible(session.place) if s.panel_open)
         if free is None and busy:
-            self._attach(busy[0])
+            self._attach_session(busy[0])
             return None
 
         moved = free or self._sessions.create(
@@ -712,13 +715,13 @@ class TuiConsole(App):
             self._retire(session)
             return False
         if self._attached is session:
-            self._detach()
+            self._detach_session()
         else:
             self._refresh_panel()
         return False
 
 
-    def _attach(self, session: RunSession) -> None:
+    def _attach_session(self, session: RunSession) -> None:
         previous = self._attached
         if previous is not None and previous is not session:
             self._background(previous)
@@ -736,7 +739,7 @@ class TuiConsole(App):
         self._settle()
         self._refresh_badges()
 
-    def _detach(self) -> None:
+    def _detach_session(self) -> None:
         """Take the panel off the screen, and nothing more."""
         self._attached = None
         panel = self._panel
@@ -770,7 +773,7 @@ class TuiConsole(App):
         while self._attached is not None and self._attached is not session:
             await self._attachment.wait()
         if self._attached is session and session is not None:
-            self._detach()
+            self._detach_session()
 
     def _refresh_panel(self) -> None:
         if self._panel is not None and self._attached is not None:
@@ -795,11 +798,11 @@ class TuiConsole(App):
 
 
     def on_run_screen_chosen(self, message: RunScreen.Chosen) -> None:
-        self._attach(message.session)
+        self._attach_session(message.session)
 
     def on_run_screen_detached(self, message: RunScreen.Detached) -> None:
         session = self._attached
-        self._detach()
+        self._detach_session()
         if session is None:
             return
         if not any(s.foreground for s in self._sessions.all() if s is not session):
@@ -832,7 +835,7 @@ class TuiConsole(App):
             preset=dict(parent.answers),
         )
         self._spawn(session)
-        self._attach(session)
+        self._attach_session(session)
 
     def on_run_screen_closed(self, message: RunScreen.Closed) -> None:
         self._close_session(message.session)
@@ -854,10 +857,10 @@ class TuiConsole(App):
         if self._attached is session:
             neighbour = self._neighbour(session)
             if neighbour is not None:
-                self._attach(neighbour)
+                self._attach_session(neighbour)
         await self._stop_run(session)
         if self._attached is session:
-            self._detach()
+            self._detach_session()
         self._remember()
 
     def _neighbour(self, session: RunSession) -> RunSession | None:
@@ -889,7 +892,7 @@ class TuiConsole(App):
             return
         session = await self.push_screen_wait(RunsScreen(waiting))
         if session is not None and session in self._sessions.all():
-            self._attach(session)
+            self._attach_session(session)
 
     def _resumable(self) -> tuple[RunSession, ...]:
         """Runs there is something to go back to, most wanting attention first."""

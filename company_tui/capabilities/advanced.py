@@ -101,10 +101,12 @@ class AdvancedCapability(Capability):
                 choices=tuple(CHANNEL_LABELS[name] for name in CHANNELS),
                 default=CHANNEL_LABELS[source.channel],
                 help=(
-                    "Debug builds are published as prereleases. 'prereleases "
-                    "only' tracks them and never offers an official release, "
-                    "even a newer one - which is what testing a debug line "
-                    "means. 'whichever is newest' mixes the two."
+                    "Debug builds are published as prereleases. An installed "
+                    "build only ever takes updates from its own line - a debug "
+                    "installer cannot replace a release install, it installs "
+                    "beside it - so all three settings mean the same thing to "
+                    "it. This decides for a copy run from source, which has no "
+                    "install to replace."
                 ),
             ),
             Option(

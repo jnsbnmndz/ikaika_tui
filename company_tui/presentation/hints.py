@@ -18,7 +18,7 @@ _HINTS = {
     "settings": f"Edit {naming.CONFIG_NAME} — workspace, bundle prefix, and template sources.",
     "doctor": "Report the interpreter, the platform, and the tools each stack needs.",
     "app_setup": "Carry this whole configuration out as one JSON file, or bring one in.",
-    "updates": "Ask the release feed whether a newer build has been published.",
+    "updates": "Ask the release feed for a newer build, or run an installer you point at.",
     "advanced": "Where updates come from. Rarely touched, and safe to leave alone.",
     "new_project": "Write a fresh project tree from a versioned template pack.",
     "controller": "Add screens, components and services to the project you are in.",
