@@ -56,7 +56,12 @@ bootloader finds `_internal` by directory rather than by exe name. Shortcuts and
 components, recorded and restored so an update skips the page; **labels, never relative
 jumps, in that script** — `!insertmacro UnselectSection` is nine instructions and a `+2`
 over it produced a Components page with the required component unchecked
-(`docs/pitfalls.md` 7.2). The store under `~/.dti` is shared between them, which is
+(`docs/pitfalls.md` 7.2). **And never a `${Sec...}` above the `Section` that defines it**:
+a constant used before it exists is read as index 0, which is `SecCore`, so restoring the
+recorded "no" for the desktop shortcut deselected the required component and every update
+installed nothing and exited 0 — `makensis` said `warning 6000: unknown variable/constant`
+on every build and it read as noise (`docs/pitfalls.md` 7.3, guarded by
+`tests/test_installer_sections.py`). The store under `~/.dti` is shared between them, which is
 a second reason no uninstaller removes it. An update skips the directory page — the
 location is already settled and browsing elsewhere would leave the old copy installed and
 first on PATH — and says *Updating* in the header, the caption and the log.

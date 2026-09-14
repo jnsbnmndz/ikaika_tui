@@ -117,54 +117,6 @@ An already-open terminal will not have picked up the change yet."
 Var PreviousVersion
 Var Updating
 
-Function .onInit
-  ReadRegStr $PreviousVersion HKCU "${SETTINGS_KEY}" "Version"
-  StrCpy $Updating "0"
-  StrCmp $PreviousVersion "" +2
-    StrCpy $Updating "1"
-
-  StrCmp $Updating "1" 0 defaultsStand
-    Call RestoreChoice
-  defaultsStand:
-
-  ClearErrors
-  ${GetParameters} $R0
-  ${GetOptions} $R0 "/NOPATH" $R1
-  IfErrors noPathAbsent
-    !insertmacro UnselectSection ${SecPath}
-  noPathAbsent:
-
-  ClearErrors
-  ${GetOptions} $R0 "/PATH" $R1
-  IfErrors pathAbsent
-    !insertmacro SelectSection ${SecPath}
-  pathAbsent:
-
-  ClearErrors
-  ${GetOptions} $R0 "/NOSHORTCUTS" $R1
-  IfErrors shortcutsAbsent
-    !insertmacro UnselectSection ${SecStartMenu}
-    !insertmacro UnselectSection ${SecDesktop}
-  shortcutsAbsent:
-FunctionEnd
-
-!macro RestoreOne KEY SECTION
-  ReadRegStr $R0 HKCU "${SETTINGS_KEY}" "${KEY}"
-  StrCmp $R0 "1" 0 notOn_${KEY}
-    !insertmacro SelectSection ${SECTION}
-    Goto done_${KEY}
-  notOn_${KEY}:
-  StrCmp $R0 "0" 0 done_${KEY}
-    !insertmacro UnselectSection ${SECTION}
-  done_${KEY}:
-!macroend
-
-Function RestoreChoice
-  !insertmacro RestoreOne "OnPath" ${SecPath}
-  !insertmacro RestoreOne "StartMenu" ${SecStartMenu}
-  !insertmacro RestoreOne "Desktop" ${SecDesktop}
-FunctionEnd
-
 Function SkipComponentsWhenUpdating
   StrCmp $Updating "1" 0 shown
     Abort
@@ -269,6 +221,65 @@ Section "Add to PATH (run it by typing  ${COMMAND}  )" SecPath
   File "/oname=$PLUGINSDIR\path-entry.ps1" "${PATH_SCRIPT}"
   !insertmacro EditPath add
 SectionEnd
+
+; AFTER THE SECTIONS, AND THAT IS THE WHOLE POINT.
+;
+; `${SecPath}` and friends are defines the compiler creates when it reaches each Section.
+; Declared above them, `.onInit` and RestoreChoice referenced constants that did not exist
+; yet - `warning 6000: unknown variable/constant "{SecDesktop}" detected, ignoring` on
+; every build - and NSIS read the literal text as section index 0, which is SecCore.
+;
+; So RestoreOne "Desktop", reading the recorded "0" that a desktop shortcut nobody asked
+; for leaves behind, UNSELECTED THE REQUIRED COMPONENT. The installer then ran, installed
+; nothing, and exited 0. docs/pitfalls.md 7.3.
+Function .onInit
+  ReadRegStr $PreviousVersion HKCU "${SETTINGS_KEY}" "Version"
+  StrCpy $Updating "0"
+  StrCmp $PreviousVersion "" +2
+    StrCpy $Updating "1"
+
+  StrCmp $Updating "1" 0 defaultsStand
+    Call RestoreChoice
+  defaultsStand:
+
+  ClearErrors
+  ${GetParameters} $R0
+  ${GetOptions} $R0 "/NOPATH" $R1
+  IfErrors noPathAbsent
+    !insertmacro UnselectSection ${SecPath}
+  noPathAbsent:
+
+  ClearErrors
+  ${GetOptions} $R0 "/PATH" $R1
+  IfErrors pathAbsent
+    !insertmacro SelectSection ${SecPath}
+  pathAbsent:
+
+  ClearErrors
+  ${GetOptions} $R0 "/NOSHORTCUTS" $R1
+  IfErrors shortcutsAbsent
+    !insertmacro UnselectSection ${SecStartMenu}
+    !insertmacro UnselectSection ${SecDesktop}
+  shortcutsAbsent:
+FunctionEnd
+
+!macro RestoreOne KEY SECTION
+  ReadRegStr $R0 HKCU "${SETTINGS_KEY}" "${KEY}"
+  StrCmp $R0 "1" 0 notOn_${KEY}
+    !insertmacro SelectSection ${SECTION}
+    Goto done_${KEY}
+  notOn_${KEY}:
+  StrCmp $R0 "0" 0 done_${KEY}
+    !insertmacro UnselectSection ${SECTION}
+  done_${KEY}:
+!macroend
+
+Function RestoreChoice
+  !insertmacro RestoreOne "OnPath" ${SecPath}
+  !insertmacro RestoreOne "StartMenu" ${SecStartMenu}
+  !insertmacro RestoreOne "Desktop" ${SecDesktop}
+FunctionEnd
+
 
 !macro RecordOne KEY SECTION
   SectionGetFlags ${SECTION} $R0

@@ -257,6 +257,48 @@ and *"Space required: 0.0 KB"*, from a script that compiled without a warning.
 `!insertmacro` or `${...}` is one — `${GetOptions}` alone expands to about eighty.
 `makensis /PPO` prints the expansion.
 
+### 7.3 A section constant used before its `Section` is index 0
+
+`${SecPath}`, `${SecStartMenu}` and `${SecDesktop}` are defines the compiler creates when
+it *reaches* each `Section`. `.onInit` and `RestoreChoice` sat above them, so the constants
+did not exist yet and NSIS read the literal text as a section index — **0, which is
+SecCore, the required component.**
+
+`RestoreOne "Desktop"` reads the recorded choice back on an update. A desktop shortcut is
+off by default, so `"0"` is what every install records — and that `"0"` became
+`UnselectSection 0`. The required component was deselected, so the installer ran, wrote
+nothing, and **exited 0**.
+
+What that looks like from the app: press the update badge, the toolbox closes, the
+installer succeeds, the toolbox reopens on the version it was already running. No error
+anywhere — the waiter only re-runs an installer visibly when the exit code is non-zero,
+and this one was zero. The first install of a version always worked, because `RestoreChoice`
+only runs when a previous version is recorded, which is why it looked like the updater and
+not the installer.
+
+The compiler said so on every single build and it read as noise:
+
+```
+warning 6000: unknown variable/constant "{SecDesktop}" detected, ignoring
+```
+
+**Rule.** `.onInit`, `RestoreOne` and `RestoreChoice` live **below** the sections they
+name. Functions can be defined after the code that calls them; constants cannot be used
+before they exist. `tests/test_installer_sections.py` reads the file and fails on any
+`${SecX}` appearing before the line that declares it — it finds seven in the version that
+shipped. And `warning 6000` from `makensis` is not noise: it is a name that silently
+became a number.
+
+### 7.4 A silent installer does not report a file it could not replace
+
+Windows will not overwrite a running executable, and in **silent** mode NSIS neither stops
+nor says so. Installing over a running copy rewrote `Uninstall.exe` and the whole of
+`_internal`, left `dti.exe` at its old bytes, and exited 0 — a half-updated install whose
+`_internal/VERSION` reports the *new* version while the program running is the old one.
+
+**Rule.** This is what the handover exists to prevent (6.1): the installer starts only
+after the app's pid is gone. Nothing may run it while the app is alive — including a test.
+
 ---
 
 ## 8. A dependency you cannot patch
