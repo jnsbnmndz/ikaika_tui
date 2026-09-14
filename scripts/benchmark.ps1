@@ -1,51 +1,25 @@
 # Times the frozen app across build variants and prints a comparison matrix.
 #
-# WHY THIS EXISTS
+#     .\script.ps1 benchmark [-Levels 0,1,2] [-Interpreter 3.14] [-Runs 9] [-UpdateReadme]
 #
-# The app has to start on low-end machines, and the only honest way to choose between
-# build settings is to measure them against each other on the machine that matters. A
-# number quoted from somebody's blog is about their laptop.
+# INTERLEAVED, and the MINIMUM is the answer. Measuring all of one variant then all of the
+# next charges whatever the machine was doing to whichever was under the clock - that
+# turned a 2% difference into a 19% one between two runs. A round times every variant
+# once and the rounds repeat. Nothing starts faster than it can, so the floor is the
+# signal and everything above it is interference; the spread between repeat runs is
+# printed, and a difference smaller than it is reported as no result.
 #
-# It times the SCRIPTABLE commands rather than the interactive one, because those are the
-# ones that can be timed: `--version`, `list` and `doctor` start, do their work and exit.
-# The TUI waits for a key, so wall-clock on it measures the person. What `--version`
-# measures is the part every command pays - bootloader, _internal, interpreter start and
-# the import graph - which is exactly the part a slow machine feels.
-#
-#
-# INTERLEAVED, AND THE MINIMUM IS THE ANSWER
-#
-# The first version measured all of -O0, then all of -O1, then all of -O2, and reported
-# the median. Run twice it said -O1 was 2% faster and then that it was 19% faster, which
-# is not a finding about -O1: it is something else on the machine waking up during one
-# block. Measuring variants in blocks attributes whatever the machine was doing to
-# whichever variant happened to be under the clock.
-#
-# So a round times every variant once, and the rounds repeat. Drift and background load
-# now land on all of them together rather than on one.
-#
-# The reported figure is the MINIMUM, not the median. Nothing makes a process start faster
-# than it can, so every millisecond above the floor is interference. The median of a noisy
-# run measures the noise, and this table gets published.
-#
-# `Spread` is the honest part: the gap between a variant's fastest and slowest run. When
-# the difference between two variants is smaller than that, the table says so rather than
-# letting a reader infer a result the data does not support.
-#
-# Requires PowerShell 7+, PyInstaller, and uv when -Interpreter is used.
+# -UpdateReadme writes the table into README.md between the benchmark markers. The release
+# workflow runs it after the build and before the push, so a published number describes
+# the build being published.
 
 [CmdletBinding()]
 param(
-    # Which bytecode levels to build and compare.
     [ValidateSet('0', '1', '2')]
     [string[]]$Levels = @('0', '1', '2'),
-    # Which CPython to freeze against, as a uv version spec. Empty is the checkout's .venv.
     [string]$Interpreter = '',
-    # Rounds. Every variant is timed once per round, so this is runs-per-variant too.
     [int]$Runs = 9,
-    # Measure what is already under dist\ instead of building.
     [switch]$NoBuild,
-    # Write the table into README.md between the benchmark markers.
     [switch]$UpdateReadme,
     [switch]$Help
 )
@@ -74,7 +48,6 @@ $root = Split-Path -Parent $PSScriptRoot
 $version = Format-AppVersion (Get-AppVersion)
 $commands = @('--version', 'list', 'doctor')
 
-# --- build, or find, one tree per level ----------------------------------------------
 $builds = [ordered]@{}
 foreach ($level in $Levels) {
     $target = Join-Path $root "dist\dti-$version-O$level"
@@ -84,15 +57,10 @@ foreach ($level in $Levels) {
         if ($Interpreter) { $buildArgs += @('-Python', $Interpreter) }
         & (Join-Path $PSScriptRoot 'build-app.ps1') @buildArgs *> $null
         if ($LASTEXITCODE -ne 0) { throw "build-app failed at -O$level" }
-        # build-app always writes dist\dti-<version>; moved aside so the variants sit side
-        # by side and can be re-measured without rebuilding.
         $built = Join-Path $root "dist\dti-$version"
         if (Test-Path $target) { Remove-Item -Recurse -Force $target }
         Move-Item $built $target
     }
-    # A release builds ONE variant and writes it to dist\dti-<version>, with no level in
-    # the name. Falling back to it is what lets the workflow record the build it is about
-    # to publish rather than needing three of them.
     $exe = Join-Path $target 'dti.exe'
     if (-not (Test-Path $exe)) {
         $plain = Join-Path $root "dist\dti-$version\dti.exe"
@@ -106,9 +74,6 @@ foreach ($level in $Levels) {
 }
 if ($builds.Count -eq 0) { throw 'nothing to measure' }
 
-# Warm every tree before the clock starts. The first run of a fresh tree pays for the
-# filesystem cache, and doing it here rather than inside the loop makes round one like
-# every other round.
 foreach ($exe in $builds.Values) {
     foreach ($command in $commands) { & $exe $command *> $null }
 }
@@ -127,7 +92,6 @@ foreach ($round in 1..$Runs) {
     }
 }
 
-# --- the table ------------------------------------------------------------------------
 $rows = @()
 $spread = 0.0
 foreach ($name in $builds.Keys) {
@@ -145,8 +109,6 @@ foreach ($name in $builds.Keys) {
 $runtime = if ($Interpreter) { "CPython $Interpreter" } else {
     "CPython $(& (Join-Path $root '.venv\Scripts\python.exe') -c 'import platform;print(platform.python_version())')"
 }
-# Milliseconds mean nothing without saying whose machine produced them, and a hosted
-# runner is not the low-end laptop this whole exercise is about.
 $where = if ($env:GITHUB_ACTIONS) { 'a GitHub runner' } else { 'a developer machine' }
 $runtime = "$runtime, $where"
 
@@ -156,7 +118,6 @@ Write-Host "  fastest of $Runs interleaved rounds, milliseconds" -ForegroundColo
 Write-Host ''
 $rows | Format-Table -AutoSize
 
-# The comparison is the point - and so is refusing to report one that is not there.
 $verdict = ''
 if ($rows.Count -gt 1) {
     $baseline = $rows[0]
@@ -165,8 +126,6 @@ if ($rows.Count -gt 1) {
         $deltas = foreach ($command in $commands) {
             $change = $row.$command - $baseline.$command
             $largest = [math]::Max($largest, [math]::Abs($change))
-            # The sign is written in rather than formatted: .NET alignment takes a signed
-            # integer for padding, so "{0,+5}" is a parse error and not a plus sign.
             $sign = if ($change -gt 0) { '+' } else { '' }
             "{0} {1}{2:N0} ms" -f $command, $sign, $change
         }
@@ -184,11 +143,6 @@ if ($rows.Count -gt 1) {
     Write-Host ''
 }
 
-# --- the generated README section -----------------------------------------------------
-#
-# Written BETWEEN MARKERS, never appended: the section is generated, so it has to be
-# replaceable or a release adds a table per version. The markers are HTML comments, which
-# render as nothing and survive anybody editing the prose around them.
 if ($UpdateReadme) {
     $readme = Join-Path $root 'README.md'
     $startMark = '<!-- benchmark:start -->'

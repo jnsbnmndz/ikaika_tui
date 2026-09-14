@@ -229,6 +229,18 @@ clearing the repository in Advanced stops both halves. **Check for Updates** is 
 that reports everything properly, and it can also run an installer you point it at, which
 is how a build is tested before it is published.
 
+### Release notes
+
+`POST /releases/generate-notes` returns the changelog GitHub builds from the commits and
+pull requests since the last release, and the workflow composes the body itself: the four
+lines that matter to somebody installing — version, whether it is signed, where it installs
+— then a rule, then the generated part.
+
+Composed here rather than by passing `--generate-notes` to `gh release create`, because
+that flag generates the title *and* body and what happens to a `--notes` given alongside it
+is undocumented. A failure to generate is not a failure to release: the body falls back to
+the four lines.
+
 ### CI
 
 The **download** caches — pip's and PyInstaller's — never the virtualenv: a restored pip

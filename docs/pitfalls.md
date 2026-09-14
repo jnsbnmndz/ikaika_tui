@@ -213,6 +213,18 @@ nothing — and Enter sits on CANCEL, because neither answer may look pre-select
 **Rule.** A key the interface draws is a key the interface presses. `KeyHint` reads its
 label back into the key it sends and so cannot drift; this label could, and did.
 
+### 6.8 An uninstaller that returns before it has finished
+
+The installer upgrades by running the old uninstaller and then writing the new tree. NSIS
+uninstallers **copy themselves to `%TEMP%` and return immediately**, so `ExecWait` waits on
+a process that has already handed off — and the new files land while the old ones are still
+being deleted. What survives is whichever finished last.
+
+**Rule.** `ExecWait '"$R0" /S _?=$R1'`. The `_?=` switch keeps the uninstaller in place,
+which is what makes it something `ExecWait` can actually wait for. It also means the
+uninstaller cannot delete itself, so the installer removes `Uninstall.exe` and the
+directory afterwards.
+
 ---
 
 ## 7. An argument list is not a list of arguments

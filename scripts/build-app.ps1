@@ -1,62 +1,21 @@
 # Freezes the app into a folder that runs without Python installed.
 #
-#     .\script.ps1 build-app                    a debug build
-#     .\script.ps1 build-app -Released          the official one
-#     .\script.ps1 build-app -Clean             throw the cache away first
+#     .\script.ps1 build-app [-Released] [-Clean] [-Sign] [-Optimize 0|1|2] [-Python 3.14]
 #
-# ONE FOLDER, not one file. A onefile build unpacks itself into a temp directory on every
-# start, which for a terminal app is a visible pause before anything is drawn, and it
-# leaves the unpacked copy behind when it is killed. The folder is also what NSIS wants:
-# an installer copies a directory.
+# Writes dist\<name>-<version>\ and leaves build\ as scratch. Onedir, not onefile: the
+# installer copies a directory, and `_internal` is found by directory rather than by exe
+# name. VERSION is added as data because a frozen app has no repository to read it from,
+# and the build asserts it arrived rather than trusting the flag.
 #
-# VERSION IS ADDED AS DATA, and that is not optional. `presentation/branding.py` reads it
-# to put the version in the header, and a frozen app has no repository around it - without
-# this the header reads v0.0.0+0 and nothing fails, which is the worst way for it to be
-# wrong. The build asserts the file made it in rather than trusting the flag.
-#
-# The output folder is named for the version, so two builds of different versions can sit
-# beside each other and an installer names what it packaged:
-#
-#     dist/<name>-<x.y.z+n>/            what NSIS packages
-#     build/                            PyInstaller's scratch, disposable
-#
-# PyInstaller is a BUILD-time dependency and is not installed for you: fetching a package
-# in order to build is a decision, and a build tool that quietly pip-installs is one
-# nobody can reason about. It says how to install it and stops.
-#
-# Requires PowerShell 7+.
+# -Optimize and -Python are levers to be measured, not assumed: scriptsenchmark.ps1.
 
 [CmdletBinding()]
 param(
-    # Tag the artifact as the official build rather than a debug one.
     [switch]$Released,
-    # Clear PyInstaller's cache and the work directory before building.
     [switch]$Clean,
-    # Sign the payload exe if a certificate is configured. Off by default: an unsigned
-    # build runs, it just shows an unknown publisher.
     [switch]$Sign,
-    # Bytecode optimisation, handed to PyInstaller as --optimize.
-    #
-    #   0  what python does by default
-    #   1  drops `assert` and `__debug__` branches
-    #   2  also drops docstrings, which nothing here reads at runtime
-    #
-    # Worth having as a choice rather than a constant because the app has to start on
-    # low-end machines, and the only honest way to pick a level is to measure one
-    # against another: `scriptsenchmark.ps1` does that.
     [ValidateSet('0', '1', '2')]
     [string]$Optimize = '0',
-    # Which CPython to freeze against, as a uv version spec (3.13, 3.14, 3.15.0rc1).
-    #
-    # Empty means the checkout's own .venv, which is the normal answer and the only one
-    # the gate uses. A version here is handed to `uv run`, which fetches that interpreter
-    # and brings PyInstaller and textual with it - so the build never depends on somebody
-    # having made a venv per version by hand.
-    #
-    # It exists to be MEASURED rather than guessed at: on the machine this was written
-    # for, 3.14 started the bare interpreter 21% faster and still lost every real command
-    # by 8-13%, because this app is import-bound. `scriptsenchmark.ps1` is how that was
-    # found and how the next version should be judged.
     [string]$Python = '',
     [switch]$Help
 )
@@ -67,9 +26,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\app-version.ps1')
 
 $AppName = 'dti'
-# A SCRIPT, because that is what PyInstaller freezes. Its -m is --manifest, so naming
-# the module made it demand a scriptname it never got - and pointing it at the package's
-# own __main__.py is how a package gets imported twice under two names.
 $EntryScript = 'scripts\launch.py'
 
 if ($Help) {
@@ -98,15 +54,9 @@ $kind = if ($Released) { 'official' } else { 'debug' }
 Write-Host ''
 Write-Host "[1/5] Building $AppName $text ($kind, -O$Optimize)"
 
-# The interpreter that is going to do the building, and the one whose packages get frozen.
-# A checkout's own .venv where there is one, because that is where textual is - a global
-# python would freeze an app missing its only dependency and only say so at runtime.
 $interpreter = Join-Path $root '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $interpreter)) { $interpreter = 'python' }
 
-# A chosen version goes through uv, which supplies the interpreter AND the two packages
-# the freeze needs. `company_tui` itself is not installed into it - PyInstaller finds it
-# through --paths, the same way it does from the venv.
 $launcher = $interpreter
 $prefix = @()
 if ($Python) {
@@ -122,8 +72,6 @@ if ($Python) {
                 '--with', 'pyinstaller', '--with', 'textual>=8.2,<9', '--', 'python')
 }
 
-# Last line, not all of it: uv writes what it is downloading to stderr, and 2>&1 is
-# kept so a missing PyInstaller still has something to report.
 $probe = @(& $launcher @prefix -c "import PyInstaller, sys; sys.stdout.write(PyInstaller.__version__)" 2>&1)
 $version_line = "$($probe | Where-Object { "$_".Trim() } | Select-Object -Last 1)".Trim()
 if ($LASTEXITCODE -ne 0) {
@@ -136,16 +84,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[2/5] PyInstaller $version_line$(if ($Python) { " on CPython $Python" })"
 
-# THE EXE IS NAMED FOR THE APP, THE FOLDER FOR THE VERSION.
-#
-# PyInstaller takes one --name and uses it for both, which gave a
-# `dti-0.1.0+2.exe` - a command whose name changes every release. That is no use
-# on PATH, which the installer now adds the install directory to, and it makes a
-# Start Menu shortcut that breaks on every upgrade.
-#
-# So it freezes as `dti` into a scratch directory and the whole folder is moved to
-# the versioned name. Moving the FOLDER rather than renaming the exe inside it:
-# `_internal` is resolved relative to the executable, so the two travel together.
 $outName = "$AppName-$text"
 $dist = Join-Path $root 'dist'
 $work = Join-Path $root 'build'
@@ -156,8 +94,6 @@ if ($Clean -and (Test-Path -LiteralPath $target)) {
     Remove-Item -LiteralPath $target -Recurse -Force
 }
 
-# `;` is the separator on Windows - PyInstaller uses os.pathsep, and the ':' in every
-# Linux example is a path on this platform, so "VERSION:." silently adds nothing.
 $arguments = @(
     '-m', 'PyInstaller',
     '--noconfirm',
@@ -182,9 +118,6 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Into place: the versioned folder is what the installer packages and what a second
-# build of another version sits beside. Removed first, because Move-Item onto an
-# existing directory nests the source inside it rather than replacing it.
 $frozen = Join-Path $staging $AppName
 if (-not (Test-Path -LiteralPath $frozen)) {
     Write-Host "  PyInstaller reported success but $frozen is not there." -ForegroundColor Red
@@ -194,8 +127,6 @@ if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Move-Item -LiteralPath $frozen -Destination $target
 
-# Asserted, not assumed. --add-data reports nothing when a source path is wrong, and the
-# runtime fallback for a missing VERSION is a plausible-looking version number.
 $bundled = @(Get-ChildItem -LiteralPath $target -Recurse -Filter 'VERSION' -File -ErrorAction SilentlyContinue)
 if (-not $bundled.Count) {
     Write-Host '  VERSION did not make it into the bundle.' -ForegroundColor Red
@@ -209,8 +140,6 @@ if (-not (Test-Path -LiteralPath $exe)) {
     Write-Host "  No $AppName.exe in $target." -ForegroundColor Red
     exit 1
 }
-# Signed here rather than only in build-installer: the exe inside the package is what
-# people actually launch, and an unsigned payload inside a signed installer still warns.
 if ($Sign) {
     . (Join-Path $PSScriptRoot 'lib\signing.ps1')
     $signed = Invoke-SignFile -Path $exe -Released:$Released -Description $AppName

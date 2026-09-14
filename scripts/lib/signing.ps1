@@ -1,63 +1,9 @@
-# Code signing: the two certificates, where they come from, and how a file gets signed.
+# Fetches, verifies and uses the two code-signing certificates.
 #
-# Two certificates, not one - a release identity and a debug one. A debug installer is
-# signed too, so a test build is not an Unknown Publisher either, but with its own
-# certificate, so nothing about a test build touches the trust built up for the real
-# release signature. Both share one password and one subject, because the publisher must
-# match the certificate subject exactly or signtool refuses; only the FILE differs.
-#
-#
-# UNSIGNED IS A WARNING, NOT A FAILURE
-#
-# Every function here reports what happened and returns; none of them throw. An unsigned
-# installer works - it shows an Unknown Publisher prompt - so a machine without the
-# Windows SDK, or without the certificate, must still be able to produce a build. The
-# caller decides how loudly to say it, and saying nothing is not one of the options.
-#
-#
-# WHAT IS COMMITTED AND WHAT IS NOT
-#
-#   certs/*.pfx                     NO  - the private key
-#   .dti_configs/signing.env        NO  - the password AND the two share links
-#   .dti_configs/*.pfx.sha256       YES - deliberately, see below
-#   .dti_configs/share.env          YES - the publisher subject, which is not a secret
-#
-# The checksums are the point of the split. A .pfx arrives over a shared link from a
-# machine nobody here controls, and a same-named file is not the same file; the committed
-# sidecar is the only thing that can tell the difference.
-#
-# THE LINK IS A SECRET TOO, AND IT USED TO BE COMMITTED
-#
-# The old reasoning was that fetching the file gets you a container you cannot open. True,
-# and not enough, for two reasons that have nothing to do with how strong the password is:
-# a share link IS the capability to fetch the file - the rlkey in a Dropbox /scl/fi/ link
-# is part of the credential, not a path - and a committed link cannot be rotated, because
-# it stays in the history of every clone that ever pulled it. Revoking a secret is an edit;
-# revoking a committed link is a new link and a history rewrite, and nobody does the second
-# half. See docs/decisions/0003-a-share-link-is-a-secret.md.
-#
-# So the links live in signing.env, beside the password and gitignored with it, and CI
-# passes them in as DTI_CERT_SHARE_URL and DTI_DEBUG_CERT_SHARE_URL. Get-ShareUrl is the
-# one place that knows about both halves.
-#
-# THE SIDECAR IS ABSENT ON A FIRST BOOTSTRAP, AND ABSENT MEANS "RECORD ONE". That is the
-# only sane reading, and it is also the failure mode: point the sidecar path at somewhere
-# the anchor is not and every arrival reads as a first bootstrap, so the integrity check
-# quietly becomes a no-op and starts recording whatever it was handed. It is therefore
-# reached only through Get-CertHashPath, never rebuilt at a call site. This has cost the
-# sibling project two silent breakages.
-#
-#
-# THE SHARE LINK IS NORMALISED PER HOST, BECAUSE RAW CONTENT IS NOT THE DEFAULT
-#
-# A share link opens a web page. Fetching it gives you HTML - a preview page, a sign-in
-# form - with a 200 status, and writing that to cert.pfx produces a file that fails much
-# later inside signtool with an error about the certificate rather than about the download.
-# Each host spells "give me the bytes" differently: Dropbox wants dl=1, OneDrive and
-# SharePoint want download=1. Get-RawShareUrl knows the spellings; Get-SharedFile checks
-# what actually arrived rather than trusting any of them.
-#
-# Requires PowerShell 7+.
+# A .pfx arrives over a share link from a machine nobody here controls, so the committed
+# per-file SHA-256 sidecar is the only thing that can tell it from a same-named different
+# file. The links are secrets and the checksums are what gets committed:
+# docs/decisions/0003.
 
 Set-StrictMode -Version Latest
 
@@ -66,7 +12,6 @@ Set-StrictMode -Version Latest
 $script:ConfigsDirName = '.dti_configs'
 $script:CertsDirName = 'certs'
 $script:Publisher = 'CN=Developer Toolbox Inventory, O=DTI'
-
 
 function Get-ConfigsDir {
     $dir = Join-Path (Get-RepoRoot) $script:ConfigsDirName
@@ -79,13 +24,6 @@ function Get-ConfigsDir {
 function Get-SigningEnvPath { return Join-Path (Get-ConfigsDir) 'signing.env' }
 function Get-ShareEnvPath { return Join-Path (Get-ConfigsDir) 'share.env' }
 
-
-# Reads a `key=value` file into a hashtable. Missing file is an empty table, not an error:
-# every caller has a defensible answer for "not configured" and none of them wants a throw.
-#
-# Values are NOT trimmed of quotes beyond one matched pair, and `#` only starts a comment
-# at the beginning of a line - a password can legitimately contain one, and stripping from
-# the first `#` anywhere truncated it silently.
 function Read-EnvFile([string]$Path) {
     $values = @{}
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $values }
@@ -106,13 +44,6 @@ function Read-EnvFile([string]$Path) {
     return $values
 }
 
-# Sets one key, leaving every other line as it was.
-#
-# Key by key rather than rewriting the file: signing.env may hold values this code knows
-# nothing about, and a wholesale rewrite drops them. Creates the file when it is absent -
-# a first run has nowhere to write, and the sibling project's version of this returned
-# quietly in that case, so a generated password went nowhere and left two .pfx files
-# nothing could ever open while the run printed "saved".
 function Set-EnvValue([string]$Path, [string]$Key, [string]$Value) {
     $lines = @()
     if (Test-Path -LiteralPath $Path) { $lines = @(Get-Content -LiteralPath $Path) }
@@ -138,16 +69,6 @@ function Set-EnvValue([string]$Path, [string]$Key, [string]$Value) {
     [IO.File]::WriteAllLines($Path, $lines, (New-Object Text.UTF8Encoding $false))
 }
 
-
-# Where a certificate's share link comes from.
-#
-# Same order as Get-CertPassword, and for the same reason: the gitignored file first, the
-# environment last. A laptop has signing.env and no variables set; a runner has variables
-# and no file, because the file is the one thing a clone cannot bring with it. Nothing has
-# both, so the order is a description rather than a precedence anybody has to remember.
-#
-# The variable name is also accepted AS A KEY in signing.env, so a value copied out of the
-# repository secrets pastes in under the name it already has.
 function Get-ShareUrl([string]$Key, [string]$Variable) {
     $saved = Read-EnvFile (Get-SigningEnvPath)
     if ($saved[$Key]) { return $saved[$Key] }
@@ -157,12 +78,6 @@ function Get-ShareUrl([string]$Key, [string]$Variable) {
     return ''
 }
 
-
-# Which certificate a build is signed with, and everything that follows from that choice.
-#
-# One function rather than a released/debug branch at each call site: the file, the
-# checksum anchor and the share link all have to agree about which identity is in play,
-# and three separate conditionals is how they stop agreeing.
 function Get-CertContext([switch]$Released) {
     $share = Read-EnvFile (Get-ShareEnvPath)
     $name = if ($Released) { 'release.pfx' } else { 'debug.pfx' }
@@ -182,9 +97,6 @@ function Get-CertContext([switch]$Released) {
     }
 }
 
-# The committed trust anchor for one certificate. certs/ is gitignored as a directory, and
-# git cannot un-ignore a single file inside an excluded directory - so the sidecar cannot
-# live beside the .pfx and has to be somewhere committable. See the header.
 function Get-CertHashPath([string]$PfxPath) {
     return Join-Path (Get-ConfigsDir) ((Split-Path -Leaf $PfxPath) + '.sha256')
 }
@@ -203,12 +115,6 @@ function Read-Sha256Sidecar([string]$SidecarPath) {
     return ($first -split '\s+')[0].ToLower()
 }
 
-# True when the file matches its recorded anchor, or when there is no anchor yet.
-#
-# -LiteralPath throughout: a certs directory reached through a profile path containing
-# glob metacharacters - and this repository lives under a folder literally named
-# "GitHub(jnsbnmndz)" - does not resolve as a wildcard, and a path that fails to resolve
-# reads as a missing file, which is the "first bootstrap" branch again.
 function Test-CertHash([string]$CandidatePath, [string]$PfxPath) {
     $sidecar = Get-CertHashPath $PfxPath
     $expected = Read-Sha256Sidecar $sidecar
@@ -218,15 +124,6 @@ function Test-CertHash([string]$CandidatePath, [string]$PfxPath) {
     return ($actual -eq $expected)
 }
 
-
-# Turns a share link into one that answers with the file's bytes.
-#
-# Dropbox: dl=1. A link copied from the web app ends in dl=0, and the newer /scl/fi/ links
-# carry an rlkey that is part of the credential - so the parameter is REPLACED in place and
-# every other one is kept, rather than the query being rebuilt.
-# OneDrive and SharePoint: download=1, appended.
-# Anything else is returned untouched, because a plain HTTPS path to a file already is raw
-# and appending a parameter to it is how a working link stops working.
 function Get-RawShareUrl([string]$ShareUrl) {
     if (-not $ShareUrl) { return '' }
     $url = "$ShareUrl".Trim()
@@ -250,11 +147,6 @@ function Get-RawShareUrl([string]$ShareUrl) {
     return $url
 }
 
-# True when the bytes look like a web page rather than a certificate.
-#
-# This is the check that matters. Every host answers a bad or expired link with 200 and an
-# HTML body, so the download "succeeds" and the failure surfaces later inside signtool,
-# talking about the certificate. A PFX is DER: it starts with an ASN.1 SEQUENCE, 0x30.
 function Test-LooksLikeHtml([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     $bytes = Get-Content -LiteralPath $Path -AsByteStream -TotalCount 512 -ErrorAction SilentlyContinue
@@ -264,12 +156,6 @@ function Test-LooksLikeHtml([string]$Path) {
     return ($text -match '(?i)<!doctype|<html|<head|<script|<meta')
 }
 
-# Downloads a certificate from its share link, and refuses to keep anything it cannot
-# vouch for. Reports; never throws.
-#
-# The download goes to a temporary file and is promoted only after both checks pass -
-# writing straight to certs/release.pfx and validating afterwards leaves a bad file in the
-# place everything downstream reads from.
 function Get-SharedCert([hashtable]$Ctx) {
     if (-not $Ctx.ShareUrl) {
         return @{ Ok = $false; Reason = "no link - set $($Ctx.ShareKey) in $($script:ConfigsDirName)/signing.env, or $($Ctx.ShareVar) in the environment" }
@@ -301,16 +187,6 @@ function Get-SharedCert([hashtable]$Ctx) {
     return @{ Ok = $true; Reason = '' }
 }
 
-
-# Generates a self-signed code-signing certificate and records its checksum.
-#
-# The key usage matters and is easy to get subtly wrong: a certificate without the code
-# signing EKU (1.3.6.1.5.5.7.3.3) is accepted by New-SelfSignedCertificate and then
-# rejected by signtool. The empty 2.5.29.19 marks it as an end entity rather than a CA.
-#
-# The .pfx is the only copy that matters, so the certificate is removed from the user's
-# store afterwards - leaving it there means a second run finds a store full of near
-# duplicates and no way to tell which one the file came from.
 function New-SigningPfx {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'Password', Justification = 'Read from a gitignored env file; it is plaintext before it arrives here')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '', Justification = 'Export-PfxCertificate requires a SecureString and the source is already plaintext')]
@@ -339,9 +215,6 @@ function New-SigningPfx {
     return @{ Ok = $true; Hash = $hash }
 }
 
-# 32 random bytes, base64. Not a prompt: this protects a local file that is itself a
-# secret, so a memorable password buys nothing and asking for one invites somebody to
-# reuse a real password in a file that lives on disk in the clear.
 function New-CertPassword {
     $bytes = [byte[]]::new(32)
     [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
@@ -352,19 +225,10 @@ function Get-CertPassword {
     $saved = Read-EnvFile (Get-SigningEnvPath)
     if ($saved['windows.certPassword']) { return $saved['windows.certPassword'] }
     if ($saved['DTI_CERT_PASSWORD']) { return $saved['DTI_CERT_PASSWORD'] }
-    # The environment wins nothing here, but CI has no gitignored file to read - so a
-    # value passed in through the environment is honoured and never written to disk.
     if ($env:DTI_CERT_PASSWORD) { return $env:DTI_CERT_PASSWORD }
     return ''
 }
 
-
-# signtool.exe, which is not on PATH on any machine that has not put it there.
-#
-# It ships inside the Windows SDK at a version-numbered path, so PATH is checked LAST -
-# the same shape of mistake as makensis, where "not installed" was reported on a machine
-# where it plainly was. The newest SDK wins, and the architecture is matched because the
-# x86 copy on a 64-bit machine works but is the wrong one to prefer.
 function Find-SignTool {
     $arch = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
     $kitsBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
@@ -380,15 +244,6 @@ function Find-SignTool {
     return ''
 }
 
-# Signs one file, and says what happened.
-#
-# /fd SHA256 because SHA-1 authenticode is rejected outright by current Windows. /d is the
-# name a UAC prompt shows. No timestamp server is used: signing has to work offline, and a
-# timestamp only matters for a signature meant to outlive its certificate, which a
-# self-signed one is not.
-#
-# signtool's output is captured rather than streamed - it prints the whole certificate on
-# success, which is noise, and on failure the text is the only useful part.
 function Invoke-SignFile {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -429,9 +284,6 @@ function Invoke-SignFile {
     return @{ Signed = $true; Reason = ''; Kind = $ctx.Kind }
 }
 
-# Prints the outcome of a signing attempt the one way, so both build commands say it
-# identically. Reported, never omitted - a build whose artifacts are unsigned has to say
-# so, because the difference only shows up on somebody else's machine.
 function Write-SigningOutcome([hashtable]$Result, [string]$What) {
     if ($Result.Signed) {
         Write-Host "  signed $What with the $($Result.Kind) certificate" -ForegroundColor DarkGray

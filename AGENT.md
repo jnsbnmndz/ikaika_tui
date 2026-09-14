@@ -6,10 +6,16 @@ code before reading it.
 
 ## Comments live at the top of a file and nowhere else
 
-One module docstring saying what the file is for, in a line or two. Classes and functions
-get a single line; constants get a single line or none. **No inline `#` commentary** — the
-only exceptions are tool directives (`# noqa`, `# type:`), which are instructions rather
-than prose.
+**In every language here**, not just Python.
+
+| | The header is | Below it |
+|---|---|---|
+| `.py` | a module docstring, a line or two | one line on classes and functions, one line or none on constants |
+| `.ps1` `.yml` `.toml` | a leading `#` block | nothing |
+| `.nsi` | a leading `;` block | nothing |
+
+A header is a summary and the switches, plus the one or two rules that must not be broken,
+each citing where the reasoning lives. Not an essay.
 
 ```python
 """Starts an installer that runs after this process exits."""
@@ -22,14 +28,24 @@ class WindowsHandover(HandoverPort):
             return NOT_WINDOWS
 ```
 
+**Three exceptions.** Tool directives (`# noqa`, `# type:`) are instructions, not prose.
+Another language embedded in a file — the PowerShell inside `handover.py`'s `SCRIPT`, and
+`run:` blocks in a workflow — is that script's own documentation, not this file's. And
+third-party generated config (`.serena/`) is not ours to sweep.
+
+**Sweep with the language's own parser, never a regex.** Only a parser tells a `#` that
+starts a comment from one inside a here-string, and only a block-scalar-aware pass knows
+that a `#` in a `run:` block is somebody's shell script. Re-parse after; refuse the file if
+it no longer parses.
+
 ## The reasoning goes in `docs/`, not beside the code
 
 - `docs/decisions/` — why a thing is built the way it is.
 - `docs/pitfalls.md` — what went wrong, and the rule that followed.
 
-Write it there, where one copy serves the whole repository, and cite it by number
-(`docs/pitfalls.md 6.4`) where a line needs it. A finding that only exists as a comment is
-one the next sweep deletes.
+Cite it by number (`docs/pitfalls.md 6.4`) where a line needs it. A finding that only
+exists as a comment is one the next sweep deletes — **so a sweep moves it first**. Read
+what a file's comments claim before stripping it, and check each finding has a home.
 
 ## Behaviour and its description change together
 
@@ -40,8 +56,9 @@ is the same defect, only visible to everyone.
 
 ## Before you call it done
 
-`.\script.ps1 check-all` and `python -m company_tui check`, then `graphify update .`. The
-full list is in CLAUDE.md.
+`.\script.ps1 check-all` and `python -m company_tui check`, then `graphify update .`. Use
+`-Build` before a release: it is the only check that freezes, and it starts the frozen exe,
+because a freeze that succeeds is not a build that runs. The full list is in CLAUDE.md.
 
 ---
 

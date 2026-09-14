@@ -246,15 +246,30 @@ graphify update .                         # after any code change (AST only, no 
 - Preview destructive changes and require explicit confirmation.
 - Never expose credentials, tokens, private payloads, or environment secrets.
 - Avoid dependencies until their value clearly exceeds their maintenance cost. `textual` (the interactive TUI) is the one exception so far — keep it that way; put any new external tool behind a port instead of a fresh dependency where possible.
-- **Comments live at the top of a file and nowhere else.** One module docstring saying what
-  the file is for, in a line or two. Classes and functions get a single line; constants get
-  a single line or none. No inline `#` commentary — the only exceptions are tool directives
-  (`# noqa`, `# type:`), which are instructions rather than prose.
+- **Comments live at the top of a file and nowhere else — in every language here.** Python
+  gets a module docstring in a line or two, with a single line on classes and functions and
+  a single line or none on constants. PowerShell, YAML and TOML get a leading `#` block;
+  `installer.nsi` gets a leading `;` block. Nothing below that block is a comment. A header
+  is a summary and the switches, plus the one or two rules that must not be broken, each
+  citing where the reasoning lives — not an essay.
+  - The only exceptions are **tool directives** (`# noqa`, `# type:`), which are
+    instructions rather than prose, and **another language embedded in a file**: the
+    PowerShell inside `handover.py`'s `SCRIPT`, and `run:` blocks in a workflow. Those are
+    a generated script's own documentation, not this file's.
+  - Third-party generated config is not ours to sweep — `.serena/` writes its own comments
+    back.
+  - Sweep with the **language's own parser**, never a regex: only a parser tells a `#` that
+    starts a comment from one inside a here-string, and only a block-scalar-aware pass
+    knows that a `#` in a `run:` block is somebody's shell script. Re-parse after, and
+    refuse the file if it no longer parses.
 - **The reasoning goes in `docs/`, not beside the code.** `docs/decisions/` is why a thing
   is built the way it is; `docs/pitfalls.md` is what went wrong and the rule that followed.
   Write it there, where one copy serves the whole repository, and cite it by number
   (`docs/pitfalls.md 6.4`) where a line needs it. A finding that only exists as a comment
-  is one the next sweep deletes.
+  is one the next sweep deletes — **so a sweep moves it first**. Before stripping a file,
+  read what its comments claim and check each finding has a home; two did not and became
+  `docs/pitfalls.md` 6.8 and README's release-notes section. Deleting first and
+  reconstructing from git later is how the rule that prevented an outage gets lost.
 - Do not write comments that repeat what the code already says.
 - **Behaviour and its description change together** — the docs that describe it, and the
   text on screen. A card's description, an option's `help`, a dialog's wording and a focus
