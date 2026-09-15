@@ -10,3 +10,6 @@ url = "https://github.com/JDM-Github/react_native_structure.git"
 
 [scripts.react_native]
 url = "https://github.com/JDM-Github/react_native_scripts.git"
+
+[experimental]
+interactive_lists = true

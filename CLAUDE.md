@@ -2,7 +2,7 @@
 
 Guidance for working in this repository.
 
-This is Developer Toolbox Inventory (DTI) — a Python developer toolbox for repeatable scaffolding and automation. Every name it answers to is in `domain/naming.py`, derived from `APP_SLUG`; four of them are a wire format something else on the machine already speaks, so the new name is written and either is accepted. Its version lives in `VERSION` at the repository root, one line, `x.y.z+n`; `presentation/branding.py` reads it, so a release rewrites one file and nothing restates it (`docs/decisions/0002-the-version-is-one-file.md`). It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
+This is Developer Toolbox Inventory (DTI) — a Python developer toolbox for repeatable scaffolding and automation. Every name it answers to is in `domain/naming.py`, derived from `APP_SLUG`; four of them are a wire format something else on the machine already speaks, so the new name is written and either is accepted. Its version lives in `VERSION` at the repository root, one line, `x.y.z+n`; `company_tui/version.py` reads it and `presentation/branding.py` re-exports it, so a release rewrites one file and nothing restates it (`docs/decisions/0002-the-version-is-one-file.md`). The read lives apart from the theme because `branding.py` imports `textual`, and `--version`, `list` and `doctor` are meant to be scriptable — they were paying ~700ms to import a terminal framework none of them use. `cli.py` imports `bootstrap` inside the branch that needs it and `bootstrap` defers `TuiConsole` likewise, so nothing on the plain path touches Textual at all; frozen `--version` went from 863ms to 251ms. It must remain usable for Flutter, React, and future stacks without coupling the core application to a specific framework.
 
 The interactive UI is themed: `presentation/branding.py` defines `APP_THEME` plus the tagline and version, registered and activated by `TuiConsole` on mount. The theme's own name is `naming.APP_SLUG`, so what is registered and what `TuiConsole` activates cannot drift — a mismatch there is an unstyled app. The wordmark is built from `APP_NAME` rather than written out, and `SPLASH_MARK` is a deliberately abstract placeholder rather than any company's logo. New CSS should reference theme tokens (`$primary`, `$accent`, `$surface`, `$panel`, `$text-muted`, ...) rather than hardcoded colors, so it stays on-brand and adapts if the theme changes.
 
@@ -40,7 +40,8 @@ answer to what a release is, and it is the one nobody can run locally.
 .\script.ps1 check-all                    # the gate; -InstallHook for pre-push
 .\script.ps1 setup-signing                # release and debug certificates
 .\script.ps1 bump-version -Bump patch     # rewrite VERSION, commit, tag
-.\script.ps1 build-app -Sign              # freeze with PyInstaller
+.\script.ps1 build-app -Sign              # freeze; -Optimize 0|1|2, -Python 3.14
+.\script.ps1 benchmark -UpdateReadme      # time the variants, write README's table
 .\script.ps1 build-installer -Sign        # wrap it in NSIS
 ```
 
@@ -55,7 +56,12 @@ bootloader finds `_internal` by directory rather than by exe name. Shortcuts and
 components, recorded and restored so an update skips the page; **labels, never relative
 jumps, in that script** — `!insertmacro UnselectSection` is nine instructions and a `+2`
 over it produced a Components page with the required component unchecked
-(`docs/pitfalls.md` 7.2). The store under `~/.dti` is shared between them, which is
+(`docs/pitfalls.md` 7.2). **And never a `${Sec...}` above the `Section` that defines it**:
+a constant used before it exists is read as index 0, which is `SecCore`, so restoring the
+recorded "no" for the desktop shortcut deselected the required component and every update
+installed nothing and exited 0 — `makensis` said `warning 6000: unknown variable/constant`
+on every build and it read as noise (`docs/pitfalls.md` 7.3, guarded by
+`tests/test_installer_sections.py`). The store under `~/.dti` is shared between them, which is
 a second reason no uninstaller removes it. An update skips the directory page — the
 location is already settled and browsing elsewhere would leave the old copy installed and
 first on PATH — and says *Updating* in the header, the caption and the log.
@@ -67,6 +73,8 @@ PATH edit goes through `scripts/lib/path-entry.ps1` and .NET, never NSIS**:
 `NSIS_MAX_STRLEN` is 1024, `ReadRegStr` truncates silently at it, and writing that
 back is how an installer eats somebody's PATH. That file carries the numbers that
 make it a real risk on this machine rather than a theoretical one.
+
+`build-app` takes `-Optimize 0|1|2` (bytecode level) and `-Python <spec>` (the CPython to freeze against, fetched by uv), both exposed as release-workflow inputs. They exist to be measured, not assumed: `benchmark` builds each variant and times the commands that start and exit, **interleaved** — a round times every variant once and the rounds repeat, because measuring them in blocks charges whatever the machine was doing to whichever variant was under the clock, and that turned a 2% difference into a 19% one between two runs. It reports the **minimum**, since nothing starts faster than it can and every millisecond above that floor is interference, and it prints the spread between repeat runs so a difference smaller than the noise is reported as no result. `-UpdateReadme` writes the table into `README.md` between `<!-- benchmark:start -->` markers; the release workflow runs it after the build and amends it into the commit the tag points at, which is the one window where a published number can describe the build being published. On this machine every level and 3.14 were inside the noise — what actually mattered was an import, see `README.md`.
 
 The build number rises **globally** and comes from the **tags**, not from
 `VERSION`: an installer compares it, so a reset makes an upgrade look older than
@@ -175,6 +183,42 @@ Which project it is comes from `DTI_PROJECT_ROOT` — or the older `IKAIKA_PROJE
 
 A launcher can open straight on a capability — `python -m company_tui --start scripts`, which is what a bare `script.ps1` does. It is answered through the same `_enter_step`/`_record` a real menu choice makes, so the breadcrumb, the session's scope and the tab it lands in are identical either way; only the first call honours it, so backing out reaches the menu and nothing becomes unreachable. **A new menu step must go in `TRAIL_STEPS`** — one that is missing raises inside the run supervisor, which reports a failed workflow into a log nobody is reading and puts the previous menu back. See `docs/pitfalls.md` 1.1.
 
+## Interactive lists
+
+A command's output is dead text: `ProcessRunner.stream` starts a child with no stdin and
+appends its stdout, so anything browse-shaped has to be done by re-running the command with
+a different argument and holding the last listing in your head. The list protocol is the
+narrow fix for that, and it is **experimental and off**.
+
+**Two keys, and either one alone changes nothing.** `[updates]`-style settings carry
+`interactive_lists` (off by default, a toggle in Advanced), and the command itself declares
+`"interactive": true` in its manifest. `templates/scripts.py: _list_view` is where they
+meet; it answers `None` unless both said yes, and `None` is what leaves a run byte for byte
+as it was — no stdin pipe, no `DTI_INTERACTIVE` in the environment, nothing parsed.
+
+The protocol is `domain/interactive.py` and it is deliberately small. A command that sees
+`DTI_INTERACTIVE=1` may print `@dti:rows {json}` on stdout; the toolbox shows the rows as a
+real list (`PickScreen`) and writes `@dti:pick <id>` back on stdin. `@dti:end` goes back to
+plain streaming. **Any line that is not understood is ordinary output** — an unknown verb,
+broken JSON, a row with no `id` — because a command written for a later version must not be
+able to break an older toolbox, and the alternative is a view that empties on a half-read
+line. `id` is opaque and echoed back exactly; `kind` and `detail` are presentation only.
+Nothing about any particular project appears here: the protocol is rows and ids, and what
+they mean is the command's business.
+
+The same command run in a plain terminal sees nothing set and prints for a person, which is
+the whole reason the switch is an environment variable rather than a flag.
+
+Three things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
+**row** rather than the screen, because a `VerticalScroll` answers them first (9.1, which
+`RunsScreen` had shipped wrong); a pick must be **drained** and not merely written, or it
+sits in the transport while both ends wait (9.2); and a command that reads stdin with no
+listing outstanding blocks until Stop, which is left as the command's own fault (9.3).
+
+Esc answers a listing with nothing, which the runner reads as "nothing is going to answer
+this" and kills the child — the same reasoning as every other place here where a control
+that appeared to cancel but did not would be a control that lies.
+
 ## Transitions
 
 Every step of a workflow pops one screen before pushing the next, so the app's own screen shows in between. It carries the same chrome, and its activity log stays hidden (`-quiet`) until something is written to it, so the gap reads as the same surface rather than as somewhere else. A workflow that sends the user back therefore passes a `notice` to the menu they land on instead of writing to the console, which would put the message behind whatever comes next. What a workflow without a panel does write there is read at the pause that follows it, and the log is emptied and hidden again when the menu loop comes back round — a line left standing shows through every later gap as if the workflow now running had said it.
@@ -243,15 +287,30 @@ graphify update .                         # after any code change (AST only, no 
 - Preview destructive changes and require explicit confirmation.
 - Never expose credentials, tokens, private payloads, or environment secrets.
 - Avoid dependencies until their value clearly exceeds their maintenance cost. `textual` (the interactive TUI) is the one exception so far — keep it that way; put any new external tool behind a port instead of a fresh dependency where possible.
-- **Comments live at the top of a file and nowhere else.** One module docstring saying what
-  the file is for, in a line or two. Classes and functions get a single line; constants get
-  a single line or none. No inline `#` commentary — the only exceptions are tool directives
-  (`# noqa`, `# type:`), which are instructions rather than prose.
+- **Comments live at the top of a file and nowhere else — in every language here.** Python
+  gets a module docstring in a line or two, with a single line on classes and functions and
+  a single line or none on constants. PowerShell, YAML and TOML get a leading `#` block;
+  `installer.nsi` gets a leading `;` block. Nothing below that block is a comment. A header
+  is a summary and the switches, plus the one or two rules that must not be broken, each
+  citing where the reasoning lives — not an essay.
+  - The only exceptions are **tool directives** (`# noqa`, `# type:`), which are
+    instructions rather than prose, and **another language embedded in a file**: the
+    PowerShell inside `handover.py`'s `SCRIPT`, and `run:` blocks in a workflow. Those are
+    a generated script's own documentation, not this file's.
+  - Third-party generated config is not ours to sweep — `.serena/` writes its own comments
+    back.
+  - Sweep with the **language's own parser**, never a regex: only a parser tells a `#` that
+    starts a comment from one inside a here-string, and only a block-scalar-aware pass
+    knows that a `#` in a `run:` block is somebody's shell script. Re-parse after, and
+    refuse the file if it no longer parses.
 - **The reasoning goes in `docs/`, not beside the code.** `docs/decisions/` is why a thing
   is built the way it is; `docs/pitfalls.md` is what went wrong and the rule that followed.
   Write it there, where one copy serves the whole repository, and cite it by number
   (`docs/pitfalls.md 6.4`) where a line needs it. A finding that only exists as a comment
-  is one the next sweep deletes.
+  is one the next sweep deletes — **so a sweep moves it first**. Before stripping a file,
+  read what its comments claim and check each finding has a home; two did not and became
+  `docs/pitfalls.md` 6.8 and README's release-notes section. Deleting first and
+  reconstructing from git later is how the rule that prevented an outage gets lost.
 - Do not write comments that repeat what the code already says.
 - **Behaviour and its description change together** — the docs that describe it, and the
   text on screen. A card's description, an option's `help`, a dialog's wording and a focus

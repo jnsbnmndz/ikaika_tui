@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from company_tui.domain.interactive import ListView
+
 
 @dataclass(frozen=True, slots=True)
 class ProcessResult:
@@ -25,8 +27,14 @@ class ProcessRunner(ABC):
         command: tuple[str, ...],
         on_output: Callable[[str], None],
         cwd: Path | None = None,
+        view: "ListView | None" = None,
     ) -> ProcessResult:
-        """Run `command`, handing each output line over as it arrives."""
+        """Run `command`, handing each output line over as it arrives.
+
+        `view` opts the run into the list protocol: it is the only thing that gives
+        the child an stdin pipe or `DTI_INTERACTIVE` in its environment. Left out,
+        nothing about the run differs from the day before it existed.
+        """
         raise NotImplementedError
 
     async def capture(

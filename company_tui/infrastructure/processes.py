@@ -1,12 +1,15 @@
 """`ProcessRunner` over `subprocess`, with argument arrays and no shell."""
 
 import asyncio
+import os
 import shutil
 import subprocess
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 
+from company_tui.domain import interactive
+from company_tui.domain.interactive import ListView
 from company_tui.domain.ports import ProcessResult, ProcessRunner
 
 
@@ -45,13 +48,24 @@ class LocalProcessRunner(ProcessRunner):
         command: tuple[str, ...],
         on_output: Callable[[str], None],
         cwd: Path | None = None,
+        view: ListView | None = None,
     ) -> ProcessResult:
+        extra = {}
+        if view is not None:
+            # The whole of the opt-in. Without a view there is no stdin pipe and no
+            # variable, so a command cannot tell it is being run by this at all and
+            # the run is byte for byte what it was.
+            extra = {
+                "stdin": asyncio.subprocess.PIPE,
+                "env": {**os.environ, interactive.INTERACTIVE_VAR: interactive.ENABLED},
+            }
         try:
             process = await asyncio.create_subprocess_exec(
                 *_resolve_command(command),
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                **extra,
             )
         except OSError as error:
             message = f"{command[0]}: {error.strerror or error}"
@@ -63,6 +77,8 @@ class LocalProcessRunner(ProcessRunner):
         try:
             async for raw in process.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if view is not None and await self._handled(line, process, view):
+                    continue
                 collected.append(line)
                 on_output(line)
             exit_code = await process.wait()
@@ -71,7 +87,53 @@ class LocalProcessRunner(ProcessRunner):
                 process.kill()
             await process.wait()
             raise
+        finally:
+            if view is not None:
+                # A process parked on a read cannot be left there by a view that has
+                # gone, and the view must not outlive the run that opened it.
+                self._close_input(process)
+                view.close()
 
         return ProcessResult(
             exit_code=exit_code, stdout="\n".join(collected), stderr=""
         )
+
+    async def _handled(self, line: str, process, view: ListView) -> bool:
+        """Whether the protocol took this line, so it is not output to print."""
+        event = interactive.parse(line)
+        if event is None:
+            return False
+        if isinstance(event, interactive.Finished):
+            view.close()
+            return True
+
+        picked = await view.show(event)
+        if picked is None:
+            # Nothing else is going to answer it, so leaving it waiting is the one
+            # outcome worse than stopping it.
+            with suppress(ProcessLookupError):
+                process.kill()
+            return True
+        await self._say(process, interactive.pick(picked))
+        return True
+
+    async def _say(self, process, line: str) -> None:
+        """Write one line to the child, and WAIT for it to leave the buffer.
+
+        `StreamWriter.write` only queues it. Without the drain the pick can sit in
+        the transport while the child waits to read it and this waits on the child's
+        stdout — a deadlock with no error and nothing on screen.
+        """
+        if process.stdin is None or process.stdin.is_closing():
+            return
+        try:
+            process.stdin.write(f"{line}\n".encode())
+            await process.stdin.drain()
+        except (OSError, ValueError, ConnectionResetError):
+            pass
+
+    def _close_input(self, process) -> None:
+        if process.stdin is None or process.stdin.is_closing():
+            return
+        with suppress(OSError, ValueError, AttributeError):
+            process.stdin.close()

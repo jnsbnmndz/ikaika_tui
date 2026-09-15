@@ -213,6 +213,18 @@ nothing — and Enter sits on CANCEL, because neither answer may look pre-select
 **Rule.** A key the interface draws is a key the interface presses. `KeyHint` reads its
 label back into the key it sends and so cannot drift; this label could, and did.
 
+### 6.8 An uninstaller that returns before it has finished
+
+The installer upgrades by running the old uninstaller and then writing the new tree. NSIS
+uninstallers **copy themselves to `%TEMP%` and return immediately**, so `ExecWait` waits on
+a process that has already handed off — and the new files land while the old ones are still
+being deleted. What survives is whichever finished last.
+
+**Rule.** `ExecWait '"$R0" /S _?=$R1'`. The `_?=` switch keeps the uninstaller in place,
+which is what makes it something `ExecWait` can actually wait for. It also means the
+uninstaller cannot delete itself, so the installer removes `Uninstall.exe` and the
+directory afterwards.
+
 ---
 
 ## 7. An argument list is not a list of arguments
@@ -245,6 +257,48 @@ and *"Space required: 0.0 KB"*, from a script that compiled without a warning.
 `!insertmacro` or `${...}` is one — `${GetOptions}` alone expands to about eighty.
 `makensis /PPO` prints the expansion.
 
+### 7.3 A section constant used before its `Section` is index 0
+
+`${SecPath}`, `${SecStartMenu}` and `${SecDesktop}` are defines the compiler creates when
+it *reaches* each `Section`. `.onInit` and `RestoreChoice` sat above them, so the constants
+did not exist yet and NSIS read the literal text as a section index — **0, which is
+SecCore, the required component.**
+
+`RestoreOne "Desktop"` reads the recorded choice back on an update. A desktop shortcut is
+off by default, so `"0"` is what every install records — and that `"0"` became
+`UnselectSection 0`. The required component was deselected, so the installer ran, wrote
+nothing, and **exited 0**.
+
+What that looks like from the app: press the update badge, the toolbox closes, the
+installer succeeds, the toolbox reopens on the version it was already running. No error
+anywhere — the waiter only re-runs an installer visibly when the exit code is non-zero,
+and this one was zero. The first install of a version always worked, because `RestoreChoice`
+only runs when a previous version is recorded, which is why it looked like the updater and
+not the installer.
+
+The compiler said so on every single build and it read as noise:
+
+```
+warning 6000: unknown variable/constant "{SecDesktop}" detected, ignoring
+```
+
+**Rule.** `.onInit`, `RestoreOne` and `RestoreChoice` live **below** the sections they
+name. Functions can be defined after the code that calls them; constants cannot be used
+before they exist. `tests/test_installer_sections.py` reads the file and fails on any
+`${SecX}` appearing before the line that declares it — it finds seven in the version that
+shipped. And `warning 6000` from `makensis` is not noise: it is a name that silently
+became a number.
+
+### 7.4 A silent installer does not report a file it could not replace
+
+Windows will not overwrite a running executable, and in **silent** mode NSIS neither stops
+nor says so. Installing over a running copy rewrote `Uninstall.exe` and the whole of
+`_internal`, left `dti.exe` at its old bytes, and exited 0 — a half-updated install whose
+`_internal/VERSION` reports the *new* version while the program running is the old one.
+
+**Rule.** This is what the handover exists to prevent (6.1): the installer starts only
+after the app's pid is gone. Nothing may run it while the app is alive — including a test.
+
 ---
 
 ## 8. A dependency you cannot patch
@@ -261,3 +315,38 @@ made it **worse**: the pin froze a Dockerfile whose base layer kept aging.
 was four API calls and a string comparison, and is now `scripts/check-actions.ps1` — which
 also removed the PAT it needed. A container action carries somebody else's operating system
 into every run.
+
+---
+
+## 9. Talking to a process that is talking back
+
+### 9.1 A scroll container answers the arrow keys first
+
+`RunsScreen` declared `("up", "focus_previous")` and `("down", "focus_next")` and
+neither ever fired. A `VerticalScroll` binds the arrow keys to scrolling, and a key goes
+to the focused widget and then **up** through its ancestors — so the scroller answers
+before the screen is reached, and the list could only be clicked. It had shipped that way.
+
+**Rule.** Bindings that move between rows go on the **row**, which is what has focus, not
+on the screen. `PickRow` and `RunRow` both carry `up`/`down` and call
+`self.screen.focus_previous()`/`focus_next()`. A binding that never fires is the same
+defect as a key hint for a dead key: a control that lies.
+
+### 9.2 `StreamWriter.write` only queues it
+
+The pick written back on the child's stdin never left the transport. The child waited to
+read it, this waited on the child's stdout, and neither moved — a deadlock with no error,
+no traceback and nothing on screen. It looked exactly like a command that had hung.
+
+**Rule.** `await process.stdin.drain()` after every write. Writing to a pipe is not
+sending to a pipe.
+
+### 9.3 A child that reads stdin with no listing outstanding blocks
+
+Nothing can answer a read that no `@dti:rows` asked for. The toolbox is waiting on the
+child's stdout while the child waits on our stdin.
+
+**Rule.** This one is left as it is, deliberately: it is the command misbehaving, and the
+recourse is the panel's Stop, which cancels the run and kills the child like any other
+hung command. What must never happen is the *toolbox* causing it — which is why the pick
+is drained (9.2) and why stdin is closed when the run ends.

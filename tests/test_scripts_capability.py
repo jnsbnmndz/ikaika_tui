@@ -62,12 +62,17 @@ class FakeFileSystem:
 class FakeProcessRunner:
     def __init__(self):
         self.commands = []
+        self.views = []
 
     def locate(self, executable):
         return "/usr/bin/" + executable
 
-    async def stream(self, command, on_output, cwd=None):
+    async def stream(self, command, on_output, cwd=None, view=None):
+        # `view` is recorded rather than ignored: whether one was passed IS the
+        # feature, and a double that swallowed it could not tell the gate apart
+        # from a gate that is broken open.
         self.commands.append((tuple(command), cwd))
+        self.views.append(view)
         on_output("done")
         return ProcessResult(exit_code=0, stdout="", stderr="")
 

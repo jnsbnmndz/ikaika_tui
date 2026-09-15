@@ -39,6 +39,7 @@ def settings_file(directory: Path) -> Path:
 TEMPLATES_SECTION = "templates"
 SCRIPTS_SECTION = "scripts"
 UPDATES_SECTION = "updates"
+EXPERIMENTAL_SECTION = "experimental"
 
 HEADER = f"# {naming.APP_TITLE} settings."
 
@@ -73,6 +74,9 @@ def render(settings: Settings) -> str:
         update_lines.append(f"asset_pattern = {quote(updates.asset_pattern.strip())}")
     if update_lines:
         lines += ["", f"[{UPDATES_SECTION}]", *update_lines]
+
+    if settings.interactive_lists:
+        lines += ["", f"[{EXPERIMENTAL_SECTION}]", "interactive_lists = true"]
 
     for key in sorted(settings.templates):
         source = settings.templates[key]
@@ -158,6 +162,9 @@ class FileConfig(ConfigPort):
             return named
         return CHANNEL_ANY if section.get("include_prereleases") is True else CHANNEL_OFFICIAL
 
+    def interactive_lists(self) -> bool:
+        return self._section(EXPERIMENTAL_SECTION).get("interactive_lists") is True
+
     def settings(self) -> Settings:
         scaffold = self._section("scaffold")
         return Settings(
@@ -170,6 +177,7 @@ class FileConfig(ConfigPort):
             or DEFAULT_SCRIPTS_ROOT,
             scripts=self._pinned_sources(SCRIPTS_SECTION),
             updates=self.update_source(),
+            interactive_lists=self.interactive_lists(),
             script_checks={
                 key: entry.get("check", True) is not False
                 for key, entry in self._section(SCRIPTS_SECTION).items()

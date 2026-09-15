@@ -51,6 +51,9 @@ class Settings:
     script_checks: Mapping[str, bool] = field(default_factory=dict)
     """Whether each stack's installed scripts are compared against the remote."""
 
+    interactive_lists: bool = False
+    """Whether a command may hand the toolbox rows to render. Off, and experimental."""
+
 class ConfigPort(ABC):
     @abstractmethod
     def template_source(self, pack_key: str, default: TemplateSource) -> TemplateSource:
@@ -81,6 +84,16 @@ class ConfigPort(ABC):
     def script_check(self, pack_key: str) -> bool:
         """Whether to compare this stack's installed scripts against the remote."""
         raise NotImplementedError
+
+    def interactive_lists(self) -> bool:
+        """Whether a command may render rows. Half the gate; the other half is the
+        command's own declaration, so this alone changes nothing.
+
+        Concrete, and false. An experiment that is off unless something says
+        otherwise cannot be turned on by a port that forgot to answer, and an
+        implementation written before it existed keeps working unchanged.
+        """
+        return False
 
     @abstractmethod
     def update_source(self) -> UpdateSource:

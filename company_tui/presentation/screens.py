@@ -18,6 +18,7 @@ from textual.screen import ModalScreen, Screen, ScreenResultType
 from textual.widget import Widget
 from textual.widgets import Button, Input, Static
 
+from company_tui.domain.interactive import Listing, Row
 from company_tui.presentation.branding import (
     APP_TAGLINE,
     APP_VERSION,
@@ -625,7 +626,15 @@ class RunRow(Widget, can_focus=True):
     }
     """
 
-    BINDINGS = [("enter", "choose", "Go")]
+    BINDINGS = [
+        ("enter", "choose", "Go"),
+        ("up", "previous", "Up"),
+        ("down", "next", "Down"),
+    ]
+    """On the row, not the screen: the scroller answers arrow keys on the way up.
+
+    `RunsScreen` declared these and they never fired, so the list could only be
+    clicked - see `PickRow` and docs/pitfalls.md 9.1."""
 
     class Chosen(Message):
         def __init__(self, session: RunSession) -> None:
@@ -653,6 +662,12 @@ class RunRow(Widget, can_focus=True):
 
     def action_choose(self) -> None:
         self.post_message(self.Chosen(self.session))
+
+    def action_previous(self) -> None:
+        self.screen.focus_previous()
+
+    def action_next(self) -> None:
+        self.screen.focus_next()
 
 
 class RunsScreen(DialogScreen[RunSession | None]):
@@ -702,6 +717,169 @@ class RunsScreen(DialogScreen[RunSession | None]):
     def on_run_row_chosen(self, message: RunRow.Chosen) -> None:
         message.stop()
         self.dismiss(message.session)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+ROW_GLYPHS = {"folder": "▸", "file": "·", "back": "❯"}
+ROW_FALLBACK = "·"
+"""Line art per `kind`, with one for a kind this build has never heard of.
+
+`kind` is presentation only and a command may invent any word for it, so an
+unknown one has to render as something rather than as nothing."""
+
+PICK_TITLE = "Choose"
+PICK_EMPTY = "Nothing to choose from."
+
+
+class PickRow(Widget, can_focus=True):
+    """One row of a listing: what it is, what it is called, and what it says."""
+
+    DEFAULT_CSS = """
+    PickRow {
+        width: 100%;
+        height: 1;
+        layout: horizontal;
+    }
+
+    PickRow .pick--glyph {
+        width: 2;
+        color: $text-muted;
+    }
+
+    PickRow .pick--label {
+        width: 1fr;
+        color: $foreground;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    PickRow .pick--detail {
+        width: auto;
+        margin-left: 2;
+        color: $text-disabled;
+        text-wrap: nowrap;
+    }
+
+    PickRow:focus .pick--glyph,
+    PickRow:focus .pick--label,
+    PickRow:focus .pick--detail {
+        color: $accent;
+        text-style: bold;
+    }
+    """
+
+    BINDINGS = [
+        ("enter", "choose", "Choose"),
+        ("up", "previous", "Up"),
+        ("down", "next", "Down"),
+    ]
+    """Here rather than on the screen, because the row is what has focus.
+
+    A `VerticalScroll` binds the arrow keys to scrolling and answers them on the
+    way up, so a screen-level `focus_next` is never reached and the list looks
+    frozen. The focused widget is asked first, which is the one place a key can be
+    caught before the scroller takes it."""
+
+    class Chosen(Message):
+        def __init__(self, identifier: str) -> None:
+            self.identifier = identifier
+            super().__init__()
+
+    def __init__(self, row: Row) -> None:
+        super().__init__()
+        self.row = row
+
+    def compose(self) -> ComposeResult:
+        yield Static(ROW_GLYPHS.get(self.row.kind, ROW_FALLBACK), classes="pick--glyph")
+        yield Static(self.row.label, classes="pick--label")
+        if self.row.detail:
+            yield Static(self.row.detail, classes="pick--detail")
+
+    def on_click(self) -> None:
+        self.action_choose()
+
+    def on_enter(self) -> None:
+        self.focus()
+
+    def action_choose(self) -> None:
+        self.post_message(self.Chosen(self.row.id))
+
+    def action_previous(self) -> None:
+        self.screen.focus_previous()
+
+    def action_next(self) -> None:
+        self.screen.focus_next()
+
+
+class PickScreen(DialogScreen[str | None]):
+    """Rows a command handed over, as a list rather than as log text.
+
+    Dismisses with the chosen `id`, or `None` for Esc — which the runner reads as
+    "nothing is going to answer this" and stops the command. The id is echoed back
+    exactly as it arrived; nothing here interprets it.
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Stop"),
+        ("up", "focus_previous", "Up"),
+        ("down", "focus_next", "Down"),
+    ]
+
+    DEFAULT_CSS = """
+    PickScreen > Container {
+        width: 84;
+    }
+
+    PickScreen #pick-hint {
+        width: 100%;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+
+    PickScreen #pick-rows {
+        width: 100%;
+        height: auto;
+        max-height: 16;
+        margin-bottom: 1;
+        scrollbar-size-vertical: 1;
+    }
+
+    PickScreen #pick-empty {
+        width: 100%;
+        margin-bottom: 1;
+        color: $text-disabled;
+    }
+    """
+
+    def __init__(self, listing: Listing) -> None:
+        super().__init__()
+        self._listing = listing
+
+    def compose(self) -> ComposeResult:
+        with Container() as dialog:
+            dialog.border_title = self._listing.title or PICK_TITLE
+            if self._listing.hint:
+                yield Static(self._listing.hint, id="pick-hint")
+            if self._listing.rows:
+                with VerticalScroll(id="pick-rows"):
+                    for row in self._listing.rows:
+                        yield PickRow(row)
+            else:
+                yield Static(PICK_EMPTY, id="pick-empty")
+            with Horizontal(classes="dialog--actions"):
+                with Horizontal(classes="dialog--escape"):
+                    yield KeyHint("Esc", "Stop", dim=True)
+
+    def on_mount(self) -> None:
+        first = next(iter(self.query(PickRow)), None)
+        if first is not None:
+            first.focus()
+
+    def on_pick_row_chosen(self, message: PickRow.Chosen) -> None:
+        message.stop()
+        self.dismiss(message.identifier)
 
     def action_cancel(self) -> None:
         self.dismiss(None)

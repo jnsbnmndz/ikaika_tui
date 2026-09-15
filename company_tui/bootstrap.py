@@ -1,7 +1,10 @@
 """Constructs the object graph: every concrete port, capability and template pack."""
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from company_tui.application.app import Application
 from company_tui.application.registry import CapabilityRegistry
@@ -28,15 +31,17 @@ from company_tui.infrastructure.recent_file import FileRecentPaths
 from company_tui.infrastructure.release_feed import HttpAssetDownload, HttpReleaseFeed
 from company_tui.infrastructure.session_file import FileSessionMemory
 from company_tui.infrastructure.update_state import FileUpdateState, state_path
-from company_tui.presentation.branding import APP_VERSION
 from company_tui.presentation.plain_console import PlainConsole
-from company_tui.presentation.tui_console import TuiConsole
 from company_tui.presentation.ui import Ui
 from company_tui.templates.flutter.pack import FlutterTemplatePack
 from company_tui.templates.python.pack import PythonTemplatePack
 from company_tui.templates.react.pack import ReactTemplatePack
 from company_tui.templates.react_native.pack import ReactNativeTemplatePack
 from company_tui.templates.services import PackServices
+from company_tui.version import APP_VERSION
+
+if TYPE_CHECKING:
+    from company_tui.presentation.tui_console import TuiConsole
 
 
 def running_build() -> str:
@@ -116,6 +121,8 @@ def _build_update_watch() -> UpdateWatch:
 
 
 def create_tui_console(start: str = "") -> TuiConsole:
+    from company_tui.presentation.tui_console import TuiConsole
+
     console = TuiConsole(
         workspace_label=Path.cwd().name,
         memory=FileSessionMemory(),
