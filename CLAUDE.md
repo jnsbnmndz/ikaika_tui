@@ -183,6 +183,42 @@ Which project it is comes from `DTI_PROJECT_ROOT` — or the older `IKAIKA_PROJE
 
 A launcher can open straight on a capability — `python -m company_tui --start scripts`, which is what a bare `script.ps1` does. It is answered through the same `_enter_step`/`_record` a real menu choice makes, so the breadcrumb, the session's scope and the tab it lands in are identical either way; only the first call honours it, so backing out reaches the menu and nothing becomes unreachable. **A new menu step must go in `TRAIL_STEPS`** — one that is missing raises inside the run supervisor, which reports a failed workflow into a log nobody is reading and puts the previous menu back. See `docs/pitfalls.md` 1.1.
 
+## Interactive lists
+
+A command's output is dead text: `ProcessRunner.stream` starts a child with no stdin and
+appends its stdout, so anything browse-shaped has to be done by re-running the command with
+a different argument and holding the last listing in your head. The list protocol is the
+narrow fix for that, and it is **experimental and off**.
+
+**Two keys, and either one alone changes nothing.** `[updates]`-style settings carry
+`interactive_lists` (off by default, a toggle in Advanced), and the command itself declares
+`"interactive": true` in its manifest. `templates/scripts.py: _list_view` is where they
+meet; it answers `None` unless both said yes, and `None` is what leaves a run byte for byte
+as it was — no stdin pipe, no `DTI_INTERACTIVE` in the environment, nothing parsed.
+
+The protocol is `domain/interactive.py` and it is deliberately small. A command that sees
+`DTI_INTERACTIVE=1` may print `@dti:rows {json}` on stdout; the toolbox shows the rows as a
+real list (`PickScreen`) and writes `@dti:pick <id>` back on stdin. `@dti:end` goes back to
+plain streaming. **Any line that is not understood is ordinary output** — an unknown verb,
+broken JSON, a row with no `id` — because a command written for a later version must not be
+able to break an older toolbox, and the alternative is a view that empties on a half-read
+line. `id` is opaque and echoed back exactly; `kind` and `detail` are presentation only.
+Nothing about any particular project appears here: the protocol is rows and ids, and what
+they mean is the command's business.
+
+The same command run in a plain terminal sees nothing set and prints for a person, which is
+the whole reason the switch is an environment variable rather than a flag.
+
+Three things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
+**row** rather than the screen, because a `VerticalScroll` answers them first (9.1, which
+`RunsScreen` had shipped wrong); a pick must be **drained** and not merely written, or it
+sits in the transport while both ends wait (9.2); and a command that reads stdin with no
+listing outstanding blocks until Stop, which is left as the command's own fault (9.3).
+
+Esc answers a listing with nothing, which the runner reads as "nothing is going to answer
+this" and kills the child — the same reasoning as every other place here where a control
+that appeared to cancel but did not would be a control that lies.
+
 ## Transitions
 
 Every step of a workflow pops one screen before pushing the next, so the app's own screen shows in between. It carries the same chrome, and its activity log stays hidden (`-quiet`) until something is written to it, so the gap reads as the same surface rather than as somewhere else. A workflow that sends the user back therefore passes a `notice` to the menu they land on instead of writing to the console, which would put the message behind whatever comes next. What a workflow without a panel does write there is read at the pause that follows it, and the log is emptied and hidden again when the menu loop comes back round — a line left standing shows through every later gap as if the workflow now running had said it.

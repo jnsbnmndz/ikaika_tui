@@ -315,3 +315,38 @@ made it **worse**: the pin froze a Dockerfile whose base layer kept aging.
 was four API calls and a string comparison, and is now `scripts/check-actions.ps1` — which
 also removed the PAT it needed. A container action carries somebody else's operating system
 into every run.
+
+---
+
+## 9. Talking to a process that is talking back
+
+### 9.1 A scroll container answers the arrow keys first
+
+`RunsScreen` declared `("up", "focus_previous")` and `("down", "focus_next")` and
+neither ever fired. A `VerticalScroll` binds the arrow keys to scrolling, and a key goes
+to the focused widget and then **up** through its ancestors — so the scroller answers
+before the screen is reached, and the list could only be clicked. It had shipped that way.
+
+**Rule.** Bindings that move between rows go on the **row**, which is what has focus, not
+on the screen. `PickRow` and `RunRow` both carry `up`/`down` and call
+`self.screen.focus_previous()`/`focus_next()`. A binding that never fires is the same
+defect as a key hint for a dead key: a control that lies.
+
+### 9.2 `StreamWriter.write` only queues it
+
+The pick written back on the child's stdin never left the transport. The child waited to
+read it, this waited on the child's stdout, and neither moved — a deadlock with no error,
+no traceback and nothing on screen. It looked exactly like a command that had hung.
+
+**Rule.** `await process.stdin.drain()` after every write. Writing to a pipe is not
+sending to a pipe.
+
+### 9.3 A child that reads stdin with no listing outstanding blocks
+
+Nothing can answer a read that no `@dti:rows` asked for. The toolbox is waiting on the
+child's stdout while the child waits on our stdin.
+
+**Rule.** This one is left as it is, deliberately: it is the command misbehaving, and the
+recourse is the panel's Stop, which cancels the run and kills the child like any other
+hung command. What must never happen is the *toolbox* causing it — which is why the pick
+is drained (9.2) and why stdin is closed when the run ends.

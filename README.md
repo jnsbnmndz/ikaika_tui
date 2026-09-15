@@ -70,6 +70,46 @@ coordinates, and the domain stays independent of concrete tools. Every interacti
   after them. Line art from `presentation/icons.py` instead, enforced by
   `tests/test_glyphs.py`.
 
+## Interactive lists (experimental, off)
+
+A command's output is dead text, so anything browse-shaped — walking folders, picking from
+results — means re-running it with a different argument each time and holding the last
+listing in your head. A command can instead hand over a list of rows and be told which one
+was picked, without exiting.
+
+**Two things must both say yes**, and either alone changes nothing:
+
+1. `interactive_lists` in **[09] Advanced**, off by default.
+2. `"interactive": true` on that command in its `dti.script.json`.
+
+With both, the child gets `DTI_INTERACTIVE=1` and an stdin pipe. It may then print:
+
+```
+@dti:rows {"title":"Project Files","hint":"Enter opens",
+           "rows":[{"id":"1","label":"00_BIM","kind":"folder"},
+                   {"id":"10","label":"Deck.pptx","kind":"file","detail":"v1  97 MB"}]}
+```
+
+The toolbox draws a real list — arrow keys, Enter — and writes back one line:
+
+```
+@dti:pick 10
+```
+
+Then it keeps reading: the command prints another block, or `@dti:end` to go back to plain
+streaming. Esc answers with nothing and stops the command.
+
+Any line that is not understood — an unknown verb, broken JSON, a row with no `id` — is
+printed as ordinary output rather than breaking the view, so a command written for a later
+version cannot break an older toolbox. `id` is opaque and echoed back verbatim; `kind` and
+`detail` are presentation only.
+
+The switch is an environment variable rather than a flag so **the same command run in a
+plain terminal sees nothing set and prints its ordinary human-readable output**. Both
+surfaces stay clean.
+
+Not a pty: no cursor control, no full-screen apps. It is a list protocol.
+
 ## Building and releasing
 
 One entry point, and GitHub Actions calls the same file rather than restating the steps in

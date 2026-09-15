@@ -22,6 +22,7 @@ API_BASE_KEY = "api_base"
 CHANNEL_KEY = "channel"
 ASSET_KEY = "asset_pattern"
 RESET_KEY = "reset"
+INTERACTIVE_KEY = "interactive_lists"
 
 
 class AdvancedCapability(Capability):
@@ -123,6 +124,19 @@ class AdvancedCapability(Capability):
                 default=source.releases_url if source.configured else "nothing yet",
             ),
             Option(
+                key=INTERACTIVE_KEY,
+                label="Interactive lists (experimental)",
+                kind=OptionKind.BOOLEAN,
+                default=settings.interactive_lists,
+                help=(
+                    "Lets a command hand over a list of rows and be told which one "
+                    "was picked, instead of you re-running it with a different "
+                    "argument each time. The command has to declare "
+                    "'interactive': true as well, so this on its own changes "
+                    "nothing. Off, everything runs exactly as it does now."
+                ),
+            ),
+            Option(
                 key=RESET_KEY,
                 label="Reset these to defaults",
                 kind=OptionKind.BOOLEAN,
@@ -164,11 +178,16 @@ class AdvancedCapability(Capability):
             scripts=current.scripts,
             updates=source,
             script_checks=current.script_checks,
+            interactive_lists=bool(values.get(INTERACTIVE_KEY)),
         )
 
         self._console.write(f"Writing {self._config.location(scope)}...")
         path = self._config.save(settings, scope)
 
+        self._console.write(
+            "Interactive lists: "
+            + ("on (experimental)" if settings.interactive_lists else "off")
+        )
         self._console.write(f"Repository: {source.repository or 'not configured'}")
         self._console.write(f"API host: {source.api_base}")
         self._console.write(

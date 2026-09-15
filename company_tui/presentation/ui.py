@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol, TypeVar
 
 from company_tui.domain.capability import Capability
+from company_tui.domain.interactive import ListView
 from company_tui.domain.options import Option, OptionValue, RefreshOutcome
 from company_tui.domain.script_config import (
     ScriptAction,
@@ -105,6 +106,11 @@ class Ui(Protocol):
         self, catalogue: ScriptCatalogue
     ) -> ScriptUpdate | None:
         """Ask what to do about a store that has fallen behind its repository."""
+        ...
+
+    def list_view(self) -> "ListView | None":
+        """Somewhere to render rows a command hands over, or `None` for a surface
+        that cannot. `None` is what keeps the run exactly as it was."""
         ...
 
     async def pause(self) -> None: ...

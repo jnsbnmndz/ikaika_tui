@@ -218,6 +218,9 @@ class ScriptAction:
     description: str = ""
     """What the repository says this action is for, in its own words."""
 
+    interactive: bool = False
+    """Whether this command speaks the list protocol. `true` and nothing else."""
+
     messages: Mapping[str, str] = field(default_factory=dict)
     after_success: tuple[str, ...] = ()
 
@@ -495,6 +498,7 @@ def _action_from(
         template=str(entry.get("template", "")),
         filename=str(entry.get("filename", "")),
         description=str(entry.get("description", "")),
+        interactive=entry.get("interactive") is True,
         skipped=tuple(
             str(name) for name in entry.get("skipped", []) if isinstance(name, str)
         ),

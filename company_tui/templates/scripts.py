@@ -12,6 +12,7 @@ from pathlib import Path
 from company_tui.domain import json_document, naming
 from company_tui.domain.config import ConfigScope, TemplateSource
 from company_tui.domain.identity import SCRIPT_MANIFEST, NotAProjectError
+from company_tui.domain.interactive import ListView
 from company_tui.domain.json_document import MalformedJson
 from company_tui.domain.options import OptionValue
 from company_tui.domain.scaffolding import CannotStampIdentity, display_path
@@ -477,12 +478,28 @@ def _template_path(
     return repository / resolved
 
 
+def _list_view(action: ScriptAction, services: PackServices) -> "ListView | None":
+    """A view only when BOTH halves said yes, and `None` every other time.
+
+    The setting alone is not enough and neither is the declaration: one is the
+    person saying the experiment may run at all, the other is the command saying it
+    knows how to speak. `None` is what leaves the run byte for byte as it was - no
+    stdin pipe, no variable in the environment, nothing to parse.
+    """
+    if not action.interactive:
+        return None
+    if not services.config.interactive_lists():
+        return None
+    return services.console.list_view()
+
+
 async def _run_commands(
     action: ScriptAction,
     references: Mapping[str, str],
     repository: Path,
     services: PackServices,
 ) -> tuple[str, int] | None:
+    view = _list_view(action, services)
     for raw in action.after_success:
         command = _command_from(raw, references)
         if not command:
@@ -492,6 +509,7 @@ async def _run_commands(
             command,
             lambda line: services.console.write(f"{RAW}{line}"),
             repository,
+            view,
         )
         if result.exit_code != 0:
             return (f"{command[0]} exited {result.exit_code}", result.exit_code)

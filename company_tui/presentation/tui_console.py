@@ -16,6 +16,7 @@ from company_tui.application.app import Application
 from company_tui.application.updates import UpdateWatch
 from company_tui.domain import naming
 from company_tui.domain.capability import Capability
+from company_tui.domain.interactive import Listing, ListView
 from company_tui.domain.options import Option, OptionValue
 from company_tui.domain.recent import RecentPathsPort
 from company_tui.domain.script_config import (
@@ -59,6 +60,7 @@ from company_tui.presentation.screens import (
     ContinueScreen,
     InputScreen,
     InstallingScreen,
+    PickScreen,
     RunsScreen,
     SplashScreen,
 )
@@ -525,6 +527,29 @@ class TuiConsole(App):
         await self._claim_screen(session)
         return await self.push_screen_wait(ConfirmScreen(prompt, self.trail_label()))
 
+
+    def list_view(self) -> "ListView":
+        """A view bound to this console, for a command that speaks the protocol."""
+        return _PanelListView(self)
+
+    async def show_rows(self, listing: Listing) -> str | None:
+        """Put a listing up and wait. The pick is the row's own id, or None for Esc.
+
+        A run is already a worker, which is what `push_screen_wait` needs — the same
+        reason `ask` and `confirm` can stop mid-workflow and wait for an answer.
+        """
+        return await self.push_screen_wait(PickScreen(listing))
+
+    def close_rows(self) -> None:
+        """Take a listing off the screen if one is still up.
+
+        Only reached when the command said `@dti:end` or the run ended, and in both
+        cases the usual way a listing leaves is somebody answering it.
+        """
+        screen = self.screen if self.screen_stack else None
+        if isinstance(screen, PickScreen):
+            with suppress(Exception):
+                screen.dismiss(None)
 
     async def working(self, label: str, work: Awaitable[T]) -> T:
         """Do `work` with the app saying so, for a step that has no panel."""
@@ -1226,3 +1251,21 @@ class TuiConsole(App):
 async def _nothing() -> None:
     """A session with no workflow of its own behind it."""
     return
+
+
+class _PanelListView(ListView):
+    """`ListView` over a `TuiConsole`.
+
+    A thin object rather than the console itself, so `ProcessRunner` is handed the
+    one thing it needs and nothing about screens, sessions or Textual travels into
+    the domain with it.
+    """
+
+    def __init__(self, console: "TuiConsole") -> None:
+        self._console = console
+
+    async def show(self, listing: Listing) -> str | None:
+        return await self._console.show_rows(listing)
+
+    def close(self) -> None:
+        self._console.close_rows()
