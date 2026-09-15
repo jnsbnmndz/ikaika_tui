@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "company-tui"
-version = "0.3.0+24"
+version = "0.3.0+25"
 description = "Company developer toolbox for project scaffolding and automation"
 readme = "README.md"
 requires-python = ">=3.11"
