@@ -104,6 +104,31 @@ printed as ordinary output rather than breaking the view, so a command written f
 version cannot break an older toolbox. `id` is opaque and echoed back verbatim; `kind` and
 `detail` are presentation only.
 
+### A list can answer itself
+
+Some questions have a right answer when nobody is at the keyboard — retry or give up,
+overwrite or skip, keep going or stop. The command says so on the same payload:
+
+```
+@dti:rows {"rows":[{"id":"retry","label":"Try again"},{"id":"stop","label":"Stop"}],
+           "timeout":20,"default":"stop"}
+```
+
+The hint line counts down and names the winner (`20s → Stop`), and on expiry the toolbox
+writes back `@dti:pick stop` like any other answer. **Any interaction ends the countdown for
+good** — an arrow key, a click, the pointer moving onto another row — because a choice taken
+away part-way through reading it is worse than never offering to answer it.
+
+`timeout` without a `default` naming one of these rows is **ignored entirely and the list
+waits**. Never row zero: silently picking the first one is how somebody loses what they
+meant to keep.
+
+This is a **third** switch, `timed_prompts`, also in **[09] Advanced** and also off. With it
+off — or on an older toolbox, or in a plain terminal — the list renders and waits exactly as
+it does now, and the extra fields are dropped before the screen ever sees them. A command is
+never told whether its countdown is live, so nothing can be written to depend on one
+(`docs/decisions/0005`).
+
 The switch is an environment variable rather than a flag so **the same command run in a
 plain terminal sees nothing set and prints its ordinary human-readable output**. Both
 surfaces stay clean.

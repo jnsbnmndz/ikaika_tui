@@ -190,7 +190,7 @@ appends its stdout, so anything browse-shaped has to be done by re-running the c
 a different argument and holding the last listing in your head. The list protocol is the
 narrow fix for that, and it is **experimental and off**.
 
-**Two keys, and either one alone changes nothing.** `[updates]`-style settings carry
+**Two keys, and either one alone changes nothing.** `[experimental]` carries
 `interactive_lists` (off by default, a toggle in Advanced), and the command itself declares
 `"interactive": true` in its manifest. `templates/scripts.py: _list_view` is where they
 meet; it answers `None` unless both said yes, and `None` is what leaves a run byte for byte
@@ -209,11 +209,26 @@ they mean is the command's business.
 The same command run in a plain terminal sees nothing set and prints for a person, which is
 the whole reason the switch is an environment variable rather than a flag.
 
-Three things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
+A listing may also carry a `timeout` and a `default`, and then it answers itself. That is a
+**third** switch — `timed_prompts`, beside `interactive_lists` in `[experimental]`, off —
+and it is the one that acts without being asked, which is why it is separate. Off, the gate
+wraps the view in `Untimed` and both fields are gone before the screen sees a listing,
+rather than the screen holding a flag it has to remember to check; that is also what makes
+the degraded path honest, since a command is never told whether its countdown is live and so
+cannot be written to depend on one. `timeout` without a `default` naming one of *these* rows
+is dropped whole — never row zero, since silently picking the first is how somebody loses
+what they meant to keep — and an unreadable `timeout` costs the countdown and not the rows.
+Expiry dismisses with the default's `id`, an ordinary `@dti:pick` and **never `None`**, which
+would kill the child instead of answering it. Any interaction ends it permanently and
+nothing re-arms it. See `docs/decisions/0005`.
+
+Four things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
 **row** rather than the screen, because a `VerticalScroll` answers them first (9.1, which
 `RunsScreen` had shipped wrong); a pick must be **drained** and not merely written, or it
-sits in the transport while both ends wait (9.2); and a command that reads stdin with no
-listing outstanding blocks until Stop, which is left as the command's own fault (9.3).
+sits in the transport while both ends wait (9.2); a command that reads stdin with no
+listing outstanding blocks until Stop, which is left as the command's own fault (9.3); and
+a screen focuses that same `VerticalScroll` before its first row, so treating *any* focus
+change as an interaction killed every countdown before it drew one (9.4).
 
 Esc answers a listing with nothing, which the runner reads as "nothing is going to answer
 this" and kills the child — the same reasoning as every other place here where a control

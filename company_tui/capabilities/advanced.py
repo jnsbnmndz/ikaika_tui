@@ -23,6 +23,7 @@ CHANNEL_KEY = "channel"
 ASSET_KEY = "asset_pattern"
 RESET_KEY = "reset"
 INTERACTIVE_KEY = "interactive_lists"
+TIMED_KEY = "timed_prompts"
 
 
 class AdvancedCapability(Capability):
@@ -137,6 +138,18 @@ class AdvancedCapability(Capability):
                 ),
             ),
             Option(
+                key=TIMED_KEY,
+                label="Timed prompts (experimental)",
+                kind=OptionKind.BOOLEAN,
+                default=settings.timed_prompts,
+                help=(
+                    "Lets one of those lists count down to an answer the command "
+                    "named - retry or give up, overwrite or skip - for when nobody "
+                    "is at the keyboard. Touching the list stops the countdown for "
+                    "good. Off, a list that offers one still just waits."
+                ),
+            ),
+            Option(
                 key=RESET_KEY,
                 label="Reset these to defaults",
                 kind=OptionKind.BOOLEAN,
@@ -179,6 +192,7 @@ class AdvancedCapability(Capability):
             updates=source,
             script_checks=current.script_checks,
             interactive_lists=bool(values.get(INTERACTIVE_KEY)),
+            timed_prompts=bool(values.get(TIMED_KEY)),
         )
 
         self._console.write(f"Writing {self._config.location(scope)}...")
@@ -187,6 +201,10 @@ class AdvancedCapability(Capability):
         self._console.write(
             "Interactive lists: "
             + ("on (experimental)" if settings.interactive_lists else "off")
+        )
+        self._console.write(
+            "Timed prompts: "
+            + ("on (experimental)" if settings.timed_prompts else "off")
         )
         self._console.write(f"Repository: {source.repository or 'not configured'}")
         self._console.write(f"API host: {source.api_base}")

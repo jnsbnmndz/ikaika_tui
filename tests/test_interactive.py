@@ -15,6 +15,8 @@ from company_tui.domain.interactive import (
     pick,
 )
 
+COUNTDOWN_ROWS = [{"id": "go", "label": "Keep going"}, {"id": "stop", "label": "Stop"}]
+
 
 def _rows(**document):
     return f"{ROWS} {json.dumps(document)}"
@@ -101,3 +103,65 @@ class AMalformedLineIsPrintedNotRaised(unittest.TestCase):
             footer="from a later version",
         ))
         self.assertEqual((Row("1", "A"),), listing.rows)
+
+
+class TheCountdown(unittest.TestCase):
+    """Two optional fields on the same payload, and they travel together."""
+
+    def _listing(self, **document):
+        return parse(_rows(rows=COUNTDOWN_ROWS, **document))
+
+    def test_a_listing_says_so_when_it_carries_one(self):
+        listing = self._listing(timeout=20, default="stop")
+        self.assertEqual(20, listing.timeout)
+        self.assertEqual("stop", listing.default)
+        self.assertTrue(listing.counts_down)
+
+    def test_a_listing_that_says_nothing_waits(self):
+        listing = self._listing()
+        self.assertEqual(0, listing.timeout)
+        self.assertEqual("", listing.default)
+        self.assertFalse(listing.counts_down)
+
+    def test_a_timeout_naming_no_row_is_dropped_whole(self):
+        # Not aimed at row zero. A command that meant "give up" and got "retry"
+        # because its id had a typo in it is the failure this rule exists for.
+        for default in ("keep", "", "GO", None, 0, ["stop"]):
+            listing = self._listing(timeout=20, default=default)
+            self.assertEqual((0, ""), (listing.timeout, listing.default), repr(default))
+
+    def test_a_timeout_with_no_default_at_all_is_dropped(self):
+        listing = self._listing(timeout=20)
+        self.assertEqual((0, ""), (listing.timeout, listing.default))
+
+    def test_a_default_with_no_timeout_is_dropped(self):
+        listing = self._listing(default="stop")
+        self.assertEqual((0, ""), (listing.timeout, listing.default))
+
+    def test_zero_and_below_is_todays_behaviour(self):
+        for seconds in (0, -1, -900):
+            listing = self._listing(timeout=seconds, default="stop")
+            self.assertFalse(listing.counts_down, seconds)
+
+    def test_a_timeout_that_is_not_a_number_is_dropped_not_fatal(self):
+        # The rows are still a perfectly good listing; only the countdown is lost.
+        for seconds in ("20", None, True, False, [20], {"seconds": 20}):
+            listing = self._listing(timeout=seconds, default="stop")
+            self.assertIsInstance(listing, Listing, repr(seconds))
+            self.assertEqual(2, len(listing.rows))
+            self.assertFalse(listing.counts_down, repr(seconds))
+
+    def test_part_of_a_second_still_counts_as_one(self):
+        self.assertEqual(1, self._listing(timeout=0.4, default="stop").timeout)
+        self.assertEqual(20, self._listing(timeout=20.9, default="stop").timeout)
+
+    def test_the_countdown_can_be_taken_back_out(self):
+        listing = self._listing(timeout=20, default="stop")
+        waiting = listing.untimed()
+        self.assertFalse(waiting.counts_down)
+        self.assertEqual(listing.rows, waiting.rows)
+        self.assertEqual(listing.title, waiting.title)
+        self.assertEqual(listing.hint, waiting.hint)
+
+    def test_an_absurd_timeout_is_still_only_a_timeout(self):
+        self.assertEqual(10**9, self._listing(timeout=10**9, default="stop").timeout)

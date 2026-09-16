@@ -51,6 +51,7 @@ def write_document(settings: Settings) -> dict[str, Any]:
         "script_checks": dict(sorted(settings.script_checks.items())),
         "experimental": {
             "interactive_lists": settings.interactive_lists,
+            "timed_prompts": settings.timed_prompts,
         },
         "updates": {
             "repository": settings.updates.repository,
@@ -103,6 +104,10 @@ def read_document(
         interactive_lists=_flag(
             document, "experimental", "interactive_lists",
             current.interactive_lists, problems,
+        ),
+        timed_prompts=_flag(
+            document, "experimental", "timed_prompts",
+            current.timed_prompts, problems,
         ),
     )
     return settings, tuple(problems)

@@ -12,7 +12,7 @@ from pathlib import Path
 from company_tui.domain import json_document, naming
 from company_tui.domain.config import ConfigScope, TemplateSource
 from company_tui.domain.identity import SCRIPT_MANIFEST, NotAProjectError
-from company_tui.domain.interactive import ListView
+from company_tui.domain.interactive import ListView, Untimed
 from company_tui.domain.json_document import MalformedJson
 from company_tui.domain.options import OptionValue
 from company_tui.domain.scaffolding import CannotStampIdentity, display_path
@@ -485,12 +485,18 @@ def _list_view(action: ScriptAction, services: PackServices) -> "ListView | None
     person saying the experiment may run at all, the other is the command saying it
     knows how to speak. `None` is what leaves the run byte for byte as it was - no
     stdin pipe, no variable in the environment, nothing to parse.
+
+    The countdown is a second setting over the top of it, and off it takes the
+    `timeout` out of every listing rather than passing a flag along beside one.
     """
     if not action.interactive:
         return None
     if not services.config.interactive_lists():
         return None
-    return services.console.list_view()
+    view = services.console.list_view()
+    if view is None or services.config.timed_prompts():
+        return view
+    return Untimed(view)
 
 
 async def _run_commands(

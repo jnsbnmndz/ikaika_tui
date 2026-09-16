@@ -350,3 +350,18 @@ child's stdout while the child waits on our stdin.
 recourse is the panel's Stop, which cancels the run and kills the child like any other
 hung command. What must never happen is the *toolbox* causing it — which is why the pick
 is drained (9.2) and why stdin is closed when the run ends.
+
+### 9.4 A screen's own arrival counts as an interaction
+
+The countdown was meant to stop the moment somebody touched the list, and focus moving is
+one of the ways somebody touches it. So `PickScreen` cancelled on `DescendantFocus` for any
+widget other than the row it had focused on mount — and every countdown was dead before it
+drew. `VerticalScroll` is focusable, and the screen focuses it on the way up before the row
+gets the focus, so the first `DescendantFocus` of a screen's life names the scroller. The
+symptom is a timer that simply never runs: no error, and a hint line showing the seconds it
+opened with and then never moving.
+
+**Rule.** Interaction is a key or a press, and focus only follows one of those. Where a
+focus change is used as the signal, it has to be narrowed to what a person could have
+focused — `isinstance(event.widget, PickRow)` here — because a screen assembling itself
+moves focus too, and it does so before anything is on screen to be interacted with.

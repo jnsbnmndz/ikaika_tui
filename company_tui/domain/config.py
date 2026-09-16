@@ -54,6 +54,9 @@ class Settings:
     interactive_lists: bool = False
     """Whether a command may hand the toolbox rows to render. Off, and experimental."""
 
+    timed_prompts: bool = False
+    """Whether a listing may count down to its own answer. Off, and experimental."""
+
 class ConfigPort(ABC):
     @abstractmethod
     def template_source(self, pack_key: str, default: TemplateSource) -> TemplateSource:
@@ -92,6 +95,17 @@ class ConfigPort(ABC):
         Concrete, and false. An experiment that is off unless something says
         otherwise cannot be turned on by a port that forgot to answer, and an
         implementation written before it existed keeps working unchanged.
+        """
+        return False
+
+    def timed_prompts(self) -> bool:
+        """Whether a listing carrying a `timeout` and a `default` may run the
+        countdown. Off, the fields are dropped before the list is drawn and it
+        waits exactly as it does now.
+
+        Concrete and false for the same reason `interactive_lists` is: an
+        experiment nothing has turned on must not be turned on by a port that
+        forgot to answer.
         """
         return False
 

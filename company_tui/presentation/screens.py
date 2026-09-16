@@ -15,6 +15,7 @@ from textual.containers import (
 )
 from textual.message import Message
 from textual.screen import ModalScreen, Screen, ScreenResultType
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, Input, Static
 
@@ -732,6 +733,13 @@ unknown one has to render as something rather than as nothing."""
 PICK_TITLE = "Choose"
 PICK_EMPTY = "Nothing to choose from."
 
+PICK_COUNTDOWN = "{seconds}s → {label}"
+"""How long is left and which row wins, in the line somebody is already reading."""
+
+COUNTDOWN_TICK = 1.0
+"""One second, because the hint is counting seconds. A constant so a test can run
+the clock faster than somebody would sit through."""
+
 
 class PickRow(Widget, can_focus=True):
     """One row of a listing: what it is, what it is called, and what it says."""
@@ -819,6 +827,10 @@ class PickScreen(DialogScreen[str | None]):
     Dismisses with the chosen `id`, or `None` for Esc — which the runner reads as
     "nothing is going to answer this" and stops the command. The id is echoed back
     exactly as it arrived; nothing here interprets it.
+
+    A listing may count down to a row of its own naming, and that expiry dismisses
+    with the row's `id` like any other answer — never with `None`, which would stop
+    the command rather than answer it. Any interaction ends the countdown for good.
     """
 
     BINDINGS = [
@@ -856,12 +868,15 @@ class PickScreen(DialogScreen[str | None]):
     def __init__(self, listing: Listing) -> None:
         super().__init__()
         self._listing = listing
+        self._remaining = listing.timeout if listing.counts_down else 0
+        self._timer: Timer | None = None
+        self._opened_on: Widget | None = None
 
     def compose(self) -> ComposeResult:
         with Container() as dialog:
             dialog.border_title = self._listing.title or PICK_TITLE
-            if self._listing.hint:
-                yield Static(self._listing.hint, id="pick-hint")
+            if self._listing.hint or self._remaining:
+                yield Static(self._hint_line(), id="pick-hint")
             if self._listing.rows:
                 with VerticalScroll(id="pick-rows"):
                     for row in self._listing.rows:
@@ -876,6 +891,30 @@ class PickScreen(DialogScreen[str | None]):
         first = next(iter(self.query(PickRow)), None)
         if first is not None:
             first.focus()
+        self._opened_on = first
+        if self._remaining:
+            self._timer = self.set_interval(COUNTDOWN_TICK, self._tick)
+
+    def on_unmount(self) -> None:
+        """Nothing left to fire into. Only the timer, since the line it writes is gone."""
+        self._stop_timer()
+
+    def on_key(self, event: events.Key) -> None:
+        self._stop_countdown()
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        self._stop_countdown()
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        """A row other than the one this screen opened on - the pointer moved over
+        the list, which is somebody reading it and never sends a key.
+
+        Only a row: the scroller around them takes the focus first on the way up,
+        and a screen that treated its own arrival as an interaction would cancel
+        every countdown before it drew one.
+        """
+        if isinstance(event.widget, PickRow) and event.widget is not self._opened_on:
+            self._stop_countdown()
 
     def on_pick_row_chosen(self, message: PickRow.Chosen) -> None:
         message.stop()
@@ -883,6 +922,52 @@ class PickScreen(DialogScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def _hint_line(self) -> str:
+        """What the command said, then what is about to happen and when."""
+        if not self._remaining:
+            return self._listing.hint
+        counting = PICK_COUNTDOWN.format(
+            seconds=self._remaining, label=self._winner_label()
+        )
+        return f"{self._listing.hint}   {counting}" if self._listing.hint else counting
+
+    def _winner_label(self) -> str:
+        """The row's own words, falling back to its id rather than to nothing."""
+        return next(
+            (row.label for row in self._listing.rows if row.id == self._listing.default),
+            self._listing.default,
+        )
+
+    def _tick(self) -> None:
+        self._remaining -= 1
+        if self._remaining > 0:
+            self._say_remaining()
+            return
+        self._stop_timer()
+        self.dismiss(self._listing.default)
+
+    def _stop_countdown(self) -> None:
+        """For good, and nothing re-arms it.
+
+        An interaction is somebody reading the list, and a choice taken away
+        mid-read is worse than never offering to answer it at all.
+        """
+        if self._timer is None and not self._remaining:
+            return
+        self._stop_timer()
+        self._remaining = 0
+        self._say_remaining()
+
+    def _stop_timer(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
+    def _say_remaining(self) -> None:
+        line = next(iter(self.query("#pick-hint")), None)
+        if isinstance(line, Static):
+            line.update(self._hint_line())
 
 
 class ContinueScreen(DialogScreen[None]):

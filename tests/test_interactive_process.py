@@ -14,6 +14,7 @@ from company_tui.domain.interactive import (
     ROWS,
     Listing,
     ListView,
+    Untimed,
 )
 from company_tui.infrastructure.processes import LocalProcessRunner
 
@@ -237,3 +238,40 @@ class TheEnvironmentIsInherited(_Runner):
             "import os\nprint(os.environ.get('DTI_TEST_MARKER', 'LOST'))\n", _View()
         )
         self.assertEqual(["kept"], self.lines)
+
+
+class ATimedListingOnTheWire(_Runner):
+    """The countdown changes nothing about how an answer travels."""
+
+    CHILD = (
+        "import json, sys\n"
+        "print(" + repr(ROWS) + " + ' ' + json.dumps({\n"
+        "    'rows': [{'id': 'retry', 'label': 'Try again'},\n"
+        "             {'id': 'stop', 'label': 'Stop'}],\n"
+        "    'timeout': 20, 'default': 'stop'}))\n"
+        "sys.stdout.flush()\n"
+        "picked = sys.stdin.readline().strip()\n"
+        "print('CHOSE ' + picked.split(' ', 1)[1])\n"
+        "print(" + repr(END) + ")\n"
+    )
+
+    def test_the_fields_reach_the_view(self):
+        view = _View(answers=["retry"])
+        self._stream(self.CHILD, view)
+        self.assertEqual(20, view.seen[0].timeout)
+        self.assertEqual("stop", view.seen[0].default)
+
+    def test_an_expiry_goes_back_as_an_ordinary_pick(self):
+        # The screen resolves with the default row's id, which is a string like any
+        # other; nothing on the wire says a timer chose it and nothing needs to.
+        view = _View(answers=["stop"])
+        result = self._stream(self.CHILD, view)
+        self.assertIn("CHOSE stop", self.lines)
+        self.assertEqual(0, result.exit_code)
+
+    def test_a_toolbox_that_will_not_run_one_answers_the_same_way(self):
+        view = _View(answers=["retry"])
+        self._stream(self.CHILD, Untimed(view))
+        self.assertEqual(0, view.seen[0].timeout)
+        self.assertEqual("", view.seen[0].default)
+        self.assertIn("CHOSE retry", self.lines)

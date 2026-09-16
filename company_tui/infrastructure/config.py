@@ -75,8 +75,13 @@ def render(settings: Settings) -> str:
     if update_lines:
         lines += ["", f"[{UPDATES_SECTION}]", *update_lines]
 
+    experimental = []
     if settings.interactive_lists:
-        lines += ["", f"[{EXPERIMENTAL_SECTION}]", "interactive_lists = true"]
+        experimental.append("interactive_lists = true")
+    if settings.timed_prompts:
+        experimental.append("timed_prompts = true")
+    if experimental:
+        lines += ["", f"[{EXPERIMENTAL_SECTION}]", *experimental]
 
     for key in sorted(settings.templates):
         source = settings.templates[key]
@@ -165,6 +170,9 @@ class FileConfig(ConfigPort):
     def interactive_lists(self) -> bool:
         return self._section(EXPERIMENTAL_SECTION).get("interactive_lists") is True
 
+    def timed_prompts(self) -> bool:
+        return self._section(EXPERIMENTAL_SECTION).get("timed_prompts") is True
+
     def settings(self) -> Settings:
         scaffold = self._section("scaffold")
         return Settings(
@@ -178,6 +186,7 @@ class FileConfig(ConfigPort):
             scripts=self._pinned_sources(SCRIPTS_SECTION),
             updates=self.update_source(),
             interactive_lists=self.interactive_lists(),
+            timed_prompts=self.timed_prompts(),
             script_checks={
                 key: entry.get("check", True) is not False
                 for key, entry in self._section(SCRIPTS_SECTION).items()

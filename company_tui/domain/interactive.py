@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from company_tui.domain import naming
@@ -36,11 +36,26 @@ class Row:
 
 @dataclass(frozen=True, slots=True)
 class Listing:
-    """Rows to show, and what to say above them."""
+    """Rows to show, what to say above them, and an optional countdown."""
 
     rows: tuple[Row, ...] = ()
     title: str = ""
     hint: str = ""
+
+    timeout: int = 0
+    """Seconds before `default` wins. Zero - and absent, and unreadable - waits."""
+
+    default: str = ""
+    """The row that wins on expiry, always one of `rows`. Set only with a `timeout`."""
+
+    @property
+    def counts_down(self) -> bool:
+        """Whether this listing answers itself. Both fields, or it waits."""
+        return self.timeout > 0 and bool(self.default)
+
+    def untimed(self) -> "Listing":
+        """The same listing with the countdown taken out."""
+        return replace(self, timeout=0, default="")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +101,35 @@ def parse(line: str) -> Listing | Finished | None:
         if row is None:
             return None
         read.append(row)
+    rows_read = tuple(read)
+    timeout, default = _countdown(document, rows_read)
     return Listing(
-        rows=tuple(read),
+        rows=rows_read,
         title=_text(document, "title"),
         hint=_text(document, "hint"),
+        timeout=timeout,
+        default=default,
     )
+
+
+def _countdown(document: Mapping[str, Any], rows: tuple[Row, ...]) -> tuple[int, str]:
+    """Seconds and the winning id, or `(0, "")` for a listing that waits.
+
+    Both travel together or neither does, and everything unreadable answers the
+    second way: a timeout naming no row of this listing is dropped whole rather
+    than aimed at the first one. A countdown is a command saying which answer is
+    right when nobody is at the keyboard, and guessing at that is how somebody
+    loses what they meant to keep.
+    """
+    seconds = document.get("timeout")
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return (0, "")
+    if seconds <= 0:
+        return (0, "")
+    winner = document.get("default")
+    if not isinstance(winner, str) or not any(row.id == winner for row in rows):
+        return (0, "")
+    return (max(1, int(seconds)), winner)
 
 
 def _row(entry: Any) -> Row | None:
@@ -134,6 +173,25 @@ class ListView(ABC):
     def close(self) -> None:
         """The command is done with the list, or has exited."""
         raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class Untimed(ListView):
+    """`view` with every countdown taken out on the way through.
+
+    Where the timer is switched off, what reaches the screen has no `timeout` in it
+    at all, rather than a screen holding a flag it has to remember to check. It is
+    also what keeps the degraded path honest: a command is never told whether its
+    countdown is live, so nothing can be written to depend on one.
+    """
+
+    view: ListView
+
+    async def show(self, listing: Listing) -> str | None:
+        return await self.view.show(listing.untimed())
+
+    def close(self) -> None:
+        self.view.close()
 
 
 @dataclass(slots=True)
