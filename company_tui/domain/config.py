@@ -57,6 +57,9 @@ class Settings:
     timed_prompts: bool = False
     """Whether a listing may count down to its own answer. Off, and experimental."""
 
+    browser_view: bool = False
+    """Whether an action may open the browser instead of a form. Off, and experimental."""
+
 class ConfigPort(ABC):
     @abstractmethod
     def template_source(self, pack_key: str, default: TemplateSource) -> TemplateSource:
@@ -106,6 +109,16 @@ class ConfigPort(ABC):
         Concrete and false for the same reason `interactive_lists` is: an
         experiment nothing has turned on must not be turned on by a port that
         forgot to answer.
+        """
+        return False
+
+    def browser_view(self) -> bool:
+        """Whether an action declaring `"view": "browser"` gets the two-pane browser
+        instead of a configuration form and a terminal. Off, it runs as an ordinary
+        script and its `@dti:` lines are pick-lists or text.
+
+        Concrete and false, for the same reason the other two are: an experiment
+        nothing turned on must not be turned on by a port that forgot to answer.
         """
         return False
 

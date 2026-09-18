@@ -368,6 +368,13 @@ class TheCountdownOnScreen(unittest.IsolatedAsyncioTestCase):
     PAST_IT = 1.3
     """Longer than `TICK` x the listing's own timeout, with room for a slow machine."""
 
+    UNHURRIED = 60
+    """A timeout no amount of opening can use up, for the tests about stopping one.
+
+    Those are about the countdown being cancelled, not about it running out, and a
+    listing short enough to expire while the app is still starting would fail them
+    for the opposite of the reason they exist."""
+
     @staticmethod
     def _hint_of(screen) -> str:
         line = next(iter(screen.query("#pick-hint")), None)
@@ -437,7 +444,8 @@ class TheCountdownOnScreen(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("picked", answer)
 
     async def test_a_key_stops_it_for_good(self):
-        async with self._open() as (pilot, _screen, answer):
+        listing = replace(self.LISTING, timeout=self.UNHURRIED)
+        async with self._open(listing) as (pilot, _screen, answer):
             await pilot.press("down")
             await pilot.pause(self.PAST_IT)
             self.assertNotIn("picked", answer, "the countdown fired after an arrow key")
@@ -446,26 +454,30 @@ class TheCountdownOnScreen(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("wait", answer.get("picked"))
 
     async def test_a_stopped_countdown_leaves_the_hint_behind(self):
-        async with self._open() as (pilot, screen, _answer):
+        listing = replace(self.LISTING, timeout=self.UNHURRIED)
+        async with self._open(listing) as (pilot, screen, _answer):
             await pilot.press("down")
             await pilot.pause()
             self.assertEqual("Enter chooses", self._hint_of(screen))
 
     async def test_a_mouse_click_that_chooses_nothing_still_stops_it(self):
-        async with self._open() as (pilot, screen, answer):
+        listing = replace(self.LISTING, timeout=self.UNHURRIED)
+        async with self._open(listing) as (pilot, screen, answer):
             await pilot.click("#pick-hint")
             await pilot.pause(self.PAST_IT)
             self.assertNotIn("picked", answer)
             self.assertIsNone(screen._timer)
 
     async def test_the_pointer_moving_onto_another_row_stops_it(self):
-        async with self._open() as (pilot, screen, answer):
+        listing = replace(self.LISTING, timeout=self.UNHURRIED)
+        async with self._open(listing) as (pilot, screen, answer):
             list(screen.query(PickRow))[2].focus()
             await pilot.pause(self.PAST_IT)
             self.assertNotIn("picked", answer)
 
     async def test_a_screen_that_closed_first_takes_its_timer_with_it(self):
-        async with self._open() as (pilot, screen, answer):
+        listing = replace(self.LISTING, timeout=self.UNHURRIED)
+        async with self._open(listing) as (pilot, screen, answer):
             self.assertIsNotNone(screen._timer)
             screen.dismiss("retry")  # what `close_rows` does when a run ends
             await pilot.pause()

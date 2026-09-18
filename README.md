@@ -129,6 +129,73 @@ it does now, and the extra fields are dropped before the screen ever sees them. 
 never told whether its countdown is live, so nothing can be written to depend on one
 (`docs/decisions/0005`).
 
+### A command that is a place rather than a run
+
+Some commands are not "configure, run, read output" — they are somewhere you move around
+in. A remote file store, a bucket, a package registry, a database's tables and rows, a log
+archive, a branch's history: any navigable hierarchy. A script entry can say so, and the
+toolbox opens a **two-pane browser** instead of the configuration form and the terminal:
+
+```json
+{ "view": "browser" }
+```
+
+Breadcrumb across the top, tree on the left, a table on the right whose columns the command
+declares, an action bar showing only what is available right now, and a status line. No
+terminal pane, no Run button. A **fourth** switch, `browser_view` in **[09] Advanced**, off
+by default, and the manifest has to say `"view": "browser"` as well.
+
+The command owns all of it. The toolbox fetches nothing and knows nothing about what is
+being browsed — it draws the rows a command sends and reports what the user did:
+
+```
+@dti:view    {"columns":[{"key":"name","label":"Name","grow":true},
+                         {"key":"size","label":"Size","width":10,"align":"right"}],
+              "tree":[{"id":"root","label":"Root","parent":null}]}
+@dti:rows    {"breadcrumb":["Root","Reports","2026"],
+              "rows":[{"id":"r-1","cells":{"name":"march","size":"4.2 MB"},"kind":"leaf"}],
+              "actions":[{"id":"add","label":"Add","key":"a"},
+                         {"id":"remove","label":"Remove","key":"r","danger":true}]}
+@dti:status  any one-line message the command wants under the list
+@dti:end
+```
+
+and reads back one line per thing the user did:
+
+```
+@dti:open r-1                 a row was entered
+@dti:action remove r-1        an action was run, on that row
+@dti:action add               an action was run on where the user is, not on a row
+```
+
+A few rules make this work for a command listing database tables as well as one listing
+files:
+
+- **Actions are per-listing, never hardcoded.** The bar shows exactly what the last
+  `@dti:rows` declared and nothing else, so a command that varies its actions by location
+  — permissions, state, node type — gets that for free, and the toolbox never learns why.
+- **`danger: true` is styling only.** The confirmation stays with the command, sent as an
+  ordinary `@dti:rows` pick-list (with the countdown above, where `timed_prompts` is on) and
+  shown as a modal over the browser. The toolbox never invents its own "are you sure": only
+  the command knows what is about to happen.
+- **A listing carrying `breadcrumb` is the pane; one without it is a question over it.** The
+  key being present is what decides, so a browser at its own root is still a pane.
+- **Cells are strings.** A command already decides that 4402816 bytes reads as "4.2 MB".
+- **One text-input verb, used sparingly.** `@dti:ask {"prompt":"...","value":""}` for a
+  value nothing can list — a name for a thing that does not exist yet — answered with
+  `@dti:answer <text>`, or `@dti:answer` alone for a cancel. Everything else here is a row
+  or an action.
+- **`@dti:rows` blocks until the user acts**, so anything the command wants shown beside it
+  goes first. A status set that way stays up until it is replaced.
+
+With `browser_view` off — or on an older toolbox — a `"view": "browser"` command still runs
+as an ordinary script: the form and terminal appear, `@dti:view`, `@dti:status` and
+`@dti:ask` are printed as text, and `@dti:rows` is the pick-list it always was (a row with
+only `cells` is labelled by its first cell so it stays legible). **Read the verb of the line
+you are sent** — `@dti:pick`, `@dti:open` or `@dti:action` — and one command works on both.
+Nothing else tells it which surface it got, which is what stops a command being written to
+require the browser (`docs/decisions/0006`).
+
 The switch is an environment variable rather than a flag so **the same command run in a
 plain terminal sees nothing set and prints its ordinary human-readable output**. Both
 surfaces stay clean.

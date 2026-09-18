@@ -52,6 +52,7 @@ def write_document(settings: Settings) -> dict[str, Any]:
         "experimental": {
             "interactive_lists": settings.interactive_lists,
             "timed_prompts": settings.timed_prompts,
+            "browser_view": settings.browser_view,
         },
         "updates": {
             "repository": settings.updates.repository,
@@ -108,6 +109,10 @@ def read_document(
         timed_prompts=_flag(
             document, "experimental", "timed_prompts",
             current.timed_prompts, problems,
+        ),
+        browser_view=_flag(
+            document, "experimental", "browser_view",
+            current.browser_view, problems,
         ),
     )
     return settings, tuple(problems)

@@ -3,15 +3,19 @@
 from company_tui.application.template_registry import TemplatePackRegistry
 from company_tui.capabilities import script_actions
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
+from company_tui.domain.config import ConfigPort
 from company_tui.domain.script_config import workflows
 from company_tui.domain.template_pack import TemplatePack
 from company_tui.presentation.ui import Ui
 
 
 class BuildCapability(Capability):
-    def __init__(self, console: Ui, pack_registry: TemplatePackRegistry) -> None:
+    def __init__(
+        self, console: Ui, pack_registry: TemplatePackRegistry, config: ConfigPort
+    ) -> None:
         self._console = console
         self._pack_registry = pack_registry
+        self._config = config
 
     @property
     def info(self) -> CapabilityInfo:
@@ -34,7 +38,9 @@ class BuildCapability(Capability):
                 if pack is None:
                     return CANCELLED
 
-            walk = await script_actions.walk(self._console, pack, wanted=workflows)
+            walk = await script_actions.walk(
+                self._console, pack, wanted=workflows, config=self._config
+            )
 
             if walk.ending is script_actions.Ending.NOTHING:
                 if walk.notice:

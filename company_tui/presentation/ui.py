@@ -113,4 +113,18 @@ class Ui(Protocol):
         that cannot. `None` is what keeps the run exactly as it was."""
         ...
 
+    def browser_view(self) -> "ListView | None":
+        """A view over the browser currently up, or `None` when there is none."""
+        ...
+
+    async def browse(
+        self,
+        title: str,
+        work: Awaitable[T],
+        trail: Sequence[str] = (),
+        subtitle: str = "",
+    ) -> T | None:
+        """Run `work` behind the browser instead of a form and a terminal."""
+        ...
+
     async def pause(self) -> None: ...

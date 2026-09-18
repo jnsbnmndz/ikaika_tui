@@ -80,6 +80,8 @@ def render(settings: Settings) -> str:
         experimental.append("interactive_lists = true")
     if settings.timed_prompts:
         experimental.append("timed_prompts = true")
+    if settings.browser_view:
+        experimental.append("browser_view = true")
     if experimental:
         lines += ["", f"[{EXPERIMENTAL_SECTION}]", *experimental]
 
@@ -173,6 +175,9 @@ class FileConfig(ConfigPort):
     def timed_prompts(self) -> bool:
         return self._section(EXPERIMENTAL_SECTION).get("timed_prompts") is True
 
+    def browser_view(self) -> bool:
+        return self._section(EXPERIMENTAL_SECTION).get("browser_view") is True
+
     def settings(self) -> Settings:
         scaffold = self._section("scaffold")
         return Settings(
@@ -187,6 +192,7 @@ class FileConfig(ConfigPort):
             updates=self.update_source(),
             interactive_lists=self.interactive_lists(),
             timed_prompts=self.timed_prompts(),
+            browser_view=self.browser_view(),
             script_checks={
                 key: entry.get("check", True) is not False
                 for key, entry in self._section(SCRIPTS_SECTION).items()

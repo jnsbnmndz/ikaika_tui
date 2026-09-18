@@ -24,6 +24,7 @@ ASSET_KEY = "asset_pattern"
 RESET_KEY = "reset"
 INTERACTIVE_KEY = "interactive_lists"
 TIMED_KEY = "timed_prompts"
+BROWSER_KEY = "browser_view"
 
 
 class AdvancedCapability(Capability):
@@ -150,6 +151,19 @@ class AdvancedCapability(Capability):
                 ),
             ),
             Option(
+                key=BROWSER_KEY,
+                label="Browser view (experimental)",
+                kind=OptionKind.BOOLEAN,
+                default=settings.browser_view,
+                help=(
+                    "Lets a command that says so open as a two-pane browser - a "
+                    "tree, a table and an action bar - instead of a form and a "
+                    "terminal, for the ones that are a place you move around in "
+                    "rather than a run you configure. Off, those commands run as "
+                    "ordinary scripts."
+                ),
+            ),
+            Option(
                 key=RESET_KEY,
                 label="Reset these to defaults",
                 kind=OptionKind.BOOLEAN,
@@ -193,6 +207,7 @@ class AdvancedCapability(Capability):
             script_checks=current.script_checks,
             interactive_lists=bool(values.get(INTERACTIVE_KEY)),
             timed_prompts=bool(values.get(TIMED_KEY)),
+            browser_view=bool(values.get(BROWSER_KEY)),
         )
 
         self._console.write(f"Writing {self._config.location(scope)}...")
@@ -205,6 +220,10 @@ class AdvancedCapability(Capability):
         self._console.write(
             "Timed prompts: "
             + ("on (experimental)" if settings.timed_prompts else "off")
+        )
+        self._console.write(
+            "Browser view: "
+            + ("on (experimental)" if settings.browser_view else "off")
         )
         self._console.write(f"Repository: {source.repository or 'not configured'}")
         self._console.write(f"API host: {source.api_base}")

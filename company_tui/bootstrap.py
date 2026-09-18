@@ -73,9 +73,14 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
     return CapabilityRegistry(
         capabilities=(
             ScaffoldCapability(
-                console=console, pack_registry=pack_registry, locks=DestinationLocks()
+                console=console,
+                pack_registry=pack_registry,
+                config=config,
+                locks=DestinationLocks(),
             ),
-            BuildCapability(console=console, pack_registry=pack_registry),
+            BuildCapability(
+                console=console, pack_registry=pack_registry, config=config
+            ),
             DeployCapability(console=console),
             ScriptsCapability(console=console, services=services),
             SettingsCapability(

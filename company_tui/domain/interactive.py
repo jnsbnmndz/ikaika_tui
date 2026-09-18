@@ -20,6 +20,18 @@ ROWS = f"{PREFIX}rows"
 END = f"{PREFIX}end"
 PICK = f"{PREFIX}pick"
 
+VIEW = f"{PREFIX}view"
+STATUS = f"{PREFIX}status"
+ASK = f"{PREFIX}ask"
+OPEN = f"{PREFIX}open"
+ACTION = f"{PREFIX}action"
+ANSWER = f"{PREFIX}answer"
+"""The browser's half. Understood only where one can be drawn; text everywhere else."""
+
+ALIGNS = ("left", "right", "center")
+BROWSER = "browser"
+"""What a manifest's `view` says to get one."""
+
 MAX_PAYLOAD = 512 * 1024
 """A listing is a menu. Anything past this is a command streaming into the wrong door."""
 
@@ -33,6 +45,85 @@ class Row:
     kind: str = ""
     detail: str = ""
 
+    cells: Mapping[str, str] = field(default_factory=dict)
+    """What this row puts under each declared column, for a browser's table.
+
+    A row carrying cells and no label of its own is labelled by its first cell, so
+    the same row is still a readable line where there is no table to put it in."""
+
+
+@dataclass(frozen=True, slots=True)
+class Column:
+    """One column of a browser's table, as the command declared it."""
+
+    key: str
+    label: str = ""
+    width: int = 0
+    """Cells wide, or 0 for whatever is left over."""
+
+    grow: bool = False
+    align: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Node:
+    """One entry of the tree down the left. `parent` empty is a root."""
+
+    id: str
+    label: str
+    parent: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ViewSpec:
+    """`@dti:view`: the shape of the table and the tree beside it."""
+
+    columns: tuple[Column, ...] = ()
+    tree: tuple[Node, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Action:
+    """One thing offered on the action bar for as long as this listing is up.
+
+    `danger` is styling and nothing else. What a dangerous action costs is the
+    command's to explain, in its own words, as a listing of its own."""
+
+    id: str
+    label: str
+    key: str = ""
+    danger: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Status:
+    """`@dti:status`: one line under the list, in the command's own words."""
+
+    text: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Ask:
+    """`@dti:ask`: the one place a text field belongs, for a value nothing can list."""
+
+    prompt: str = ""
+    value: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Opened:
+    """The user entered a row."""
+
+    row: str
+
+
+@dataclass(frozen=True, slots=True)
+class Invoked:
+    """The user ran an action, on a row or on wherever they are."""
+
+    action: str
+    row: str = ""
+
 
 @dataclass(frozen=True, slots=True)
 class Listing:
@@ -41,6 +132,17 @@ class Listing:
     rows: tuple[Row, ...] = ()
     title: str = ""
     hint: str = ""
+
+    breadcrumb: tuple[str, ...] = ()
+    actions: tuple[Action, ...] = ()
+
+    pane: bool = False
+    """Whether this is the browser's own list rather than a question over it.
+
+    Set by the one key that separates them: a listing carrying `breadcrumb` is
+    where the user is, and replaces the pane; one without it is a question and
+    comes up as a modal over it. The command decides, and can therefore ask
+    something in the middle of a browse without the browse being lost."""
 
     timeout: int = 0
     """Seconds before `default` wins. Zero - and absent, and unreadable - waits."""
@@ -68,8 +170,33 @@ def pick(identifier: str) -> str:
     return f"{PICK} {identifier}"
 
 
-def parse(line: str) -> Listing | Finished | None:
-    """A listing, an end, or `None` for a line that is ordinary output.
+def opened(identifier: str) -> str:
+    """Written back when a row is entered in the browser."""
+    return f"{OPEN} {identifier}"
+
+
+def acted(action: str, identifier: str = "") -> str:
+    """Written back when an action is invoked, on a row or on where the user is."""
+    return f"{ACTION} {action} {identifier}".rstrip()
+
+
+def answered(text: str) -> str:
+    """Written back to `@dti:ask`. Nothing after the verb is a cancel."""
+    return f"{ANSWER} {text}".rstrip() if text else ANSWER
+
+
+def said(answer: "Opened | Invoked") -> str:
+    """Whichever line reports what the user just did in the browser."""
+    if isinstance(answer, Opened):
+        return opened(answer.row)
+    return acted(answer.action, answer.row)
+
+
+Event = Listing | ViewSpec | Status | Ask | Finished
+
+
+def parse(line: str) -> "Event | None":
+    """One event, or `None` for a line that is ordinary output.
 
     `None` covers everything this build does not understand, which is deliberate:
     an unknown verb, malformed JSON and a row missing its `id` all fall through to
@@ -83,7 +210,9 @@ def parse(line: str) -> Listing | Finished | None:
         return Finished()
 
     head, _, payload = line.partition(" ")
-    if head != ROWS or len(payload) > MAX_PAYLOAD:
+    if head == STATUS:
+        return Status(payload.strip())
+    if head not in (ROWS, VIEW, ASK) or len(payload) > MAX_PAYLOAD:
         return None
     try:
         document = json.loads(payload)
@@ -91,7 +220,14 @@ def parse(line: str) -> Listing | Finished | None:
         return None
     if not isinstance(document, Mapping):
         return None
+    if head == VIEW:
+        return _spec(document)
+    if head == ASK:
+        return Ask(prompt=_text(document, "prompt"), value=_text(document, "value"))
+    return _listing(document)
 
+
+def _listing(document: Mapping[str, Any]) -> Listing | None:
     rows = document.get("rows")
     if not isinstance(rows, list):
         return None
@@ -101,15 +237,129 @@ def parse(line: str) -> Listing | Finished | None:
         if row is None:
             return None
         read.append(row)
+
+    crumbs = _crumbs(document)
+    if crumbs is None:
+        return None
+    actions = _actions(document.get("actions"))
+    if actions is None:
+        return None
+
     rows_read = tuple(read)
     timeout, default = _countdown(document, rows_read)
     return Listing(
         rows=rows_read,
         title=_text(document, "title"),
         hint=_text(document, "hint"),
+        breadcrumb=crumbs,
+        actions=actions,
+        pane="breadcrumb" in document,
         timeout=timeout,
         default=default,
     )
+
+
+def _crumbs(document: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """Where the user is, or `None` for a `breadcrumb` this build cannot read."""
+    if "breadcrumb" not in document:
+        return ()
+    crumbs = document.get("breadcrumb")
+    if not isinstance(crumbs, list):
+        return None
+    if any(not isinstance(crumb, str) for crumb in crumbs):
+        return None
+    return tuple(crumbs)
+
+
+def _actions(value: Any) -> tuple[Action, ...] | None:
+    """What the bar offers for this listing alone, `()` for none declared.
+
+    Per listing and never remembered: a command that offers different things in
+    different places gets that by saying so each time, and nothing here has to
+    know why it varies.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        return None
+    read: list[Action] = []
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            return None
+        identifier = entry.get("id")
+        label = entry.get("label")
+        if not isinstance(identifier, str) or not identifier:
+            return None
+        if not _one_line(identifier) or " " in identifier:
+            return None
+        if not isinstance(label, str) or not label:
+            return None
+        key = _text(entry, "key").strip().lower()
+        read.append(
+            Action(
+                id=identifier,
+                label=label,
+                key=key if len(key) == 1 else "",
+                danger=entry.get("danger") is True,
+            )
+        )
+    return tuple(read)
+
+
+def _spec(document: Mapping[str, Any]) -> ViewSpec | None:
+    """`@dti:view`, or `None` when the shape it declares cannot be drawn."""
+    declared = document.get("columns")
+    if not isinstance(declared, list) or not declared:
+        return None
+    columns: list[Column] = []
+    for entry in declared:
+        if not isinstance(entry, Mapping):
+            return None
+        key = entry.get("key")
+        if not isinstance(key, str) or not key:
+            return None
+        width = entry.get("width")
+        align = _text(entry, "align").strip().lower()
+        columns.append(
+            Column(
+                key=key,
+                label=_text(entry, "label") or key,
+                width=width if isinstance(width, int) and not isinstance(width, bool)
+                and width > 0 else 0,
+                grow=entry.get("grow") is True,
+                align=align if align in ALIGNS else "",
+            )
+        )
+
+    tree = _nodes(document.get("tree"))
+    if tree is None:
+        return None
+    return ViewSpec(columns=tuple(columns), tree=tree)
+
+
+def _nodes(value: Any) -> tuple[Node, ...] | None:
+    """The tree down the left, `()` where the command declared none."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        return None
+    read: list[Node] = []
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            return None
+        identifier = entry.get("id")
+        label = entry.get("label")
+        if not isinstance(identifier, str) or not identifier:
+            return None
+        if not _one_line(identifier):
+            return None
+        if not isinstance(label, str) or not label:
+            return None
+        parent = entry.get("parent")
+        read.append(
+            Node(id=identifier, label=label, parent=parent if isinstance(parent, str) else "")
+        )
+    return tuple(read)
 
 
 def _countdown(document: Mapping[str, Any], rows: tuple[Row, ...]) -> tuple[int, str]:
@@ -133,23 +383,54 @@ def _countdown(document: Mapping[str, Any], rows: tuple[Row, ...]) -> tuple[int,
 
 
 def _row(entry: Any) -> Row | None:
-    """One row, or `None` when it is not one. Only `id` and `label` are required."""
+    """One row, or `None` when it is not one. An `id`, and something to call it."""
     if not isinstance(entry, Mapping):
         return None
     identifier = entry.get("id")
-    label = entry.get("label")
     if not isinstance(identifier, str) or not identifier:
         return None
-    if not isinstance(label, str) or not label:
+    if not _one_line(identifier):
         return None
-    if "\n" in identifier or "\r" in identifier:
+
+    cells = _cells(entry.get("cells"))
+    if cells is None:
+        return None
+    label = entry.get("label")
+    if not isinstance(label, str) or not label:
+        label = next((value for value in cells.values() if value), "")
+    if not label:
         return None
     return Row(
         id=identifier,
         label=label,
         kind=_text(entry, "kind"),
         detail=_text(entry, "detail"),
+        cells=cells,
     )
+
+
+def _cells(value: Any) -> dict[str, str] | None:
+    """A row's columns, `{}` where it declares none.
+
+    Strings, and only strings. A command already decides that 4402816 bytes reads
+    as "4.2 MB"; a toolbox that started formatting numbers would be deciding it
+    instead, for a column whose meaning it does not know.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        return None
+    read: dict[str, str] = {}
+    for key, cell in value.items():
+        if not isinstance(key, str) or not isinstance(cell, str):
+            return None
+        read[key] = cell
+    return read
+
+
+def _one_line(identifier: str) -> bool:
+    """Whether this id can be written back as one line, which is the whole wire."""
+    return "\n" not in identifier and "\r" not in identifier
 
 
 def _text(section: Mapping[str, Any], key: str) -> str:
@@ -162,6 +443,13 @@ class ListView(ABC):
 
     A port, so `ProcessRunner` can hand rows somewhere without knowing whether that
     is a Textual screen, a plain stdout fallback, or a test.
+
+    The browser's half is concrete and inert, and `browsing` is the one question
+    asked about it. A view answering `False` is never handed `@dti:view`,
+    `@dti:status` or `@dti:ask` at all - the runner leaves them as output to print -
+    so an implementation written before any of this existed is still a correct one,
+    and a command sending them where no browser can be drawn is read by a person
+    instead.
     """
 
     @abstractmethod
@@ -173,6 +461,25 @@ class ListView(ABC):
     def close(self) -> None:
         """The command is done with the list, or has exited."""
         raise NotImplementedError
+
+    @property
+    def browsing(self) -> bool:
+        """Whether this view is a place to move around in rather than a question."""
+        return False
+
+    def describe(self, spec: ViewSpec) -> None:  # noqa: B027 - inert on purpose; see the class
+        """Take the table's columns and the tree beside it."""
+
+    async def browse(self, listing: Listing) -> "Opened | Invoked | None":
+        """Show where the user is; report what they did, or `None` to stop."""
+        raise NotImplementedError
+
+    def say(self, status: Status) -> None:  # noqa: B027 - inert on purpose; see the class
+        """Put one line under the list."""
+
+    async def ask(self, question: Ask) -> str | None:
+        """One text field. `None` is a cancel, which the command is told about."""
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +499,22 @@ class Untimed(ListView):
 
     def close(self) -> None:
         self.view.close()
+
+    @property
+    def browsing(self) -> bool:
+        return self.view.browsing
+
+    def describe(self, spec: ViewSpec) -> None:
+        self.view.describe(spec)
+
+    async def browse(self, listing: Listing) -> "Opened | Invoked | None":
+        return await self.view.browse(listing.untimed())
+
+    def say(self, status: Status) -> None:
+        self.view.say(status)
+
+    async def ask(self, question: Ask) -> str | None:
+        return await self.view.ask(question)
 
 
 @dataclass(slots=True)

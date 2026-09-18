@@ -10,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from company_tui.domain import json_document, naming
-from company_tui.domain.config import ConfigScope, TemplateSource
+from company_tui.domain.config import ConfigPort, ConfigScope, TemplateSource
 from company_tui.domain.identity import SCRIPT_MANIFEST, NotAProjectError
 from company_tui.domain.interactive import ListView, Untimed
 from company_tui.domain.json_document import MalformedJson
@@ -478,6 +478,17 @@ def _template_path(
     return repository / resolved
 
 
+def browses(action: ScriptAction, config: ConfigPort) -> bool:
+    """Whether this action opens the browser instead of a form and a terminal.
+
+    Two keys again, and neither alone is enough: the person turned the experiment
+    on, and the manifest said this particular action is a place rather than a run.
+    Answered before anything is launched, because what it decides is which screen
+    the user is looking at.
+    """
+    return action.browses and config.browser_view()
+
+
 def _list_view(action: ScriptAction, services: PackServices) -> "ListView | None":
     """A view only when BOTH halves said yes, and `None` every other time.
 
@@ -488,12 +499,21 @@ def _list_view(action: ScriptAction, services: PackServices) -> "ListView | None
 
     The countdown is a second setting over the top of it, and off it takes the
     `timeout` out of every listing rather than passing a flag along beside one.
+
+    A browser is the same gate one level up: where one is open this is the view
+    over it, and where the setting is off or the surface cannot draw one this falls
+    through to the list protocol - which is the whole of how a browser command
+    degrades into an ordinary script.
     """
-    if not action.interactive:
-        return None
-    if not services.config.interactive_lists():
-        return None
-    view = services.console.list_view()
+    view = None
+    if browses(action, services.config):
+        view = services.console.browser_view()
+    if view is None:
+        if not action.interactive:
+            return None
+        if not services.config.interactive_lists():
+            return None
+        view = services.console.list_view()
     if view is None or services.config.timed_prompts():
         return view
     return Untimed(view)

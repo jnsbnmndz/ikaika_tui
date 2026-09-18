@@ -222,17 +222,61 @@ Expiry dismisses with the default's `id`, an ordinary `@dti:pick` and **never `N
 would kill the child instead of answering it. Any interaction ends it permanently and
 nothing re-arms it. See `docs/decisions/0005`.
 
-Four things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
+Five things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
 **row** rather than the screen, because a `VerticalScroll` answers them first (9.1, which
 `RunsScreen` had shipped wrong); a pick must be **drained** and not merely written, or it
 sits in the transport while both ends wait (9.2); a command that reads stdin with no
 listing outstanding blocks until Stop, which is left as the command's own fault (9.3); and
 a screen focuses that same `VerticalScroll` before its first row, so treating *any* focus
-change as an interaction killed every countdown before it drew one (9.4).
+change as an interaction killed every countdown before it drew one (9.4); and `@dti:rows`
+blocks, so anything meant to be beside a listing is sent *before* it (9.5).
 
 Esc answers a listing with nothing, which the runner reads as "nothing is going to answer
 this" and kills the child — the same reasoning as every other place here where a control
 that appeared to cancel but did not would be a control that lies.
+
+## The browser view
+
+Some commands are not a run at all but a **place**: a remote store, a bucket, a registry, a
+database's tables, a log archive, a branch's history. `"view": "browser"` on a script entry
+opens `presentation/browser_screen.py` — breadcrumb, tree, table, action bar, status line —
+**instead of** the configuration form and the terminal, which are absent rather than hidden.
+A **fourth** switch, `browser_view` in `[experimental]`, off, and the manifest has to say so
+too; `templates/scripts.py: browses` is where they meet, answered *before* anything is
+launched because what it decides is which screen the user is looking at. A browser action is
+therefore launched on the answers its manifest already carries (`script_actions.answers`): a
+form is for a run you configure, and this is not one.
+
+`@dti:view` declares the columns and the tree; `@dti:rows` carries `breadcrumb`, rows of
+`cells`, and the `actions` bar; `@dti:status` is one line of text, not JSON; `@dti:ask` is
+the one text field, answered with `@dti:answer` (nothing after the verb is a cancel). Back
+on stdin go `@dti:open <rowId>` and `@dti:action <actionId> <rowId>`, the row empty when the
+focus was not on one.
+
+**Nothing in that file may be true of files and not of database tables.** The columns are
+the command's, the rows are the command's, and the bar is exactly what the *last* `@dti:rows`
+declared — so a command varying its actions by permission, state or node type gets that by
+saying so each time and nothing here learns why. Two rules fall out of it: cells are
+**strings and only strings**, because a command already decides that 4402816 bytes reads as
+"4.2 MB"; and the table has no glyph column, because a glyph is a claim about what a row is.
+
+`danger: true` is **styling and nothing else**. The confirmation belongs to the command, sent
+as an ordinary `@dti:rows` pick-list and shown as a modal over the browser, countdown and
+all. Never invent an "are you sure" here: only the command knows what is about to happen, and
+a sentence written in the toolbox would be a generic one standing in front of a specific
+consequence.
+
+A listing carrying `breadcrumb` is the pane; one without it is a question over it. The key
+being *present* decides, not what is in it, so a browser at its own root is still a pane —
+which is how a command asks something mid-browse without the browse being lost, and why
+neither shape needed a verb.
+
+Off — or on an older build, or on a plain terminal — a browser command runs as an ordinary
+script: `@dti:view`, `@dti:status` and `@dti:ask` come back as output, and `@dti:rows` is the
+pick-list it always was, a cells-only row labelled by its first cell so it stays legible.
+**The command is never told which surface it got**; the only difference is the verb of the
+line coming back, which it has to read anyway. See `docs/decisions/0006`, and
+`docs/pitfalls.md` 9.5 for why anything meant to sit beside a listing is sent before it.
 
 ## Transitions
 

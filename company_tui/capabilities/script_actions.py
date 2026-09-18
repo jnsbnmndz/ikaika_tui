@@ -5,9 +5,12 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 from company_tui.domain.capability import CANCELLED
+from company_tui.domain.config import ConfigPort
+from company_tui.domain.options import Option, OptionValues
 from company_tui.domain.script_config import ScriptAction, ScriptUpdate
 from company_tui.domain.template_pack import TemplatePack
 from company_tui.presentation.ui import Ui
+from company_tui.templates.scripts import browses
 
 STOPPED_MESSAGE = "Stopped before it finished."
 FAILED = 1
@@ -38,11 +41,21 @@ class Walk:
     notice: str = ""
     """Why the walk came back, said on the menu the user lands on."""
 
+def answers(options: Sequence[Option]) -> OptionValues:
+    """A form's answers without a form, which is what a browser action is launched on.
+
+    A form is for a run you configure, and a place you move around in is not one, so
+    what the manifest already says is the whole of what it is given.
+    """
+    return {option.key: option.default for option in options}
+
+
 async def walk(
     console: Ui,
     pack: TemplatePack,
     *,
     wanted: Filter,
+    config: ConfigPort | None = None,
     settled: bool = False,
 ) -> Walk:
     """Offer this stack's actions of one kind, and run whichever is chosen."""
@@ -79,7 +92,17 @@ async def walk(
                 return Walk(Ending.BACK)
             continue
 
-        values = await console.open_run_panel(action.name, pack.script_options(action))
+        options = pack.script_options(action)
+        if config is not None and browses(action, config):
+            outcome = await console.browse(
+                action.name, pack.run_script(action, answers(options)),
+                subtitle=action.summary,
+            )
+            notice = "" if outcome is None else outcome.message
+            action = None
+            continue
+
+        values = await console.open_run_panel(action.name, options)
         if values is None:
             action = None
             continue

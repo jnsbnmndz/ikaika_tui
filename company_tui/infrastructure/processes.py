@@ -99,7 +99,13 @@ class LocalProcessRunner(ProcessRunner):
         )
 
     async def _handled(self, line: str, process, view: ListView) -> bool:
-        """Whether the protocol took this line, so it is not output to print."""
+        """Whether the protocol took this line, so it is not output to print.
+
+        A view that is not a browser is never handed the browser's verbs: they go
+        back to being output, which is what a person reads where there is no
+        browser to read them in, and is the whole of how a browser command runs as
+        an ordinary script (`docs/decisions/0006`).
+        """
         event = interactive.parse(line)
         if event is None:
             return False
@@ -107,15 +113,43 @@ class LocalProcessRunner(ProcessRunner):
             view.close()
             return True
 
+        if isinstance(event, (interactive.ViewSpec, interactive.Status, interactive.Ask)):
+            if not view.browsing:
+                return False
+            return await self._browser_said(event, process, view)
+
+        if view.browsing and event.pane:
+            answer = await view.browse(event)
+            if answer is None:
+                self._stop(process)
+                return True
+            await self._say(process, interactive.said(answer))
+            return True
+
         picked = await view.show(event)
         if picked is None:
             # Nothing else is going to answer it, so leaving it waiting is the one
             # outcome worse than stopping it.
-            with suppress(ProcessLookupError):
-                process.kill()
+            self._stop(process)
             return True
         await self._say(process, interactive.pick(picked))
         return True
+
+    async def _browser_said(self, event, process, view: ListView) -> bool:
+        if isinstance(event, interactive.ViewSpec):
+            view.describe(event)
+            return True
+        if isinstance(event, interactive.Status):
+            view.say(event)
+            return True
+        answer = await view.ask(event)
+        await self._say(process, interactive.answered(answer or ""))
+        return True
+
+    @staticmethod
+    def _stop(process) -> None:
+        with suppress(ProcessLookupError):
+            process.kill()
 
     async def _say(self, process, line: str) -> None:
         """Write one line to the child, and WAIT for it to leave the buffer.

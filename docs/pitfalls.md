@@ -365,3 +365,17 @@ opened with and then never moving.
 focus change is used as the signal, it has to be narrowed to what a person could have
 focused — `isinstance(event.widget, PickRow)` here — because a screen assembling itself
 moves focus too, and it does so before anything is on screen to be interacted with.
+
+### 9.5 `@dti:rows` blocks, so anything meant to be beside it has to come first
+
+The browser's status line was a step behind, always showing what the command had said about
+the *previous* listing. Nothing was wrong with either end: `@dti:rows` does not return until
+the user does something about it, so the toolbox does not read the next line until then, and
+a `@dti:status` written after the rows is read only once the listing it described has been
+answered. It looks exactly like a status that is not being updated.
+
+**Rule.** A command says what it wants shown beside a listing *before* the listing —
+`@dti:view` and `@dti:status` first, then `@dti:rows` — or puts it on the listing itself as
+`hint`. And a status has to outlive the listing it arrived with, or the ordering that is
+correct would clear itself: `@dti:rows` replaces the status line only when it carries a
+`hint` of its own.

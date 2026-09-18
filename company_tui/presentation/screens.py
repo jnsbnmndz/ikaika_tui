@@ -543,16 +543,17 @@ class ConfirmScreen(DialogScreen[bool]):
 class InputScreen(DialogScreen[str]):
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, prompt: str, trail: str = "") -> None:
+    def __init__(self, prompt: str, trail: str = "", value: str = "") -> None:
         super().__init__()
         self._prompt = prompt
         self._trail = trail
+        self._value = value
 
     def compose(self) -> ComposeResult:
         with Container() as dialog:
             dialog.border_title = self._trail or "Input"
             yield Static(self._prompt, id="input-prompt", classes="dialog--prompt")
-            yield Input(id="input-value")
+            yield Input(self._value, id="input-value")
             with Horizontal(classes="dialog--actions"):
                 with Horizontal(classes="dialog--escape"):
                     yield KeyHint("Esc", "Go back", dim=True)

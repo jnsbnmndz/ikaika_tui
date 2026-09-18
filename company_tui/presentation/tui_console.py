@@ -49,6 +49,7 @@ from company_tui.presentation.branding import (
     APP_VERSION,
     PEAK_ART,
 )
+from company_tui.presentation.browser_screen import BrowserScreen
 from company_tui.presentation.card import MenuEntry
 from company_tui.presentation.chrome import AppFooter, AppFrame, AppHeader, BusyLine
 from company_tui.presentation.path_screen import PathScreen
@@ -226,6 +227,9 @@ class TuiConsole(App):
         self._sessions = SessionRegistry(on_change=self._session_changed)
         self._panel: RunScreen | None = None
         self._attached: RunSession | None = None
+        self._browser: BrowserScreen | None = None
+        self._browser_task: asyncio.Future | None = None
+        self._browser_stopped = False
         self._foreground_free = asyncio.Event()
         self._foreground_free.set()
         self._attachment = asyncio.Event()
@@ -531,6 +535,66 @@ class TuiConsole(App):
     def list_view(self) -> "ListView":
         """A view bound to this console, for a command that speaks the protocol."""
         return _PanelListView(self)
+
+    def browser_view(self) -> "ListView | None":
+        """A view over the browser now on screen, or `None` when there is none.
+
+        `None` is what makes the gate one place: a run that did not open a browser
+        falls back to the ordinary list protocol without anything here knowing why.
+        """
+        screen = self._browser
+        return None if screen is None else _BrowserListView(self, screen)
+
+    async def browse(
+        self,
+        title: str,
+        work: Awaitable[T],
+        trail: Sequence[str] = (),
+        subtitle: str = "",
+    ) -> T | None:
+        """Put the browser up, run `work` behind it, and take it down after.
+
+        No form and no terminal: there is nothing to configure and nothing to
+        stream, so the screen is the whole surface and Esc is the only way out of
+        it. Esc cancels `work`, which unwinds to the subprocess like every other
+        stopped run here.
+        """
+        session = current_session()
+        await self._claim_screen(session)
+
+        steps = tuple(session.steps.values()) if session is not None else ()
+        screen = BrowserScreen(title, trail or steps, subtitle)
+        self._browser = screen
+        self._browser_stopped = False
+        await self.push_screen(screen)
+
+        task = asyncio.ensure_future(work)
+        self._browser_task = task
+        try:
+            return await task
+        except asyncio.CancelledError:
+            task.cancel()
+            if not self._browser_stopped:
+                raise
+            return None
+        finally:
+            self._browser = None
+            self._browser_task = None
+            with suppress(Exception):
+                while screen in self.screen_stack:
+                    self.pop_screen()
+            self._refresh_badges()
+
+    def on_browser_screen_stopped(self, message: BrowserScreen.Stopped) -> None:
+        """Esc on the browser. What ends is the run, not just the screen."""
+        message.stop()
+        self._browser_stopped = True
+        if self._browser_task is not None:
+            self._browser_task.cancel()
+
+    async def ask_text(self, prompt: str, value: str = "") -> str:
+        """One text field over whatever is up. Empty is a cancel, and says so."""
+        return await self.push_screen_wait(InputScreen(prompt, self.trail_label(), value))
 
     async def show_rows(self, listing: Listing) -> str | None:
         """Put a listing up and wait. The pick is the row's own id, or None for Esc.
@@ -1269,3 +1333,33 @@ class _PanelListView(ListView):
 
     def close(self) -> None:
         self._console.close_rows()
+
+
+class _BrowserListView(_PanelListView):
+    """`ListView` over a `BrowserScreen`, and a `PickScreen` over the top of it.
+
+    A question the command asks mid-browse is still an ordinary listing and still
+    an ordinary pick - it comes up as a modal over the browser and answers with
+    `@dti:pick`. Nothing here invents one: what a dangerous action costs is the
+    command's to say, in its own words.
+    """
+
+    def __init__(self, console: "TuiConsole", screen: BrowserScreen) -> None:
+        super().__init__(console)
+        self._screen = screen
+
+    @property
+    def browsing(self) -> bool:
+        return True
+
+    def describe(self, spec) -> None:
+        self._screen.describe(spec)
+
+    async def browse(self, listing: Listing):
+        return await self._screen.browse(listing)
+
+    def say(self, status) -> None:
+        self._screen.say(status)
+
+    async def ask(self, question) -> str | None:
+        return await self._console.ask_text(question.prompt, question.value)

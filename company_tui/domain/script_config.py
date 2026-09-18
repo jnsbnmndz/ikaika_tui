@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
+from company_tui.domain.interactive import BROWSER
 from company_tui.domain.options import Option, OptionKind, OptionValue, Refresh
 
 ROOT = "root"
@@ -221,8 +222,16 @@ class ScriptAction:
     interactive: bool = False
     """Whether this command speaks the list protocol. `true` and nothing else."""
 
+    view: str = ""
+    """Which surface this action wants. `browser` is the only one so far."""
+
     messages: Mapping[str, str] = field(default_factory=dict)
     after_success: tuple[str, ...] = ()
+
+    @property
+    def browses(self) -> bool:
+        """Whether this is a place to move around in rather than a run to configure."""
+        return self.view == BROWSER
 
     @property
     def reference(self) -> str:
@@ -499,6 +508,7 @@ def _action_from(
         filename=str(entry.get("filename", "")),
         description=str(entry.get("description", "")),
         interactive=entry.get("interactive") is True,
+        view=entry["view"] if isinstance(entry.get("view"), str) else "",
         skipped=tuple(
             str(name) for name in entry.get("skipped", []) if isinstance(name, str)
         ),
