@@ -10,8 +10,9 @@ from contextlib import suppress
 from pathlib import Path
 
 from company_tui.domain import json_document, naming
-from company_tui.domain.config import ConfigScope, TemplateSource
+from company_tui.domain.config import ConfigPort, ConfigScope, TemplateSource
 from company_tui.domain.identity import SCRIPT_MANIFEST, NotAProjectError
+from company_tui.domain.interactive import ListView, Untimed
 from company_tui.domain.json_document import MalformedJson
 from company_tui.domain.options import OptionValue
 from company_tui.domain.scaffolding import CannotStampIdentity, display_path
@@ -477,12 +478,54 @@ def _template_path(
     return repository / resolved
 
 
+def browses(action: ScriptAction, config: ConfigPort) -> bool:
+    """Whether this action opens the browser instead of a form and a terminal.
+
+    Two keys again, and neither alone is enough: the person turned the experiment
+    on, and the manifest said this particular action is a place rather than a run.
+    Answered before anything is launched, because what it decides is which screen
+    the user is looking at.
+    """
+    return action.browses and config.browser_view()
+
+
+def _list_view(action: ScriptAction, services: PackServices) -> "ListView | None":
+    """A view only when BOTH halves said yes, and `None` every other time.
+
+    The setting alone is not enough and neither is the declaration: one is the
+    person saying the experiment may run at all, the other is the command saying it
+    knows how to speak. `None` is what leaves the run byte for byte as it was - no
+    stdin pipe, no variable in the environment, nothing to parse.
+
+    The countdown is a second setting over the top of it, and off it takes the
+    `timeout` out of every listing rather than passing a flag along beside one.
+
+    A browser is the same gate one level up: where one is open this is the view
+    over it, and where the setting is off or the surface cannot draw one this falls
+    through to the list protocol - which is the whole of how a browser command
+    degrades into an ordinary script.
+    """
+    view = None
+    if browses(action, services.config):
+        view = services.console.browser_view()
+    if view is None:
+        if not action.interactive:
+            return None
+        if not services.config.interactive_lists():
+            return None
+        view = services.console.list_view()
+    if view is None or services.config.timed_prompts():
+        return view
+    return Untimed(view)
+
+
 async def _run_commands(
     action: ScriptAction,
     references: Mapping[str, str],
     repository: Path,
     services: PackServices,
 ) -> tuple[str, int] | None:
+    view = _list_view(action, services)
     for raw in action.after_success:
         command = _command_from(raw, references)
         if not command:
@@ -492,6 +535,7 @@ async def _run_commands(
             command,
             lambda line: services.console.write(f"{RAW}{line}"),
             repository,
+            view,
         )
         if result.exit_code != 0:
             return (f"{command[0]} exited {result.exit_code}", result.exit_code)

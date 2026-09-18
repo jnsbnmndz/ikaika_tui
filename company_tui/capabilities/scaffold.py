@@ -3,6 +3,7 @@
 from company_tui.application.template_registry import TemplatePackRegistry
 from company_tui.capabilities import script_actions
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
+from company_tui.domain.config import ConfigPort
 from company_tui.domain.destinations import DestinationBusy, DestinationLocks
 from company_tui.domain.project_name import InvalidProjectName
 from company_tui.domain.script_config import components
@@ -23,10 +24,12 @@ class ScaffoldCapability(Capability):
         self,
         console: Ui,
         pack_registry: TemplatePackRegistry,
+        config: ConfigPort,
         locks: DestinationLocks | None = None,
     ) -> None:
         self._console = console
         self._pack_registry = pack_registry
+        self._config = config
         self._locks = locks if locks is not None else DestinationLocks()
 
     @property
@@ -62,7 +65,7 @@ class ScaffoldCapability(Capability):
 
             if target is ScaffoldTarget.CONTROLLER:
                 walk = await script_actions.walk(
-                    self._console, pack, wanted=components
+                    self._console, pack, wanted=components, config=self._config
                 )
                 if walk.ending is script_actions.Ending.BACK:
                     notice = walk.notice

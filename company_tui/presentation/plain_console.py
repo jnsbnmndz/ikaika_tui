@@ -171,6 +171,23 @@ class PlainConsole:
             return await self._select(title, entries, zero_label)
         return index
 
+    def browser_view(self) -> None:
+        """None: there is no browser to draw on a pipe, so a command that asked for
+        one runs as any other command does and its lines are read as text."""
+        return None
+
+    async def browse(self, title, work, trail=(), subtitle=""):
+        """No screen to put up, so this is only the work."""
+        return await work
+
+    def list_view(self) -> None:
+        """None: `list` and `doctor` are pipes, and a menu drawn into one is noise.
+
+        A command offered the protocol here is never told it can speak, so it takes
+        the branch it takes in any plain terminal.
+        """
+        return None
+
     async def pause(self) -> None:
         if self._result_acknowledged:
             self._result_acknowledged = False

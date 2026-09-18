@@ -70,6 +70,191 @@ coordinates, and the domain stays independent of concrete tools. Every interacti
   after them. Line art from `presentation/icons.py` instead, enforced by
   `tests/test_glyphs.py`.
 
+## Interactive lists (experimental, off)
+
+A command's output is dead text, so anything browse-shaped — walking folders, picking from
+results — means re-running it with a different argument each time and holding the last
+listing in your head. A command can instead hand over a list of rows and be told which one
+was picked, without exiting.
+
+**Two things must both say yes**, and either alone changes nothing:
+
+1. `interactive_lists` in **[09] Advanced**, off by default.
+2. `"interactive": true` on that command in its `dti.script.json`.
+
+With both, the child gets `DTI_INTERACTIVE=1` and an stdin pipe. It may then print:
+
+```
+@dti:rows {"title":"Project Files","hint":"Enter opens",
+           "rows":[{"id":"1","label":"00_BIM","kind":"folder"},
+                   {"id":"10","label":"Deck.pptx","kind":"file","detail":"v1  97 MB"}]}
+```
+
+The toolbox draws a real list — arrow keys, Enter — and writes back one line:
+
+```
+@dti:pick 10
+```
+
+Then it keeps reading: the command prints another block, or `@dti:end` to go back to plain
+streaming. Esc answers with nothing and stops the command.
+
+Any line that is not understood — an unknown verb, broken JSON, a row with no `id` — is
+printed as ordinary output rather than breaking the view, so a command written for a later
+version cannot break an older toolbox. `id` is opaque and echoed back verbatim; `kind` and
+`detail` are presentation only.
+
+### A list can answer itself
+
+Some questions have a right answer when nobody is at the keyboard — retry or give up,
+overwrite or skip, keep going or stop. The command says so on the same payload:
+
+```
+@dti:rows {"rows":[{"id":"retry","label":"Try again"},{"id":"stop","label":"Stop"}],
+           "timeout":20,"default":"stop"}
+```
+
+The hint line counts down and names the winner (`20s → Stop`), and on expiry the toolbox
+writes back `@dti:pick stop` like any other answer. **Any interaction ends the countdown for
+good** — an arrow key, a click, the pointer moving onto another row — because a choice taken
+away part-way through reading it is worse than never offering to answer it.
+
+`timeout` without a `default` naming one of these rows is **ignored entirely and the list
+waits**. Never row zero: silently picking the first one is how somebody loses what they
+meant to keep.
+
+This is a **third** switch, `timed_prompts`, also in **[09] Advanced** and also off. With it
+off — or on an older toolbox, or in a plain terminal — the list renders and waits exactly as
+it does now, and the extra fields are dropped before the screen ever sees them. A command is
+never told whether its countdown is live, so nothing can be written to depend on one
+(`docs/decisions/0005`).
+
+### A command that is a place rather than a run
+
+Some commands are not "configure, run, read output" — they are somewhere you move around
+in. A remote file store, a bucket, a package registry, a database's tables and rows, a log
+archive, a branch's history: any navigable hierarchy. A script entry can say so, and the
+toolbox opens a **two-pane browser** instead of the configuration form and the terminal:
+
+```json
+{ "view": "browser" }
+```
+
+Breadcrumb across the top, tree on the left, a table on the right whose columns the command
+declares, an action bar showing only what is available right now, and a status line. No
+terminal pane, no Run button. A **fourth** switch, `browser_view` in **[09] Advanced**, off
+by default, and the manifest has to say `"view": "browser"` as well.
+
+The command owns all of it. The toolbox fetches nothing and knows nothing about what is
+being browsed — it draws the rows a command sends and reports what the user did:
+
+```
+@dti:view    {"columns":[{"key":"name","label":"Name","grow":true},
+                         {"key":"size","label":"Size","width":10,"align":"right"}],
+              "tree":[{"id":"root","label":"Root","parent":null}]}
+@dti:rows    {"breadcrumb":["Root","Reports","2026"],
+              "rows":[{"id":"r-1","cells":{"name":"march","size":"4.2 MB"},"kind":"leaf"}],
+              "actions":[{"id":"add","label":"Add","key":"a"},
+                         {"id":"remove","label":"Remove","key":"r","danger":true}]}
+@dti:status  any one-line message the command wants under the list
+@dti:end
+```
+
+and reads back one line per thing the user did:
+
+```
+@dti:open r-1                 a row was entered
+@dti:action remove r-1        an action was run, on that row
+@dti:action add               an action was run on where the user is, not on a row
+```
+
+A few rules make this work for a command listing database tables as well as one listing
+files:
+
+- **Actions are per-listing, never hardcoded.** The bar shows exactly what the last
+  `@dti:rows` declared and nothing else, so a command that varies its actions by location
+  — permissions, state, node type — gets that for free, and the toolbox never learns why.
+- **`danger: true` is styling only.** The confirmation stays with the command, sent as an
+  ordinary `@dti:rows` pick-list (with the countdown above, where `timed_prompts` is on) and
+  shown as a modal over the browser. The toolbox never invents its own "are you sure": only
+  the command knows what is about to happen.
+- **A listing carrying `breadcrumb` is the pane; one without it is a question over it.** The
+  key being present is what decides, so a browser at its own root is still a pane.
+- **Cells are strings.** A command already decides that 4402816 bytes reads as "4.2 MB".
+- **One text-input verb, used sparingly.** `@dti:ask {"prompt":"...","value":""}` for a
+  value nothing can list — a name for a thing that does not exist yet — answered with
+  `@dti:answer <text>`, or `@dti:answer` alone for a cancel. Everything else here is a row
+  or an action.
+- **`@dti:rows` blocks until the user acts**, so anything the command wants shown beside it
+  goes first. A status set that way stays up until it is replaced.
+
+Plenty of things you browse also have a body worth reading in place — a record's fields, a
+document's text, a change's diff, a run's log. A row may carry one:
+
+```
+@dti:rows {"breadcrumb":["main"],
+           "rows":[{"id":"c1","cells":{"sha":"9f21ab4"},
+                    "detail_body":"diff --git a/x b/x\n@@ -1,2 +1,3 @@\n-was\n+is"}]}
+```
+
+It appears in a pane beside the contents while that row is selected, and the pane is gone
+when the selected row has none. Two things about it are deliberate:
+
+- **Plain text.** A pane that rendered markup would be making typographic decisions about
+  content whose meaning it does not know. A command that wants emphasis can spend a blank
+  line on it.
+- **It scrolls and it never re-wraps.** Content appears exactly as it was sent, with
+  horizontal scrolling where lines are too long. This is not cosmetic: a unified diff
+  re-wrapped at the pane's width stops lining its `+`/`-` column up and becomes unreadable
+  at the moment somebody is relying on it, and the same is true of log output, fixed-width
+  tables and stack traces.
+
+A listing whose bodies are too big to send inline says `"detail": "on-demand"` instead and
+carries none. DTI then writes `@dti:detail <rowId>` once the selection settles on a row it
+has no body for, and the command answers with a fresh `@dti:rows` carrying it. Absent,
+nothing is requested and nothing is shown. `MAX_PAYLOAD` applies to these lines like any
+other, which is what this exists to stay under.
+
+For a value that is a note rather than a name, `@dti:ask` takes `"multiline": true`:
+
+```
+@dti:ask {"prompt":"Review note","value":"","multiline":true}
+```
+
+The answer comes back on today's single line, with newlines written `\n` and backslashes
+doubled. **Decode it left to right, once** — or with your language's string unescape. A
+two-pass replace in the wrong order turns `C:\new` into a newline, which is why the
+backslash is escaped at all:
+
+```python
+out, i = [], 0
+while i < len(text):
+    if text[i] == "\\" and i + 1 < len(text):
+        out.append("\n" if text[i + 1] == "n" else text[i + 1]); i += 2; continue
+    out.append(text[i]); i += 1
+```
+
+Both of these are parts of the browser, not features of their own: they are behind the same
+`browser_view` switch and there is no third flag. Both are ignorable — a command sending
+`detail_body` to a build without the pane loses the pane, not the listing, and one sending
+`multiline` to an older build gets a single-line box. And `detail_body` is **display only**:
+nothing in it is editable, so changing something is still an action plus the command's own
+confirmation, which is what keeps that rule worth having.
+
+With `browser_view` off — or on an older toolbox — a `"view": "browser"` command still runs
+as an ordinary script: the form and terminal appear, `@dti:view`, `@dti:status` and
+`@dti:ask` are printed as text, and `@dti:rows` is the pick-list it always was (a row with
+only `cells` is labelled by its first cell so it stays legible). **Read the verb of the line
+you are sent** — `@dti:pick`, `@dti:open` or `@dti:action` — and one command works on both.
+Nothing else tells it which surface it got, which is what stops a command being written to
+require the browser (`docs/decisions/0006`).
+
+The switch is an environment variable rather than a flag so **the same command run in a
+plain terminal sees nothing set and prints its ordinary human-readable output**. Both
+surfaces stay clean.
+
+Not a pty: no cursor control, no full-screen apps. It is a list protocol.
+
 ## Building and releasing
 
 One entry point, and GitHub Actions calls the same file rather than restating the steps in
@@ -84,6 +269,7 @@ a release is.
 .\script.ps1 setup-signing                # release and debug certificates
 .\script.ps1 bump-version -Bump patch     # rewrite VERSION, commit, tag
 .\script.ps1 build-app -Sign              # freeze with PyInstaller
+.\script.ps1 benchmark                    # time each -Optimize level, print a matrix
 .\script.ps1 build-installer -Sign        # wrap it in NSIS
 ```
 
@@ -139,6 +325,35 @@ share link *is* the capability to fetch the file, and a committed link cannot be
 see `docs/decisions/0003`. CI reads `DTI_CERT_PASSWORD`, `DTI_CERT_SHARE_URL` and
 `DTI_DEBUG_CERT_SHARE_URL`. A missing certificate does not fail the build; it says the
 artifacts are unsigned and carries on.
+
+### Startup, and the build variants
+
+`build-app` takes two levers, both exposed as release-workflow inputs:
+
+```powershell
+.\script.ps1 build-app -Optimize 2      # bytecode: 1 drops asserts, 2 also drops docstrings
+.\script.ps1 build-app -Python 3.14     # freeze against a chosen CPython, fetched by uv
+```
+
+They exist to be **measured**, not assumed. `.\script.ps1 benchmark` builds each variant and
+times the commands that start and exit, and `-UpdateReadme` writes the result into the
+table below — so these numbers come from a real run rather than from someone's memory.
+
+<!-- benchmark:start -->
+`dti 0.3.0+27` on CPython 3.12.10, a GitHub runner, fastest of 9 interleaved rounds, in milliseconds.
+
+| Build | Size MB | --version | list | doctor |
+|---|---|---|---|---|
+| `-O0` | 28.1 | 155 | 192 | 253 |
+
+_Generated by `.\script.ps1 benchmark -UpdateReadme`; do not edit by hand._
+<!-- benchmark:end -->
+
+What actually mattered was neither lever. `cli.py` pulled `bootstrap` and `branding` at
+module level, and `branding` imports `textual` for the theme — so `--version`, `list` and
+`doctor` each paid ~700 ms to load a terminal framework none of them use, against a
+documented promise that they stay fast and pipeable. Deferring those imports took frozen
+`--version` from **863 ms to 251 ms**. Measure before reaching for a build flag.
 
 ### The installer
 
@@ -198,6 +413,18 @@ It is on out of the box; `[updates] check_on_launch = false` stops the launch ch
 clearing the repository in Advanced stops both halves. **Check for Updates** is the card
 that reports everything properly, and it can also run an installer you point it at, which
 is how a build is tested before it is published.
+
+### Release notes
+
+`POST /releases/generate-notes` returns the changelog GitHub builds from the commits and
+pull requests since the last release, and the workflow composes the body itself: the four
+lines that matter to somebody installing — version, whether it is signed, where it installs
+— then a rule, then the generated part.
+
+Composed here rather than by passing `--generate-notes` to `gh release create`, because
+that flag generates the title *and* body and what happens to a `--notes` given alongside it
+is undocumented. A failure to generate is not a failure to release: the body falls back to
+the four lines.
 
 ### CI
 

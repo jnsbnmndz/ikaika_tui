@@ -22,7 +22,5 @@ changelog:
       labels: [documentation, docs]
     - title: Dependencies
       labels: [dependencies]
-    # Everything else, including every unlabelled commit. `*` has to come last: the first
-    # matching category wins, and a catch-all placed earlier would swallow the lot.
     - title: Other changes
       labels: ["*"]

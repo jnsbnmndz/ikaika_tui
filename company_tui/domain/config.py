@@ -51,6 +51,15 @@ class Settings:
     script_checks: Mapping[str, bool] = field(default_factory=dict)
     """Whether each stack's installed scripts are compared against the remote."""
 
+    interactive_lists: bool = False
+    """Whether a command may hand the toolbox rows to render. Off, and experimental."""
+
+    timed_prompts: bool = False
+    """Whether a listing may count down to its own answer. Off, and experimental."""
+
+    browser_view: bool = False
+    """Whether an action may open the browser instead of a form. Off, and experimental."""
+
 class ConfigPort(ABC):
     @abstractmethod
     def template_source(self, pack_key: str, default: TemplateSource) -> TemplateSource:
@@ -81,6 +90,37 @@ class ConfigPort(ABC):
     def script_check(self, pack_key: str) -> bool:
         """Whether to compare this stack's installed scripts against the remote."""
         raise NotImplementedError
+
+    def interactive_lists(self) -> bool:
+        """Whether a command may render rows. Half the gate; the other half is the
+        command's own declaration, so this alone changes nothing.
+
+        Concrete, and false. An experiment that is off unless something says
+        otherwise cannot be turned on by a port that forgot to answer, and an
+        implementation written before it existed keeps working unchanged.
+        """
+        return False
+
+    def timed_prompts(self) -> bool:
+        """Whether a listing carrying a `timeout` and a `default` may run the
+        countdown. Off, the fields are dropped before the list is drawn and it
+        waits exactly as it does now.
+
+        Concrete and false for the same reason `interactive_lists` is: an
+        experiment nothing has turned on must not be turned on by a port that
+        forgot to answer.
+        """
+        return False
+
+    def browser_view(self) -> bool:
+        """Whether an action declaring `"view": "browser"` gets the two-pane browser
+        instead of a configuration form and a terminal. Off, it runs as an ordinary
+        script and its `@dti:` lines are pick-lists or text.
+
+        Concrete and false, for the same reason the other two are: an experiment
+        nothing turned on must not be turned on by a port that forgot to answer.
+        """
+        return False
 
     @abstractmethod
     def update_source(self) -> UpdateSource:

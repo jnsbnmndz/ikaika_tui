@@ -1,34 +1,16 @@
 # Releases this app: rewrites the version, commits it, and tags it.
 #
-#     .\script.ps1 bump-version -Bump patch                 a debug build's tag
-#     .\script.ps1 bump-version -Bump minor -Released       an official release
-#     .\script.ps1 bump-version -Bump keep                  rebuild, new build number
-#     .\script.ps1 bump-version -Bump patch -WhatIf         say what it would do
+#     .\script.ps1 bump-version -Bump patch|minor|major|keep [-Released] [-WhatIf] [-Yes]
 #
-# ONE COMMAND, RUN THE SAME WAY EVERYWHERE. GitHub Actions calls this file rather than
-# reimplementing it in YAML, so what CI does and what a laptop does cannot drift: a
-# workflow that bumps a version its own way is a second answer to what the version is.
-#
-# The tag is the distribution. `-Released` puts `-released` on it, which is how a release
-# feed tells an official build from the debug tags the same source collected on its way
-# there. Both spellings share one build number, because the number belongs to the source.
-#
-# NOTHING IS PUSHED. The commit and the tag are local, and the command prints the push
-# line rather than running it: publishing is a decision, and a build tool that pushes on
-# your behalf is one nobody can rehearse.
-#
-# Requires PowerShell 7+ and a clean tree - anything uncommitted would ride along in the
-# release commit, which is how a half-finished change gets tagged as a version.
+# The tag is the distribution, and the build number comes from the tags rather than from
+# VERSION - an installer compares it, so a reset makes an upgrade look older. Commits and
+# tags; never pushes. See docs/decisions/0002.
 
 [CmdletBinding()]
 param(
-    # major, minor, patch, keep (or its older spelling, same), or an explicit x.y.z.
     [string]$Bump = 'patch',
-    # Tag it as an official release rather than a debug build.
     [switch]$Released,
-    # Do everything except write, commit and tag.
     [switch]$WhatIf,
-    # Skip the confirmation. The checks still run.
     [switch]$Yes,
     [switch]$Help
 )
@@ -81,8 +63,6 @@ if (-not (Test-TagIsFree $tag)) {
 }
 Write-Host "[3/5] $tag is free."
 
-# Asked before anything is written. A release commit that carries somebody's unfinished
-# work is a version tagged over a tree nobody reviewed.
 $dirty = @(& git -C $root status --porcelain=v1 | Where-Object { $_ })
 if ($dirty.Count -and -not $WhatIf) {
     Write-Host ''

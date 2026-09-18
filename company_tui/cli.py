@@ -3,10 +3,9 @@
 import argparse
 import asyncio
 
-from company_tui.bootstrap import create_application, create_tui_console
 from company_tui.domain import naming
-from company_tui.presentation.branding import APP_VERSION
 from company_tui.presentation.plain_console import PlainConsole
+from company_tui.version import APP_VERSION
 
 COMMANDS = """commands:
   tui       the interactive interface (default)
@@ -63,13 +62,19 @@ def main(argv: list[str] | None = None) -> int:
         return run_checks(install=args.install_hook)
 
     if args.command == "list":
+        from company_tui.bootstrap import create_application
+
         application = create_application(PlainConsole())
         application.print_capabilities()
         return 0
 
     if args.command == "doctor":
+        from company_tui.bootstrap import create_application
+
         application = create_application(PlainConsole())
         return asyncio.run(application.run_capability("doctor"))
+
+    from company_tui.bootstrap import create_tui_console
 
     console = create_tui_console(args.start)
     console.run()

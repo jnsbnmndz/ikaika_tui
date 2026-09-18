@@ -15,9 +15,11 @@ from textual.containers import (
 )
 from textual.message import Message
 from textual.screen import ModalScreen, Screen, ScreenResultType
+from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Input, Static, TextArea
 
+from company_tui.domain.interactive import Listing, Row
 from company_tui.presentation.branding import (
     APP_TAGLINE,
     APP_VERSION,
@@ -539,32 +541,67 @@ class ConfirmScreen(DialogScreen[bool]):
 
 
 class InputScreen(DialogScreen[str]):
+    """One value typed in. A line by default; a note where the caller asks for one.
+
+    A note is submitted by Tab and then the button rather than by a chord: Tab is
+    what a `TextArea` already does with the focus, and every chord free enough to
+    bind here is one some terminal cannot send.
+    """
+
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, prompt: str, trail: str = "") -> None:
-        super().__init__()
+    DEFAULT_CSS = """
+    InputScreen.-note > Container {
+        width: 84;
+    }
+
+    InputScreen #input-note {
+        width: 100%;
+        height: 14;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(
+        self, prompt: str, trail: str = "", value: str = "", multiline: bool = False
+    ) -> None:
+        super().__init__(classes="-note" if multiline else "")
         self._prompt = prompt
         self._trail = trail
+        self._value = value
+        self._multiline = multiline
 
     def compose(self) -> ComposeResult:
         with Container() as dialog:
             dialog.border_title = self._trail or "Input"
             yield Static(self._prompt, id="input-prompt", classes="dialog--prompt")
-            yield Input(id="input-value")
+            if self._multiline:
+                yield TextArea(self._value, id="input-note")
+            else:
+                yield Input(self._value, id="input-value")
             with Horizontal(classes="dialog--actions"):
                 with Horizontal(classes="dialog--escape"):
                     yield KeyHint("Esc", "Go back", dim=True)
+                    if self._multiline:
+                        yield KeyHint("Tab", "Then Submit", dim=True)
                 yield Button("Submit", id="submit", variant="primary", flat=True)
 
     def on_mount(self) -> None:
-        self.query_one(Input).focus()
+        self.query_one("#input-note" if self._multiline else "#input-value").focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit":
-            self.dismiss(self.query_one("#input-value", Input).value.strip())
+            self.dismiss(self._typed())
+
+    def _typed(self) -> str:
+        """What is in the field. A note keeps its own indentation and loses only the
+        blank lines somebody left around it."""
+        if self._multiline:
+            return self.query_one("#input-note", TextArea).text.strip(BLANK_ENDS)
+        return self.query_one("#input-value", Input).value.strip()
 
     def action_cancel(self) -> None:
         self.dismiss("")
@@ -625,7 +662,15 @@ class RunRow(Widget, can_focus=True):
     }
     """
 
-    BINDINGS = [("enter", "choose", "Go")]
+    BINDINGS = [
+        ("enter", "choose", "Go"),
+        ("up", "previous", "Up"),
+        ("down", "next", "Down"),
+    ]
+    """On the row, not the screen: the scroller answers arrow keys on the way up.
+
+    `RunsScreen` declared these and they never fired, so the list could only be
+    clicked - see `PickRow` and docs/pitfalls.md 9.1."""
 
     class Chosen(Message):
         def __init__(self, session: RunSession) -> None:
@@ -653,6 +698,12 @@ class RunRow(Widget, can_focus=True):
 
     def action_choose(self) -> None:
         self.post_message(self.Chosen(self.session))
+
+    def action_previous(self) -> None:
+        self.screen.focus_previous()
+
+    def action_next(self) -> None:
+        self.screen.focus_next()
 
 
 class RunsScreen(DialogScreen[RunSession | None]):
@@ -705,6 +756,256 @@ class RunsScreen(DialogScreen[RunSession | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+ROW_GLYPHS = {"folder": "▸", "file": "·", "back": "❯"}
+ROW_FALLBACK = "·"
+"""Line art per `kind`, with one for a kind this build has never heard of.
+
+`kind` is presentation only and a command may invent any word for it, so an
+unknown one has to render as something rather than as nothing."""
+
+BLANK_ENDS = chr(13) + chr(10)
+"""The line endings a note loses at its ends, and nowhere else in it."""
+
+PICK_TITLE = "Choose"
+PICK_EMPTY = "Nothing to choose from."
+
+PICK_COUNTDOWN = "{seconds}s → {label}"
+"""How long is left and which row wins, in the line somebody is already reading."""
+
+COUNTDOWN_TICK = 1.0
+"""One second, because the hint is counting seconds. A constant so a test can run
+the clock faster than somebody would sit through."""
+
+
+class PickRow(Widget, can_focus=True):
+    """One row of a listing: what it is, what it is called, and what it says."""
+
+    DEFAULT_CSS = """
+    PickRow {
+        width: 100%;
+        height: 1;
+        layout: horizontal;
+    }
+
+    PickRow .pick--glyph {
+        width: 2;
+        color: $text-muted;
+    }
+
+    PickRow .pick--label {
+        width: 1fr;
+        color: $foreground;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    PickRow .pick--detail {
+        width: auto;
+        margin-left: 2;
+        color: $text-disabled;
+        text-wrap: nowrap;
+    }
+
+    PickRow:focus .pick--glyph,
+    PickRow:focus .pick--label,
+    PickRow:focus .pick--detail {
+        color: $accent;
+        text-style: bold;
+    }
+    """
+
+    BINDINGS = [
+        ("enter", "choose", "Choose"),
+        ("up", "previous", "Up"),
+        ("down", "next", "Down"),
+    ]
+    """Here rather than on the screen, because the row is what has focus.
+
+    A `VerticalScroll` binds the arrow keys to scrolling and answers them on the
+    way up, so a screen-level `focus_next` is never reached and the list looks
+    frozen. The focused widget is asked first, which is the one place a key can be
+    caught before the scroller takes it."""
+
+    class Chosen(Message):
+        def __init__(self, identifier: str) -> None:
+            self.identifier = identifier
+            super().__init__()
+
+    def __init__(self, row: Row) -> None:
+        super().__init__()
+        self.row = row
+
+    def compose(self) -> ComposeResult:
+        yield Static(ROW_GLYPHS.get(self.row.kind, ROW_FALLBACK), classes="pick--glyph")
+        yield Static(self.row.label, classes="pick--label")
+        if self.row.detail:
+            yield Static(self.row.detail, classes="pick--detail")
+
+    def on_click(self) -> None:
+        self.action_choose()
+
+    def on_enter(self) -> None:
+        self.focus()
+
+    def action_choose(self) -> None:
+        self.post_message(self.Chosen(self.row.id))
+
+    def action_previous(self) -> None:
+        self.screen.focus_previous()
+
+    def action_next(self) -> None:
+        self.screen.focus_next()
+
+
+class PickScreen(DialogScreen[str | None]):
+    """Rows a command handed over, as a list rather than as log text.
+
+    Dismisses with the chosen `id`, or `None` for Esc — which the runner reads as
+    "nothing is going to answer this" and stops the command. The id is echoed back
+    exactly as it arrived; nothing here interprets it.
+
+    A listing may count down to a row of its own naming, and that expiry dismisses
+    with the row's `id` like any other answer — never with `None`, which would stop
+    the command rather than answer it. Any interaction ends the countdown for good.
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Stop"),
+        ("up", "focus_previous", "Up"),
+        ("down", "focus_next", "Down"),
+    ]
+
+    DEFAULT_CSS = """
+    PickScreen > Container {
+        width: 84;
+    }
+
+    PickScreen #pick-hint {
+        width: 100%;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+
+    PickScreen #pick-rows {
+        width: 100%;
+        height: auto;
+        max-height: 16;
+        margin-bottom: 1;
+        scrollbar-size-vertical: 1;
+    }
+
+    PickScreen #pick-empty {
+        width: 100%;
+        margin-bottom: 1;
+        color: $text-disabled;
+    }
+    """
+
+    def __init__(self, listing: Listing) -> None:
+        super().__init__()
+        self._listing = listing
+        self._remaining = listing.timeout if listing.counts_down else 0
+        self._timer: Timer | None = None
+        self._opened_on: Widget | None = None
+
+    def compose(self) -> ComposeResult:
+        with Container() as dialog:
+            dialog.border_title = self._listing.title or PICK_TITLE
+            if self._listing.hint or self._remaining:
+                yield Static(self._hint_line(), id="pick-hint")
+            if self._listing.rows:
+                with VerticalScroll(id="pick-rows"):
+                    for row in self._listing.rows:
+                        yield PickRow(row)
+            else:
+                yield Static(PICK_EMPTY, id="pick-empty")
+            with Horizontal(classes="dialog--actions"):
+                with Horizontal(classes="dialog--escape"):
+                    yield KeyHint("Esc", "Stop", dim=True)
+
+    def on_mount(self) -> None:
+        first = next(iter(self.query(PickRow)), None)
+        if first is not None:
+            first.focus()
+        self._opened_on = first
+        if self._remaining:
+            self._timer = self.set_interval(COUNTDOWN_TICK, self._tick)
+
+    def on_unmount(self) -> None:
+        """Nothing left to fire into. Only the timer, since the line it writes is gone."""
+        self._stop_timer()
+
+    def on_key(self, event: events.Key) -> None:
+        self._stop_countdown()
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        self._stop_countdown()
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        """A row other than the one this screen opened on - the pointer moved over
+        the list, which is somebody reading it and never sends a key.
+
+        Only a row: the scroller around them takes the focus first on the way up,
+        and a screen that treated its own arrival as an interaction would cancel
+        every countdown before it drew one.
+        """
+        if isinstance(event.widget, PickRow) and event.widget is not self._opened_on:
+            self._stop_countdown()
+
+    def on_pick_row_chosen(self, message: PickRow.Chosen) -> None:
+        message.stop()
+        self.dismiss(message.identifier)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _hint_line(self) -> str:
+        """What the command said, then what is about to happen and when."""
+        if not self._remaining:
+            return self._listing.hint
+        counting = PICK_COUNTDOWN.format(
+            seconds=self._remaining, label=self._winner_label()
+        )
+        return f"{self._listing.hint}   {counting}" if self._listing.hint else counting
+
+    def _winner_label(self) -> str:
+        """The row's own words, falling back to its id rather than to nothing."""
+        return next(
+            (row.label for row in self._listing.rows if row.id == self._listing.default),
+            self._listing.default,
+        )
+
+    def _tick(self) -> None:
+        self._remaining -= 1
+        if self._remaining > 0:
+            self._say_remaining()
+            return
+        self._stop_timer()
+        self.dismiss(self._listing.default)
+
+    def _stop_countdown(self) -> None:
+        """For good, and nothing re-arms it.
+
+        An interaction is somebody reading the list, and a choice taken away
+        mid-read is worse than never offering to answer it at all.
+        """
+        if self._timer is None and not self._remaining:
+            return
+        self._stop_timer()
+        self._remaining = 0
+        self._say_remaining()
+
+    def _stop_timer(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
+    def _say_remaining(self) -> None:
+        line = next(iter(self.query("#pick-hint")), None)
+        if isinstance(line, Static):
+            line.update(self._hint_line())
 
 
 class ContinueScreen(DialogScreen[None]):

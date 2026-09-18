@@ -14,6 +14,8 @@ are already under "Alternatives rejected".
 | [0002](0002-the-version-is-one-file.md) | The version is one file, and the gate is one command | ACCEPTED |
 | [0003](0003-a-share-link-is-a-secret.md) | A share link is a secret, and the checksum is what gets committed | ACCEPTED |
 | [0004](0004-the-toolbox-can-install-its-own-update.md) | The toolbox can install its own update, through a process that outlives it | ACCEPTED, amended |
+| [0005](0005-a-listing-can-answer-itself.md) | A listing can answer itself, and no command may find out whether it will | ACCEPTED |
+| [0006](0006-a-command-may-be-a-place-rather-than-a-run.md) | A command may be a place rather than a run, and the toolbox knows nothing about where | ACCEPTED, amended |
 
 Changing behaviour a record describes means updating it in the same change, or writing the
 superseding one. A record still arguing for the old behaviour is worse than no record.

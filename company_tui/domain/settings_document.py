@@ -49,6 +49,11 @@ def write_document(settings: Settings) -> dict[str, Any]:
             for key, source in sorted(settings.scripts.items())
         },
         "script_checks": dict(sorted(settings.script_checks.items())),
+        "experimental": {
+            "interactive_lists": settings.interactive_lists,
+            "timed_prompts": settings.timed_prompts,
+            "browser_view": settings.browser_view,
+        },
         "updates": {
             "repository": settings.updates.repository,
             "api_base": settings.updates.api_base,
@@ -97,8 +102,39 @@ def read_document(
         scripts=_sources(document, "scripts", current.scripts, problems),
         script_checks=_checks(document, current.script_checks, problems),
         updates=_updates(document, current.updates, problems),
+        interactive_lists=_flag(
+            document, "experimental", "interactive_lists",
+            current.interactive_lists, problems,
+        ),
+        timed_prompts=_flag(
+            document, "experimental", "timed_prompts",
+            current.timed_prompts, problems,
+        ),
+        browser_view=_flag(
+            document, "experimental", "browser_view",
+            current.browser_view, problems,
+        ),
     )
     return settings, tuple(problems)
+
+
+def _flag(
+    document: Any, section: str, key: str, fallback: bool, problems: list[str]
+) -> bool:
+    """A boolean, or what is already set. Anything unreadable is reported, not guessed."""
+    holder = document.get(section)
+    if holder is None:
+        return fallback
+    if not isinstance(holder, Mapping):
+        problems.append(f"'{section}' is not an object, so it was ignored")
+        return fallback
+    if key not in holder:
+        return fallback
+    value = holder.get(key)
+    if isinstance(value, bool):
+        return value
+    problems.append(f"{section}.{key} is not true or false, so it was ignored")
+    return fallback
 
 
 def _text(section: Mapping[str, Any], key: str, fallback: str) -> str:

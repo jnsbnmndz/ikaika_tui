@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 
+from company_tui.capabilities.script_actions import answers
 from company_tui.domain import json_document, naming
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
 from company_tui.domain.identity import SCRIPT_MANIFEST
@@ -21,7 +22,7 @@ from company_tui.domain.script_config import (
     split_command,
 )
 from company_tui.presentation.ui import Ui
-from company_tui.templates.scripts import run_action
+from company_tui.templates.scripts import browses, run_action
 from company_tui.templates.services import PackServices
 
 FETCHING = "Reading what {name} can be given..."
@@ -87,9 +88,19 @@ class ScriptsCapability(Capability):
             filled = await self._console.working(
                 FETCHING.format(name=action.name), self._with_choices(root, action)
             )
+            options = action_options(filled, str(root))
+            if browses(filled, self._services.config):
+                await self._console.browse(
+                    filled.name,
+                    run_action(filled, answers(options), root, self._services),
+                    subtitle=filled.summary,
+                )
+                action = None
+                continue
+
             values = await self._console.open_run_panel(
                 filled.name,
-                action_options(filled, str(root)),
+                options,
                 refresh=lambda option, preview: self._refresh(root, option, preview),
                 preview=lambda values, chosen=filled: command_preview(chosen, values),
                 subtitle=filled.summary,

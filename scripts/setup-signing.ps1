@@ -1,75 +1,21 @@
 # Sets up the two code-signing certificates an installer is signed with.
 #
-#     .\script.ps1 setup-signing                    both certificates
-#     .\script.ps1 setup-signing -Which debug       just the debug one
-#     .\script.ps1 setup-signing -Force             regenerate - a NEW signing identity
-#     .\script.ps1 setup-signing -Yes               never ask; for CI
+#     .\script.ps1 setup-signing [-FetchOnly]
 #
-# For each certificate: use the one already here if it matches its committed checksum,
-# otherwise fetch it from the shared link, otherwise generate one. Generation is last
-# because a generated certificate is a NEW identity - every installer signed with the old
-# one stops matching it - so it is what happens when there is genuinely nothing to fetch,
-# not what happens when a link is merely misconfigured.
-#
-#
-# THE PASSWORD IS SAVED BEFORE THE CERTIFICATE IS GENERATED
-#
-# Not after. A crash in between leaves a .pfx that nothing can ever open, because the
-# password is not recoverable from the file - and the window is real, since generation
-# writes to the user's certificate store and exports from it. Saving first can leave a
-# password with no certificate, which is harmless: the next run generates one.
-#
-#
-# WHAT ENDS UP WHERE
-#
-#   certs/release.pfx, certs/debug.pfx        gitignored - the private keys
-#   .dti_configs/signing.env                  gitignored - the password AND the links
-#   .dti_configs/*.pfx.sha256                 COMMITTED - the trust anchors
-#   .dti_configs/share.env                    COMMITTED - the publisher subject
-#
-# A new machine needs the password and both links out of band; CI reads the same three
-# values from the DTI_CERT_PASSWORD, DTI_CERT_SHARE_URL and DTI_DEBUG_CERT_SHARE_URL
-# secrets. A link is the capability to fetch the container rather than a path to it, and a
-# committed one cannot be rotated - see signing.ps1's header.
-#
-#
-# UPLOADING IS A HUMAN STEP, AND SAYING SO IS THE POINT
-#
-# This does not upload anything. Handing a build script a Dropbox token means a token on
-# disk with write access to the folder holding the signing keys, and the whole reason the
-# password is out of band is that no single artefact should be enough. So it generates,
-# records the checksum, and prints exactly what to upload and which key to paste the link
-# into - and the checksum it just committed is what proves the next machine got that file
-# and not something else.
-#
-# Requires PowerShell 7+.
+# Uses the certificate already present when it matches its committed checksum, fetches it
+# when it does not, and only generates one when there is nothing to fetch - generating is
+# a NEW identity, and every installer signed with the old one stops matching it.
+# docs/decisions/0003 is why the share links are secrets.
 
 [CmdletBinding()]
-# The password is a plain string on purpose, and SecureString would be theatre here: it
-# has to be handed to signtool as /p on a command line and written to a file signtool
-# can read, so it is plaintext at both ends whatever type it travels in. What actually
-# protects it is that signing.env is gitignored and the value never leaves the machine.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'Password', Justification = 'Ends up plaintext regardless - see the comment above')]
 param(
     [ValidateSet('both', 'release', 'debug')]
     [string]$Which = 'both',
-    # Use this password instead of a generated one. For adopting certificates that already
-    # exist somewhere - a fresh setup should let it generate.
     [string]$Password = '',
-    # The certificate subject. Must match everywhere: signtool fails if the publisher and
-    # the subject disagree.
     [string]$Publisher = '',
-    # Regenerate even when a valid certificate is already here. A new identity.
     [switch]$Force,
-    # Assume yes. Nothing here is destructive except -Force, which this then allows.
     [switch]$Yes,
-    # Fetch or use what is here, but NEVER generate. What CI runs.
-    #
-    # Generating on a build machine is the failure this exists to prevent: -Yes would
-    # answer an unreachable link by minting a brand-new identity, so every release would
-    # be signed by a different certificate that exists only in that runner and is thrown
-    # away with it. Users would see the publisher change on every single update. Failing
-    # is the correct outcome there.
     [switch]$FetchOnly,
     [switch]$Help
 )
@@ -128,19 +74,11 @@ $shareEnv = Get-ShareEnvPath
 Write-Host ''
 Write-Host "[1/4] Signing setup for $root"
 
-# The committed half of the configuration, written as a template on a first run so the
-# keys are discoverable without reading this file.
 if (-not (Test-Path -LiteralPath $shareEnv)) {
     Set-EnvValue $shareEnv 'publisher' $script:Publisher
     Write-Host "      wrote a template at $($script:ConfigsDirName)\share.env" -ForegroundColor DarkGray
 }
 
-# The links used to live in share.env, which is committed. Carry any that are still there
-# across to signing.env, which is not, and blank the committed copy.
-#
-# Both halves matter. A link left in the committed file is a credential in the history of
-# every clone; a link only in the committed file is now read by nothing, so the next build
-# is quietly unsigned and the only sign of it is a line in the middle of a passing run.
 $stale = Read-EnvFile $shareEnv
 foreach ($key in @('share.cert', 'share.debugCert')) {
     if (-not $stale[$key]) { continue }
@@ -154,8 +92,6 @@ if ($Publisher) {
     Write-Host "      publisher set to $Publisher" -ForegroundColor DarkGray
 }
 
-# THE PASSWORD FIRST, for the reason in the header. An existing one is never replaced -
-# doing so would orphan every certificate already generated with it.
 $existingPassword = Get-CertPassword
 if ($Password) {
     $password = $Password
@@ -196,8 +132,6 @@ foreach ($released in $kinds) {
 
     if ($here -and -not $Force) {
         if (Test-CertHash $ctx.Path $ctx.Path) {
-            # No anchor yet for a certificate that is already here: record one, which is
-            # the only thing that makes it verifiable elsewhere.
             $sidecar = Get-CertHashPath $ctx.Path
             if (-not (Test-Path -LiteralPath $sidecar)) {
                 Write-Sha256To $ctx.Path $sidecar | Out-Null
@@ -228,8 +162,6 @@ foreach ($released in $kinds) {
         Remove-Item -LiteralPath $ctx.Path -Force
     }
 
-    # Fetch before generate. A link that is merely misconfigured must not be answered by
-    # minting a second identity for something that already has one.
     if (-not $Force -and $ctx.ShareUrl) {
         $fetch = Get-SharedCert $ctx
         if ($fetch.Ok) {
