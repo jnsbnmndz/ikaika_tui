@@ -9,21 +9,30 @@ nothing that assumes either. `docs/decisions/0006` is why.
 
 import asyncio
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import (
+    Horizontal,
+    ScrollableContainer,
+    Vertical,
+    VerticalScroll,
+)
 from textual.message import Message
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Static
 
 from company_tui.domain.interactive import (
     Action,
     Column,
+    Detailed,
     Invoked,
     Listing,
     Node,
     Opened,
+    Row,
     Status,
     ViewSpec,
 )
@@ -33,6 +42,12 @@ TRAIL_SEPARATOR = " › "
 BROWSER_EMPTY = "Nothing here."
 BROWSER_WAITING = "Waiting for the command..."
 TREE_GLYPH = "▸"
+
+DETAIL_DELAY = 0.25
+"""Seconds a row has to stay selected before its body is asked for.
+
+A held arrow key walks a dozen rows, and one request per row is a dozen round
+trips for eleven bodies nobody looked at."""
 DEFAULT_COLUMN = Column(key="", label="", grow=True)
 """What a table has when the command declared no columns: one, of row labels."""
 
@@ -331,6 +346,25 @@ class BrowserScreen(Screen[None]):
         height: auto;
     }
 
+    BrowserScreen #browse-detail {
+        width: 1fr;
+        height: 100%;
+        border-left: solid $primary-lighten-1;
+        padding-left: 2;
+        scrollbar-size: 1 1;
+    }
+
+    BrowserScreen #browse-detail.-empty {
+        display: none;
+    }
+
+    BrowserScreen #detail-body {
+        width: auto;
+        height: auto;
+        color: $foreground;
+        text-wrap: nowrap;
+    }
+
     BrowserScreen #browse-empty {
         width: 100%;
         color: $text-disabled;
@@ -364,6 +398,10 @@ class BrowserScreen(Screen[None]):
         self._answer: asyncio.Future | None = None
         self._at = ""
         self._said = False
+        self._row: Row | None = None
+        self._on_demand = False
+        self._wanted = ""
+        self._wait: Timer | None = None
 
     def compose(self) -> ComposeResult:
         with AppFrame():
@@ -376,9 +414,13 @@ class BrowserScreen(Screen[None]):
                     with VerticalScroll(id="browse-table"):
                         yield Horizontal(id="browse-heads", classes="-empty")
                         yield Vertical(id="browse-rows")
+                    with ScrollableContainer(id="browse-detail", classes="-empty"):
+                        yield Static(id="detail-body")
                 yield Horizontal(id="browse-actions")
                 yield Static(BROWSER_WAITING, id="browse-status")
-            yield AppFooter([("↑↓", "Move"), ("Enter", "Open"), ("Esc", "Leave")])
+            yield AppFooter(
+                [("↑↓", "Move"), ("Enter", "Open"), ("Tab", "Body"), ("Esc", "Leave")]
+            )
 
     def _crumb_line(self, crumbs: tuple[str, ...]) -> str:
         return TRAIL_SEPARATOR.join((*self._trail, *crumbs)) or self._subtitle
@@ -428,9 +470,19 @@ class BrowserScreen(Screen[None]):
             self._answer = None
 
     async def _draw(self, listing: Listing) -> None:
+        """Put this listing up, leaving the user on the row they were already on.
+
+        By id, and not at the top: `on-demand` answers a selection with a listing,
+        so a redraw that moved the selection would ask about the new one forever
+        (`docs/pitfalls.md` 9.6).
+        """
         self.query_one("#browse-crumbs", Static).update(
             self._crumb_line(listing.breadcrumb)
         )
+        self._on_demand = listing.on_demand
+
+        focused = self.focused
+        was = focused.row.id if isinstance(focused, BrowseRow) else ""
 
         columns = self._columns or (DEFAULT_COLUMN,)
         rows = self.query_one("#browse-rows", Vertical)
@@ -451,9 +503,65 @@ class BrowserScreen(Screen[None]):
             self._write_status(listing.hint)
         elif not self._said:
             self._write_status("")
-        first = next(iter(self.query(BrowseRow)), None)
-        if first is not None:
-            first.focus()
+
+        drawn = list(self.query(BrowseRow))
+        here = next((row for row in drawn if row.row.id == was), None)
+        here = here or (drawn[0] if drawn else None)
+        if here is not None:
+            here.focus()
+        self._selected(here)
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        """Only a row: the scrollers around them take the focus too, and neither of
+        those is a selection (`docs/pitfalls.md` 9.4)."""
+        if isinstance(event.widget, BrowseRow):
+            self._selected(event.widget)
+
+    def _selected(self, row: "BrowseRow | None") -> None:
+        self._row = row.row if row is not None else None
+        self._show_body()
+        self._want_body()
+
+    def _show_body(self) -> None:
+        """The pane is there when the selected row has a body, and gone when it is not.
+
+        `Text` rather than a markup string, because this is somebody else's log and
+        a bracket in it is a bracket. `no_wrap` with a pane that scrolls sideways,
+        because a diff re-wrapped at this width stops lining its markers up at the
+        moment somebody is relying on them.
+        """
+        body = self._row.detail_body if self._row is not None else ""
+        pane = self.query_one("#browse-detail", ScrollableContainer)
+        pane.set_class(not body, "-empty")
+        if not body:
+            return
+        self.query_one("#detail-body", Static).update(Text(body, no_wrap=True))
+        pane.scroll_home(animate=False)
+
+    def _want_body(self) -> None:
+        """Ask for a body this listing did not carry, once the selection has settled."""
+        self._stop_waiting()
+        if not self._on_demand or self._row is None:
+            return
+        if self._row.detail_body or self._row.id == self._wanted:
+            return
+        self._wait = self.set_timer(DETAIL_DELAY, self._ask_for_body)
+
+    def _ask_for_body(self) -> None:
+        self._wait = None
+        if self._row is None or self._row.detail_body:
+            return
+        self._wanted = self._row.id
+        self._settle(Detailed(self._row.id))
+
+    def _stop_waiting(self) -> None:
+        if self._wait is not None:
+            self._wait.stop()
+            self._wait = None
+
+    def on_unmount(self) -> None:
+        """A screen that has gone cannot be the one a request was armed for."""
+        self._stop_waiting()
 
     def _mark_tree(self) -> None:
         for row in self.query(TreeRow):

@@ -4,9 +4,10 @@ import asyncio
 import json
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 from textual.app import App
-from textual.widgets import Static
+from textual.widgets import Input, Static, TextArea
 
 from company_tui.capabilities.advanced import BROWSER_KEY
 from company_tui.capabilities.script_actions import answers
@@ -19,6 +20,7 @@ from company_tui.domain.interactive import (
     Action,
     Ask,
     Column,
+    Detailed,
     Invoked,
     Listing,
     ListView,
@@ -30,6 +32,7 @@ from company_tui.domain.interactive import (
     ViewSpec,
     acted,
     answered,
+    detail,
     opened,
     parse,
     said,
@@ -38,6 +41,7 @@ from company_tui.domain.options import Option, OptionKind
 from company_tui.domain.script_config import ScriptAction, actions_from
 from company_tui.domain.settings_document import read_document, write_document
 from company_tui.infrastructure.config import render
+from company_tui.presentation import browser_screen
 from company_tui.presentation.browser_screen import (
     ActionChip,
     BrowseRow,
@@ -46,6 +50,7 @@ from company_tui.presentation.browser_screen import (
     _depths,
 )
 from company_tui.presentation.plain_console import PlainConsole
+from company_tui.presentation.screens import InputScreen
 from company_tui.templates.scripts import _list_view, browses
 
 COLUMNS = [
@@ -805,3 +810,419 @@ class TheConsolePutsItUpAndTakesItDown(unittest.IsolatedAsyncioTestCase):
             return "finished"
 
         self.assertEqual("finished", await self._browse(work, release=gate))
+
+
+BODY = "diff --git a/x b/x\n@@ -1,2 +1,3 @@\n-was\n+is\n"
+
+
+class TheBodyOnARow(unittest.TestCase):
+    """`detail_body`: plain text, sent with the listing, display only."""
+
+    def test_a_row_carries_its_body(self):
+        listing = parse(_rows(rows=[{"id": "r", "label": "A", "detail_body": BODY}]))
+        self.assertEqual(BODY, listing.rows[0].detail_body)
+
+    def test_a_row_without_one_has_none(self):
+        self.assertEqual("", parse(_rows(rows=[{"id": "r", "label": "A"}])).rows[0].detail_body)
+
+    def test_a_body_that_is_not_text_is_no_body_rather_than_a_broken_listing(self):
+        for body in (12, None, ["a", "b"], {"text": "a"}, True):
+            listing = parse(_rows(rows=[{"id": "r", "label": "A", "detail_body": body}]))
+            self.assertIsNotNone(listing, repr(body))
+            self.assertEqual("", listing.rows[0].detail_body, repr(body))
+
+    def test_a_toolbox_without_the_pane_loses_the_pane_and_not_the_listing(self):
+        # Which is the whole of how this degrades: an older build reads the row,
+        # ignores the key it has never heard of, and shows the row.
+        listing = parse(_rows(rows=[{"id": "r", "label": "A", "detail_body": BODY}]))
+        self.assertEqual(("r",), tuple(row.id for row in listing.rows))
+
+    def test_a_body_past_the_payload_limit_is_text_like_any_other_line(self):
+        # What `on-demand` exists to stay under.
+        huge = json.dumps({"rows": [{"id": "r", "label": "A", "detail_body": "x" * 600_000}]})
+        self.assertIsNone(parse(f"{ROWS} {huge}"))
+
+
+class TheBodiesAreFetched(unittest.TestCase):
+    def test_a_listing_says_so_with_on_demand(self):
+        self.assertTrue(parse(_rows(breadcrumb=["a"], rows=[], detail="on-demand")).on_demand)
+
+    def test_anything_else_asks_for_nothing(self):
+        for value in (None, "inline", "ondemand", "On-Demand", True, 1, ["on-demand"]):
+            listing = parse(_rows(breadcrumb=["a"], rows=[], detail=value))
+            self.assertFalse(listing.on_demand, repr(value))
+
+    def test_a_listing_that_never_heard_of_it_asks_for_nothing(self):
+        self.assertFalse(parse(_rows(breadcrumb=["a"], rows=[])).on_demand)
+
+    def test_the_request_is_one_line_naming_the_row(self):
+        self.assertEqual("@dti:detail r-1", detail("r-1"))
+        self.assertEqual("@dti:detail r-1", said(Detailed("r-1")))
+
+
+class TheNote(unittest.TestCase):
+    """`multiline` on the ask, and the one line its answer comes back on."""
+
+    def test_a_question_asks_for_a_note_by_saying_so(self):
+        asked = parse(f"{ASK} " + json.dumps({"prompt": "Review", "multiline": True}))
+        self.assertTrue(asked.multiline)
+
+    def test_anything_but_a_real_true_is_the_box_it_always_was(self):
+        for value in (None, "true", 1, 0, "yes"):
+            asked = parse(f"{ASK} " + json.dumps({"prompt": "Review", "multiline": value}))
+            self.assertFalse(asked.multiline, repr(value))
+        self.assertFalse(parse(f"{ASK} " + json.dumps({"prompt": "Review"})).multiline)
+
+    def test_newlines_come_back_written_out(self):
+        self.assertEqual("@dti:answer one\\ntwo", answered("one\ntwo"))
+
+    def test_the_line_endings_a_terminal_gives_it_are_all_the_same_one(self):
+        self.assertEqual("@dti:answer a\\nb", answered("a\r\nb"))
+        self.assertEqual("@dti:answer a\\nb", answered("a\rb"))
+
+    def test_a_backslash_is_doubled_so_the_escape_can_be_undone(self):
+        # Without this `C:\new` arrives as two lines, which is the bug this rule
+        # exists to prevent rather than a theoretical one.
+        self.assertEqual("@dti:answer C:\\\\new", answered("C:\\new"))
+
+    def test_both_together_survive_a_round_trip(self):
+        original = "Looks right.\nBut check C:\\new and a\\\\b."
+        line = answered(original)
+        self.assertNotIn("\n", line)
+        self.assertEqual(original, _unescaped(line.partition(" ")[2]))
+
+    def test_nothing_typed_is_still_a_cancel(self):
+        self.assertEqual("@dti:answer", answered(""))
+
+
+def _unescaped(text: str) -> str:
+    """What a command does with an answer: left to right, once.
+
+    Written out here because a two-pass replace in the wrong order turns the
+    escaped `C:\\new` back into a newline, which is the trap worth having a test
+    stand over.
+    """
+    out, index = [], 0
+    while index < len(text):
+        if text[index] == "\\" and index + 1 < len(text):
+            out.append("\n" if text[index + 1] == "n" else text[index + 1])
+            index += 2
+            continue
+        out.append(text[index])
+        index += 1
+    return "".join(out)
+
+
+class TheDetailPane(unittest.IsolatedAsyncioTestCase):
+    """It is there when the selected row has a body, and gone when it does not."""
+
+    class _App(App):
+        pass
+
+    ROWS = (
+        Row("r-1", "one", cells={"name": "one"}, detail_body=BODY),
+        Row("r-2", "two", cells={"name": "two"}),
+    )
+    PANE = Listing(breadcrumb=("Root",), pane=True, rows=ROWS)
+
+    async def _open(self, pilot, app, listing):
+        screen = BrowserScreen("Store")
+        await app.push_screen(screen)
+        await pilot.pause()
+        app.run_worker(screen.browse(listing))
+        for _ in range(4):
+            await pilot.pause()
+        return screen
+
+    @staticmethod
+    def _pane(screen):
+        return screen.query_one("#browse-detail")
+
+    @staticmethod
+    def _body(screen):
+        return str(screen.query_one("#detail-body", Static).render())
+
+    async def test_the_pane_shows_the_selected_rows_body(self):
+        app = self._App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = await self._open(pilot, app, self.PANE)
+            self.assertFalse(self._pane(screen).has_class("-empty"))
+            self.assertEqual(BODY.rstrip("\n"), self._body(screen).rstrip("\n"))
+
+    async def test_it_goes_when_the_selected_row_has_none(self):
+        app = self._App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = await self._open(pilot, app, self.PANE)
+            await pilot.press("down")
+            for _ in range(4):
+                await pilot.pause()
+            self.assertTrue(self._pane(screen).has_class("-empty"))
+
+    async def test_a_listing_where_nothing_has_a_body_never_shows_it(self):
+        app = self._App()
+        plain = Listing(breadcrumb=("Root",), pane=True, rows=(Row("a", "A"),))
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = await self._open(pilot, app, plain)
+            self.assertTrue(self._pane(screen).has_class("-empty"))
+
+    async def test_the_body_is_shown_as_it_arrived_and_not_as_markup(self):
+        # Somebody else's log. A bracket in it is a bracket.
+        marked = "[bold]not markup[/] and $not-a-variable"
+        app = self._App()
+        listing = Listing(
+            breadcrumb=("Root",), pane=True,
+            rows=(Row("a", "A", detail_body=marked),),
+        )
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = await self._open(pilot, app, listing)
+            self.assertEqual(marked, self._body(screen))
+
+    async def test_a_long_line_is_not_re_wrapped(self):
+        # A diff re-wrapped at the pane's width stops lining its markers up, which
+        # is the moment somebody is relying on them.
+        long = "+" + "x" * 400
+        app = self._App()
+        listing = Listing(
+            breadcrumb=("Root",), pane=True, rows=(Row("a", "A", detail_body=long),)
+        )
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = await self._open(pilot, app, listing)
+            self.assertEqual(long, self._body(screen))
+            self.assertGreater(screen.query_one("#detail-body").size.width, 100)
+
+
+class AskingForABody(unittest.IsolatedAsyncioTestCase):
+    """`on-demand`: selected, then asked for, then answered with a fresh listing."""
+
+    class _App(App):
+        pass
+
+    TICK = 0.02
+    WAITED = 0.3
+    UNHURRIED = 0.5
+    """Long enough that a key pressed during the app's own start-up still lands
+    inside the window, for the tests about which row settles."""
+
+    ROWS = (Row("r-1", "one", cells={"name": "one"}), Row("r-2", "two", cells={"name": "two"}))
+
+    def _listing(self, **changes):
+        return replace(
+            Listing(breadcrumb=("Root",), pane=True, rows=self.ROWS, on_demand=True),
+            **changes,
+        )
+
+    async def _asked(self, listing, *, press=(), wait=None, delay=None):
+        app = self._App()
+        answer = {}
+        with patch.object(browser_screen, "DETAIL_DELAY", delay or self.TICK):
+            async with app.run_test(size=(100, 24)) as pilot:
+                screen = BrowserScreen("Store")
+                await app.push_screen(screen)
+                await pilot.pause()
+
+                async def ask():
+                    answer["did"] = await screen.browse(listing)
+
+                app.run_worker(ask())
+                for _ in range(40):
+                    await pilot.pause()
+                    if list(screen.query(BrowseRow)):
+                        break
+                for key in press:
+                    await pilot.press(key)
+                await pilot.pause(self.WAITED if wait is None else wait)
+                await pilot.pause()
+        return answer
+
+    async def test_a_selected_row_with_no_body_is_asked_about(self):
+        answer = await self._asked(self._listing())
+        self.assertEqual(Detailed("r-1"), answer.get("did"))
+
+    async def test_it_is_the_row_the_user_actually_settled_on(self):
+        # Pressed inside the window, so the row passed over is never asked about.
+        answer = await self._asked(
+            self._listing(), press=("down",), delay=self.UNHURRIED, wait=1.0
+        )
+        self.assertEqual(Detailed("r-2"), answer.get("did"))
+
+    async def test_a_row_whose_body_came_with_the_listing_is_not_asked_about(self):
+        rows = (replace(self.ROWS[0], detail_body=BODY), self.ROWS[1])
+        answer = await self._asked(self._listing(rows=rows))
+        self.assertNotIn("did", answer)
+
+    async def test_a_listing_that_did_not_ask_for_it_asks_for_nothing(self):
+        answer = await self._asked(self._listing(on_demand=False))
+        self.assertNotIn("did", answer)
+
+    async def test_the_row_still_selected_is_not_asked_about_twice(self):
+        # The listing that answers a request redraws the pane the request came
+        # from. Asking again there is an infinite exchange, and it is the one this
+        # has to be proof against.
+        app = self._App()
+        seen = []
+        with patch.object(browser_screen, "DETAIL_DELAY", self.TICK):
+            async with app.run_test(size=(100, 24)) as pilot:
+                screen = BrowserScreen("Store")
+                await app.push_screen(screen)
+                await pilot.pause()
+
+                async def walk():
+                    for _ in range(3):
+                        seen.append(await screen.browse(self._listing()))
+
+                app.run_worker(walk())
+                for _ in range(4):
+                    await pilot.pause()
+                await pilot.pause(self.WAITED)
+                await pilot.pause(self.WAITED)
+        self.assertEqual([Detailed("r-1")], [one for one in seen if one is not None])
+
+    async def test_coming_back_to_a_row_asks_again(self):
+        # Deliberate. What is remembered is the row being looked at, not every row
+        # ever looked at: a body can change, and a set of ids that outlived the
+        # place they came from would answer for a different listing's "1".
+        app = self._App()
+        seen = []
+        with patch.object(browser_screen, "DETAIL_DELAY", self.TICK):
+            async with app.run_test(size=(100, 24)) as pilot:
+                screen = BrowserScreen("Store")
+                await app.push_screen(screen)
+                await pilot.pause()
+
+                async def walk():
+                    for _ in range(4):
+                        seen.append(await screen.browse(self._listing()))
+
+                app.run_worker(walk())
+                for _ in range(4):
+                    await pilot.pause()
+                await pilot.pause(self.WAITED)
+                await pilot.press("down")
+                await pilot.pause(self.WAITED)
+                await pilot.press("up")
+                await pilot.pause(self.WAITED)
+        self.assertEqual(
+            [Detailed("r-1"), Detailed("r-2"), Detailed("r-1")],
+            [one for one in seen if one is not None],
+        )
+
+
+class TheUserKeepsTheirPlace(unittest.IsolatedAsyncioTestCase):
+    """A refresh puts them back on the row they were on, by its id."""
+
+    class _App(App):
+        pass
+
+    ROWS = (Row("a", "A"), Row("b", "B"), Row("c", "C"))
+
+    async def test_a_redraw_restores_the_focused_row(self):
+        # Without it `on-demand` cannot work at all: the listing that answers a
+        # selection would move the selection, which would ask again.
+        app = self._App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = BrowserScreen("Store")
+            await app.push_screen(screen)
+            await pilot.pause()
+            first = Listing(breadcrumb=("Root",), pane=True, rows=self.ROWS)
+
+            async def walk():
+                await screen.browse(first)
+                await screen.browse(replace(first, hint="again"))
+
+            app.run_worker(walk())
+            for _ in range(4):
+                await pilot.pause()
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("enter")
+            for _ in range(6):
+                await pilot.pause()
+            self.assertIsInstance(screen.focused, BrowseRow)
+            self.assertEqual("c", screen.focused.row.id)
+
+    async def test_a_row_that_is_gone_falls_back_to_the_first(self):
+        app = self._App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = BrowserScreen("Store")
+            await app.push_screen(screen)
+            await pilot.pause()
+            first = Listing(breadcrumb=("Root",), pane=True, rows=self.ROWS)
+
+            async def walk():
+                await screen.browse(first)
+                await screen.browse(replace(first, rows=(Row("z", "Z"),)))
+
+            app.run_worker(walk())
+            for _ in range(4):
+                await pilot.pause()
+            await pilot.press("down")
+            await pilot.press("enter")
+            for _ in range(6):
+                await pilot.pause()
+            self.assertEqual("z", screen.focused.row.id)
+
+
+class TheNoteDialog(unittest.IsolatedAsyncioTestCase):
+    """One field or many lines, and the same dialog either way."""
+
+    class _App(App):
+        pass
+
+    async def _shown(self, multiline):
+        app = self._App()
+        async with app.run_test(size=(100, 24)) as pilot:
+            screen = InputScreen("Review note", "acc", "start", multiline)
+            await app.push_screen(screen)
+            for _ in range(3):
+                await pilot.pause()
+            return screen, list(screen.query(TextArea)), list(screen.query(Input))
+
+    async def test_a_note_is_a_text_area_and_a_name_is_a_line(self):
+        _, areas, inputs = await self._shown(True)
+        self.assertEqual(1, len(areas))
+        self.assertEqual([], inputs)
+        _, areas, inputs = await self._shown(False)
+        self.assertEqual([], areas)
+        self.assertEqual(1, len(inputs))
+
+    async def test_a_note_opens_on_what_the_command_already_had(self):
+        _, areas, _ = await self._shown(True)
+        self.assertEqual("start", areas[0].text)
+
+    async def test_what_was_typed_comes_back_whole(self):
+        app = self._App()
+        answer = {}
+        async with app.run_test(size=(100, 24)) as pilot:
+            async def ask():
+                answer["text"] = await app.push_screen_wait(
+                    InputScreen("Review note", "acc", "", True)
+                )
+
+            app.run_worker(ask())
+            for _ in range(4):
+                await pilot.pause()
+            app.screen.query_one(TextArea).text = "  first line\nsecond line\n\n"
+            await pilot.pause()
+            await pilot.press("tab")
+            await pilot.press("enter")
+            for _ in range(4):
+                await pilot.pause()
+        self.assertEqual("  first line\nsecond line", answer.get("text"))
+
+    async def test_escape_is_still_a_cancel(self):
+        app = self._App()
+        answer = {}
+        async with app.run_test(size=(100, 24)) as pilot:
+            async def ask():
+                answer["text"] = await app.push_screen_wait(
+                    InputScreen("Review note", "acc", "", True)
+                )
+
+            app.run_worker(ask())
+            for _ in range(4):
+                await pilot.pause()
+            await pilot.press("escape")
+            for _ in range(4):
+                await pilot.pause()
+        self.assertEqual("", answer.get("text"))
+        self.assertEqual("@dti:answer", answered(answer["text"]))

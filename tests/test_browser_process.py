@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from company_tui.domain.interactive import (
+    Detailed,
     Invoked,
     ListView,
     Opened,
@@ -217,3 +218,175 @@ class AnOlderToolboxRunsItAsAScript(_Run):
         self.assertIn("Reports/  Archive/", printed)
         self.assertNotIn("@dti:", printed)
         self.assertEqual(0, result.exit_code)
+
+
+DETAIL_CHILD = '''
+import json, os, sys
+
+if os.environ.get("DTI_INTERACTIVE") != "1":
+    print("9f21ab4  Fix totals")
+    raise SystemExit(0)
+
+
+def send(verb, payload=None):
+    print(verb if payload is None else verb + " " + json.dumps(payload))
+    sys.stdout.flush()
+
+
+def unescape(text):
+    out, i = [], 0
+    while i < len(text):
+        if text[i] == "\\\\" and i + 1 < len(text):
+            out.append("\\n" if text[i + 1] == "n" else text[i + 1])
+            i += 2
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+BODY = "diff --git a/x b/x\\n@@ -1,2 +1,3 @@\\n-was\\n+is"
+
+
+def listing(body_for=""):
+    return {"breadcrumb": ["main"], "detail": "on-demand",
+            "actions": [{"id": "note", "label": "Note", "key": "n"}],
+            "rows": [{"id": "c1", "cells": {"sha": "9f21ab4"},
+                      "detail_body": BODY if body_for == "c1" else ""},
+                     {"id": "c2", "cells": {"sha": "3d0e117"},
+                      "detail_body": BODY if body_for == "c2" else ""}]}
+
+
+send("@dti:view", {"columns": [{"key": "sha", "label": "Commit", "grow": True}]})
+send("@dti:rows", listing())
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    verb, _, rest = line.strip().partition(" ")
+    if verb == "@dti:detail":
+        print("ASKED " + rest)
+        sys.stdout.flush()
+        send("@dti:rows", listing(rest))
+        continue
+    if verb == "@dti:action":
+        send("@dti:ask", {"prompt": "Review note", "value": "", "multiline": True})
+        print("NOTE " + repr(unescape(sys.stdin.readline().strip().partition(" ")[2])))
+        sys.stdout.flush()
+        send("@dti:end")
+        break
+    # Anything else - a pick from a toolbox with no browser - is an answer this
+    # command is done with. Looping on a verb it does not know is how a command
+    # parks on a read nothing will ever satisfy (docs/pitfalls.md 9.3).
+    print("REPLY " + verb + " | " + rest)
+    sys.stdout.flush()
+    send("@dti:end")
+    break
+'''
+
+NOTE = "Looks right.\nBut check C:\\new too."
+
+
+class _Detail(unittest.TestCase):
+    def setUp(self):
+        self.folder = TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.lines: list[str] = []
+        path = Path(self.folder.name) / "commits.py"
+        path.write_text(DETAIL_CHILD, encoding="utf-8")
+        self.command = (sys.executable, str(path))
+
+    def _stream(self, view):
+        return asyncio.run(
+            LocalProcessRunner().stream(self.command, self.lines.append, None, view)
+        )
+
+
+class _Asking(_Browser):
+    """A browser that settles on rows, then does something."""
+
+    def __init__(self, does=(), note=""):
+        super().__init__(does)
+        self.note = note
+        self.bodies = []
+
+    async def browse(self, listing):
+        self.panes.append(listing)
+        self.bodies.append({row.id: row.detail_body for row in listing.rows})
+        return self.does.pop(0) if self.does else None
+
+    async def ask(self, question):
+        self.asked.append(question)
+        return self.note
+
+
+class BodiesOnDemand(_Detail):
+    """Selected, asked for, and answered with a listing carrying that row's body."""
+
+    def test_the_request_goes_out_naming_the_row(self):
+        self._stream(_Asking(does=[Detailed("c2")]))
+        self.assertIn("ASKED c2", self.lines)
+
+    def test_the_answer_is_a_listing_with_that_body_in_it(self):
+        view = _Asking(does=[Detailed("c2")])
+        self._stream(view)
+        self.assertEqual(2, len(view.bodies))
+        self.assertEqual({"c1": "", "c2": ""}, view.bodies[0])
+        self.assertTrue(view.bodies[1]["c2"].startswith("diff --git"))
+        self.assertEqual("", view.bodies[1]["c1"])
+
+    def test_the_listing_says_the_bodies_are_asked_for(self):
+        view = _Asking(does=[Detailed("c1")])
+        self._stream(view)
+        self.assertTrue(view.panes[0].on_demand)
+
+    def test_a_body_survives_the_wire_with_its_lines_intact(self):
+        view = _Asking(does=[Detailed("c1")])
+        self._stream(view)
+        self.assertEqual(4, len(view.bodies[1]["c1"].splitlines()))
+
+    def test_it_is_the_ordinary_rows_verb_that_answers(self):
+        # Not a verb of its own: the reply is a listing like any other, so a build
+        # that never heard of `@dti:detail` still draws what it is sent.
+        view = _Asking(does=[Detailed("c1")])
+        self._stream(view)
+        self.assertTrue(all(pane.pane for pane in view.panes))
+
+
+class ANoteComesBackWhole(_Detail):
+    def test_the_question_asks_for_one(self):
+        view = _Asking(does=[Invoked("note", "c1")], note=NOTE)
+        self._stream(view)
+        self.assertTrue(view.asked[0].multiline)
+
+    def test_the_newlines_and_the_backslash_both_survive(self):
+        view = _Asking(does=[Invoked("note", "c1")], note=NOTE)
+        result = self._stream(view)
+        self.assertIn("NOTE " + repr(NOTE), self.lines)
+        self.assertEqual(0, result.exit_code)
+
+    def test_it_travelled_as_exactly_one_line(self):
+        view = _Asking(does=[Invoked("note", "c1")], note=NOTE)
+        self._stream(view)
+        self.assertEqual(1, len([line for line in self.lines if line.startswith("NOTE")]))
+
+
+class AnOlderToolboxLosesThePaneAndNotTheListing(_Detail):
+    """Both halves are ignorable, and nothing about the listing depends on them."""
+
+    def test_the_rows_still_read(self):
+        view = RecordingListView(answers=["c1"])
+        result = self._stream(view)
+        self.assertEqual(("c1", "c2"), tuple(row.id for row in view.seen[0].rows))
+        self.assertEqual(0, result.exit_code)
+
+    def test_nothing_is_ever_asked_for(self):
+        self._stream(RecordingListView(answers=["c1"]))
+        self.assertFalse([line for line in self.lines if line.startswith("ASKED")])
+
+    def test_the_body_is_carried_but_never_drawn(self):
+        # It is on the row, because a row is what it is part of. Nothing reads it.
+        view = RecordingListView(answers=["c1"])
+        self._stream(view)
+        self.assertEqual("", view.seen[0].rows[0].detail_body)

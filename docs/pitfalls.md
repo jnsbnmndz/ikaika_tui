@@ -379,3 +379,26 @@ answered. It looks exactly like a status that is not being updated.
 `hint`. And a status has to outlive the listing it arrived with, or the ordering that is
 correct would clear itself: `@dti:rows` replaces the status line only when it carries a
 `hint` of its own.
+
+### 9.6 A listing that answers a selection can re-ask the question it answered
+
+`"detail": "on-demand"` is the one place where DTI writes to the child because of where the
+*focus* is rather than because of something the user committed to. The answer is a fresh
+`@dti:rows`, which redraws the pane — and a redraw that put the focus back on the first row
+would move the selection, which asks about the new row, which redraws, forever. No error,
+no traceback: two processes talking to each other as fast as they can while the screen
+flickers.
+
+**Rule.** Two things, and both are load-bearing. A redraw restores the focused row **by id**
+(`_draw`), so the answer to a request leaves the user where the request came from. And a row
+already asked about is not asked again while it is still the one selected (`_wanted`), so a
+command that answers "there is no body for that" ends the exchange instead of continuing it.
+`tests/test_browser.py` stands over both.
+
+The request also waits for the selection to settle (`DETAIL_DELAY`) rather than firing per
+focus change, because a held arrow key is otherwise a round trip per row.
+
+One cost is accepted rather than fixed: `browse()` is not awaiting anything between
+returning a request and the listing that answers it, so a key pressed in that window is
+dropped. Navigation still works — the arrows are bindings on the row — and the fix, if this
+ever bites, is a stash tied to the listing it was pressed against, not a queue.

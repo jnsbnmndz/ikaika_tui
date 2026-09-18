@@ -1,6 +1,7 @@
 # 6. A command may be a place rather than a run, and the toolbox knows nothing about where
 
-> **Status: ACCEPTED (2026-09-18).** Protocol `domain/interactive.py`, screen
+> **Status: ACCEPTED (2026-09-18), amended 2026-09-18** with the detail pane and the
+> multi-line prompt. Protocol `domain/interactive.py`, screen
 > `presentation/browser_screen.py`, gate `templates/scripts.py: browses`, launch
 > `presentation/tui_console.py: browse`.
 
@@ -83,6 +84,69 @@ that differs is the verb of the line coming back — `@dti:pick`, `@dti:open` or
 for both, and cannot be written to require the browser and break without it. That is the
 same rule as the countdown, for the same reason.
 
+### A row may have a body, and it is shown exactly as it was sent
+
+Plenty of things you browse have something worth reading in place — a record's fields, a
+document's text, a change's diff, a run's log — and this view has nowhere else to put one:
+there is no terminal on it and the status line is a line. `detail_body` is that place.
+
+**Plain text**, because a pane that rendered markup would be making typographic decisions
+about content whose meaning it does not know; a command wanting emphasis can spend a blank
+line on it. It reaches the widget as a `rich.text.Text` rather than a markup string for the
+same reason, one level down: this is somebody else's log, and a bracket in it is a bracket.
+
+**It scrolls and it never re-wraps.** This is not a cosmetic preference. A unified diff
+re-wrapped at the pane's width stops lining its `+`/`-` column up and becomes unreadable at
+the exact moment somebody is relying on it; log output, fixed-width tables and stack traces
+all fail the same way. So the rule is general — content appears as it was sent, and the pane
+scrolls sideways — rather than a special case for any one of them.
+
+**Display only.** Nothing in it is editable. Changing something stays an action plus a
+confirmation, so there is exactly one path by which a command learns the user wants a
+change, which is what keeps the confirmation rule above meaningful.
+
+### Large bodies are asked for, and that has to terminate
+
+A listing carrying every row's log inline is a listing that stops arriving: `MAX_PAYLOAD`
+applies to these lines like any other, and staying under it is the whole point of
+`"detail": "on-demand"`. DTI then writes `@dti:detail <rowId>` and the command answers with
+a fresh `@dti:rows` — the ordinary verb, so a build that never heard of the request still
+draws what it is sent.
+
+The answer redraws the pane the request came from, so two things have to hold or the
+exchange never ends: the redraw puts the focus back on the row it was on **by id**, and a
+row already asked about is not asked again while it is still the one selected. What is
+remembered is the row being looked at rather than every row ever looked at — a body can
+change, and a set of ids outliving the place it came from would answer for a different
+listing's "1".
+
+The request waits for the selection to **settle** (`DETAIL_DELAY`). A held arrow key walks a
+dozen rows, and a request per row is a dozen round trips for eleven bodies nobody looked at.
+
+### One text field, and it may be a note
+
+`"multiline": true` on `@dti:ask`. A note, a description or a review comment is not a
+filename, and these screens need to take one back.
+
+The answer stays **one line**, which is the invariant the whole protocol rests on: newlines
+are written `\n`, and backslashes are doubled. Both, not just the newline — escaping one
+without the other is not reversible, and `C:\new` would arrive as two lines. `@dti:ask` and
+`@dti:answer` were introduced in this same change, so there is no command anywhere relying
+on the unescaped form; one rule for both shapes is cheaper to hold than two.
+
+It is submitted by Tab and then the button rather than by a chord. Tab is already what a
+`TextArea` does with the focus, and every chord free enough to bind here is one some
+terminal cannot send.
+
+### Neither is a switch of its own
+
+Both sit behind `browser_view`. They are parts of that view, not features beside it, and a
+third flag would be a third thing to explain. Both are ignorable in the usual way: a command
+sending `detail_body` to a build without the pane loses the pane and not the listing, and one
+sending `multiline` to an older build gets a single-line box. There is no way to detect
+either, because a command that can detect them is one somebody writes a branch against, and
+the degraded path stops being exercised the day after.
+
 ## Alternatives rejected
 
 - **A verb per shape** — `@dti:tree`, `@dti:table`, `@dti:bar`. Three parses, three ways to
@@ -98,6 +162,13 @@ same rule as the countdown, for the same reason.
   and the surface changes under the user.
 - **Telling the command which surface it has.** Then a command can require the browser, and
   the degraded path stops being a path anything takes.
+- **Re-wrapping the detail pane to its width.** It is what a text pane usually does, and it
+  destroys the one thing a diff, a log or a stack trace is read for.
+- **Rendering `detail_body` as markup.** Then the toolbox is deciding what a `[` in somebody
+  else's log means.
+- **Making the pane editable.** It would be a second path by which a command learns the user
+  wants a change, and the confirmation rule only means something while there is one.
+- **A `detail_pane` or `multiline` setting of its own.** Three switches for one view.
 
 ## What would change this
 

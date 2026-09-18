@@ -188,6 +188,59 @@ files:
 - **`@dti:rows` blocks until the user acts**, so anything the command wants shown beside it
   goes first. A status set that way stays up until it is replaced.
 
+Plenty of things you browse also have a body worth reading in place — a record's fields, a
+document's text, a change's diff, a run's log. A row may carry one:
+
+```
+@dti:rows {"breadcrumb":["main"],
+           "rows":[{"id":"c1","cells":{"sha":"9f21ab4"},
+                    "detail_body":"diff --git a/x b/x\n@@ -1,2 +1,3 @@\n-was\n+is"}]}
+```
+
+It appears in a pane beside the contents while that row is selected, and the pane is gone
+when the selected row has none. Two things about it are deliberate:
+
+- **Plain text.** A pane that rendered markup would be making typographic decisions about
+  content whose meaning it does not know. A command that wants emphasis can spend a blank
+  line on it.
+- **It scrolls and it never re-wraps.** Content appears exactly as it was sent, with
+  horizontal scrolling where lines are too long. This is not cosmetic: a unified diff
+  re-wrapped at the pane's width stops lining its `+`/`-` column up and becomes unreadable
+  at the moment somebody is relying on it, and the same is true of log output, fixed-width
+  tables and stack traces.
+
+A listing whose bodies are too big to send inline says `"detail": "on-demand"` instead and
+carries none. DTI then writes `@dti:detail <rowId>` once the selection settles on a row it
+has no body for, and the command answers with a fresh `@dti:rows` carrying it. Absent,
+nothing is requested and nothing is shown. `MAX_PAYLOAD` applies to these lines like any
+other, which is what this exists to stay under.
+
+For a value that is a note rather than a name, `@dti:ask` takes `"multiline": true`:
+
+```
+@dti:ask {"prompt":"Review note","value":"","multiline":true}
+```
+
+The answer comes back on today's single line, with newlines written `\n` and backslashes
+doubled. **Decode it left to right, once** — or with your language's string unescape. A
+two-pass replace in the wrong order turns `C:\new` into a newline, which is why the
+backslash is escaped at all:
+
+```python
+out, i = [], 0
+while i < len(text):
+    if text[i] == "\\" and i + 1 < len(text):
+        out.append("\n" if text[i + 1] == "n" else text[i + 1]); i += 2; continue
+    out.append(text[i]); i += 1
+```
+
+Both of these are parts of the browser, not features of their own: they are behind the same
+`browser_view` switch and there is no third flag. Both are ignorable — a command sending
+`detail_body` to a build without the pane loses the pane, not the listing, and one sending
+`multiline` to an older build gets a single-line box. And `detail_body` is **display only**:
+nothing in it is editable, so changing something is still an action plus the command's own
+confirmation, which is what keeps that rule worth having.
+
 With `browser_view` off — or on an older toolbox — a `"view": "browser"` command still runs
 as an ordinary script: the form and terminal appear, `@dti:view`, `@dti:status` and
 `@dti:ask` are printed as text, and `@dti:rows` is the pick-list it always was (a row with

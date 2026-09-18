@@ -592,9 +592,13 @@ class TuiConsole(App):
         if self._browser_task is not None:
             self._browser_task.cancel()
 
-    async def ask_text(self, prompt: str, value: str = "") -> str:
+    async def ask_text(
+        self, prompt: str, value: str = "", multiline: bool = False
+    ) -> str:
         """One text field over whatever is up. Empty is a cancel, and says so."""
-        return await self.push_screen_wait(InputScreen(prompt, self.trail_label(), value))
+        return await self.push_screen_wait(
+            InputScreen(prompt, self.trail_label(), value, multiline)
+        )
 
     async def show_rows(self, listing: Listing) -> str | None:
         """Put a listing up and wait. The pick is the row's own id, or None for Esc.
@@ -1362,4 +1366,6 @@ class _BrowserListView(_PanelListView):
         self._screen.say(status)
 
     async def ask(self, question) -> str | None:
-        return await self._console.ask_text(question.prompt, question.value)
+        return await self._console.ask_text(
+            question.prompt, question.value, question.multiline
+        )

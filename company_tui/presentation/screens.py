@@ -17,7 +17,7 @@ from textual.message import Message
 from textual.screen import ModalScreen, Screen, ScreenResultType
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Input, Static, TextArea
 
 from company_tui.domain.interactive import Listing, Row
 from company_tui.presentation.branding import (
@@ -541,33 +541,67 @@ class ConfirmScreen(DialogScreen[bool]):
 
 
 class InputScreen(DialogScreen[str]):
+    """One value typed in. A line by default; a note where the caller asks for one.
+
+    A note is submitted by Tab and then the button rather than by a chord: Tab is
+    what a `TextArea` already does with the focus, and every chord free enough to
+    bind here is one some terminal cannot send.
+    """
+
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, prompt: str, trail: str = "", value: str = "") -> None:
-        super().__init__()
+    DEFAULT_CSS = """
+    InputScreen.-note > Container {
+        width: 84;
+    }
+
+    InputScreen #input-note {
+        width: 100%;
+        height: 14;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(
+        self, prompt: str, trail: str = "", value: str = "", multiline: bool = False
+    ) -> None:
+        super().__init__(classes="-note" if multiline else "")
         self._prompt = prompt
         self._trail = trail
         self._value = value
+        self._multiline = multiline
 
     def compose(self) -> ComposeResult:
         with Container() as dialog:
             dialog.border_title = self._trail or "Input"
             yield Static(self._prompt, id="input-prompt", classes="dialog--prompt")
-            yield Input(self._value, id="input-value")
+            if self._multiline:
+                yield TextArea(self._value, id="input-note")
+            else:
+                yield Input(self._value, id="input-value")
             with Horizontal(classes="dialog--actions"):
                 with Horizontal(classes="dialog--escape"):
                     yield KeyHint("Esc", "Go back", dim=True)
+                    if self._multiline:
+                        yield KeyHint("Tab", "Then Submit", dim=True)
                 yield Button("Submit", id="submit", variant="primary", flat=True)
 
     def on_mount(self) -> None:
-        self.query_one(Input).focus()
+        self.query_one("#input-note" if self._multiline else "#input-value").focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit":
-            self.dismiss(self.query_one("#input-value", Input).value.strip())
+            self.dismiss(self._typed())
+
+    def _typed(self) -> str:
+        """What is in the field. A note keeps its own indentation and loses only the
+        blank lines somebody left around it."""
+        if self._multiline:
+            return self.query_one("#input-note", TextArea).text.strip(BLANK_ENDS)
+        return self.query_one("#input-value", Input).value.strip()
 
     def action_cancel(self) -> None:
         self.dismiss("")
@@ -730,6 +764,9 @@ ROW_FALLBACK = "·"
 
 `kind` is presentation only and a command may invent any word for it, so an
 unknown one has to render as something rather than as nothing."""
+
+BLANK_ENDS = chr(13) + chr(10)
+"""The line endings a note loses at its ends, and nowhere else in it."""
 
 PICK_TITLE = "Choose"
 PICK_EMPTY = "Nothing to choose from."

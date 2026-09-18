@@ -26,9 +26,13 @@ ASK = f"{PREFIX}ask"
 OPEN = f"{PREFIX}open"
 ACTION = f"{PREFIX}action"
 ANSWER = f"{PREFIX}answer"
+DETAIL = f"{PREFIX}detail"
 """The browser's half. Understood only where one can be drawn; text everywhere else."""
 
 ALIGNS = ("left", "right", "center")
+ON_DEMAND = "on-demand"
+"""What a listing's `detail` says to have bodies asked for rather than sent."""
+
 BROWSER = "browser"
 """What a manifest's `view` says to get one."""
 
@@ -50,6 +54,14 @@ class Row:
 
     A row carrying cells and no label of its own is labelled by its first cell, so
     the same row is still a readable line where there is no table to put it in."""
+
+    detail_body: str = ""
+    """This row's body, plain text, for the pane beside the table. Display only.
+
+    Plain because a pane that rendered markup would be making typographic decisions
+    about content whose meaning it does not know, and because it is shown exactly
+    as it arrived - a diff, a log or a stack trace re-wrapped at the pane's width
+    is unreadable at the moment somebody is relying on it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,10 +121,20 @@ class Ask:
     prompt: str = ""
     value: str = ""
 
+    multiline: bool = False
+    """Whether a note rather than a name. Absent is exactly the single-line box."""
+
 
 @dataclass(frozen=True, slots=True)
 class Opened:
     """The user entered a row."""
+
+    row: str
+
+
+@dataclass(frozen=True, slots=True)
+class Detailed:
+    """The user settled on a row whose body has not been sent yet."""
 
     row: str
 
@@ -135,6 +157,13 @@ class Listing:
 
     breadcrumb: tuple[str, ...] = ()
     actions: tuple[Action, ...] = ()
+
+    on_demand: bool = False
+    """Whether a row's body is asked for when it is selected rather than sent here.
+
+    What it exists for is `MAX_PAYLOAD`: a listing carrying every row's log inline
+    is a listing that stops arriving. Absent, nothing is ever requested and nothing
+    is shown that was not sent."""
 
     pane: bool = False
     """Whether this is the browser's own list rather than a question over it.
@@ -180,15 +209,35 @@ def acted(action: str, identifier: str = "") -> str:
     return f"{ACTION} {action} {identifier}".rstrip()
 
 
+def detail(identifier: str) -> str:
+    """Written back when a row is selected whose body was not sent with the listing."""
+    return f"{DETAIL} {identifier}"
+
+
 def answered(text: str) -> str:
-    """Written back to `@dti:ask`. Nothing after the verb is a cancel."""
-    return f"{ANSWER} {text}".rstrip() if text else ANSWER
+    """Written back to `@dti:ask`. Nothing after the verb is a cancel.
+
+    One message is one line, so a note comes back with its newlines written `\\n`
+    and its backslashes doubled. Both, not just the newline: escaping one without
+    the other is not reversible, and `C:\\new` would arrive as two lines.
+    """
+    if not text:
+        return ANSWER
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\n", "\\n")
+    )
+    return f"{ANSWER} {escaped}"
 
 
-def said(answer: "Opened | Invoked") -> str:
+def said(answer: "Opened | Invoked | Detailed") -> str:
     """Whichever line reports what the user just did in the browser."""
     if isinstance(answer, Opened):
         return opened(answer.row)
+    if isinstance(answer, Detailed):
+        return detail(answer.row)
     return acted(answer.action, answer.row)
 
 
@@ -223,7 +272,11 @@ def parse(line: str) -> "Event | None":
     if head == VIEW:
         return _spec(document)
     if head == ASK:
-        return Ask(prompt=_text(document, "prompt"), value=_text(document, "value"))
+        return Ask(
+            prompt=_text(document, "prompt"),
+            value=_text(document, "value"),
+            multiline=document.get("multiline") is True,
+        )
     return _listing(document)
 
 
@@ -253,6 +306,7 @@ def _listing(document: Mapping[str, Any]) -> Listing | None:
         hint=_text(document, "hint"),
         breadcrumb=crumbs,
         actions=actions,
+        on_demand=document.get("detail") == ON_DEMAND,
         pane="breadcrumb" in document,
         timeout=timeout,
         default=default,
@@ -406,6 +460,7 @@ def _row(entry: Any) -> Row | None:
         kind=_text(entry, "kind"),
         detail=_text(entry, "detail"),
         cells=cells,
+        detail_body=_text(entry, "detail_body"),
     )
 
 
@@ -470,7 +525,7 @@ class ListView(ABC):
     def describe(self, spec: ViewSpec) -> None:  # noqa: B027 - inert on purpose; see the class
         """Take the table's columns and the tree beside it."""
 
-    async def browse(self, listing: Listing) -> "Opened | Invoked | None":
+    async def browse(self, listing: Listing) -> "Opened | Invoked | Detailed | None":
         """Show where the user is; report what they did, or `None` to stop."""
         raise NotImplementedError
 
@@ -507,7 +562,7 @@ class Untimed(ListView):
     def describe(self, spec: ViewSpec) -> None:
         self.view.describe(spec)
 
-    async def browse(self, listing: Listing) -> "Opened | Invoked | None":
+    async def browse(self, listing: Listing) -> "Opened | Invoked | Detailed | None":
         return await self.view.browse(listing.untimed())
 
     def say(self, status: Status) -> None:

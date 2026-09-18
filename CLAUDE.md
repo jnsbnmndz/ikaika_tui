@@ -222,14 +222,16 @@ Expiry dismisses with the default's `id`, an ordinary `@dti:pick` and **never `N
 would kill the child instead of answering it. Any interaction ends it permanently and
 nothing re-arms it. See `docs/decisions/0005`.
 
-Five things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
+Six things cost time and are written up in `docs/pitfalls.md` 9: arrow keys belong on the
 **row** rather than the screen, because a `VerticalScroll` answers them first (9.1, which
 `RunsScreen` had shipped wrong); a pick must be **drained** and not merely written, or it
 sits in the transport while both ends wait (9.2); a command that reads stdin with no
 listing outstanding blocks until Stop, which is left as the command's own fault (9.3); and
 a screen focuses that same `VerticalScroll` before its first row, so treating *any* focus
 change as an interaction killed every countdown before it drew one (9.4); and `@dti:rows`
-blocks, so anything meant to be beside a listing is sent *before* it (9.5).
+blocks, so anything meant to be beside a listing is sent *before* it (9.5); and an
+on-demand body is answered by a listing that redraws the pane the request came from, so a
+redraw that lost the user's place would ask again forever (9.6).
 
 Esc answers a listing with nothing, which the runner reads as "nothing is going to answer
 this" and kills the child — the same reasoning as every other place here where a control
@@ -271,11 +273,37 @@ being *present* decides, not what is in it, so a browser at its own root is stil
 which is how a command asks something mid-browse without the browse being lost, and why
 neither shape needed a verb.
 
+A row may carry a **`detail_body`**, plain text, shown in a pane beside the contents while
+that row is selected and gone when the selected row has none. Plain because a pane that
+rendered markup would be making typographic decisions about content whose meaning it does
+not know; and it **scrolls sideways rather than wrapping**, because a unified diff re-wrapped
+at the pane's width stops lining its `+`/`-` column up at the exact moment somebody is
+relying on it — the same for log output, fixed-width tables and stack traces. It goes into
+the pane as a `rich.text.Text` and never as a markup string: this is somebody else's log, and
+a bracket in it is a bracket. It is **display only**, so changing something is still an
+action plus the command's own confirmation, which is what keeps that rule worth having.
+
+A listing whose bodies are too large to send inline declares `"detail": "on-demand"` and
+carries none; DTI writes `@dti:detail <rowId>` once the selection has **settled**
+(`DETAIL_DELAY` — a held arrow key walks a dozen rows, and one request per row is a dozen
+round trips for eleven bodies nobody looked at) and the command answers with a fresh
+`@dti:rows`. Two things make that terminate: `_draw` puts the focus back on the row it was on
+**by id**, and a row already asked about is not asked again while it is still the one
+selected. Without either, the listing that answers a request moves the selection, which asks
+again.
+
+`@dti:ask` takes `"multiline": true` for a note rather than a name, submitted by Tab and the
+button — Tab is what a `TextArea` already does with the focus, and every chord free enough to
+bind is one some terminal cannot send. Its answer is still one line: newlines are written
+`\n` and backslashes are doubled, because escaping one without the other is not
+reversible and `C:\new` would arrive as two lines. A command decodes left to right, once.
+
 Off — or on an older build, or on a plain terminal — a browser command runs as an ordinary
 script: `@dti:view`, `@dti:status` and `@dti:ask` come back as output, and `@dti:rows` is the
 pick-list it always was, a cells-only row labelled by its first cell so it stays legible.
-**The command is never told which surface it got**; the only difference is the verb of the
-line coming back, which it has to read anyway. See `docs/decisions/0006`, and
+A `detail_body` and a `multiline` both go the same way: the pane is lost, not the listing,
+and the note is a single-line box. **The command is never told which surface it got**; the
+only difference is the verb of the line coming back, which it has to read anyway. See `docs/decisions/0006`, and
 `docs/pitfalls.md` 9.5 for why anything meant to sit beside a listing is sent before it.
 
 ## Transitions
