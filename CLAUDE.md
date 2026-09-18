@@ -306,6 +306,41 @@ and the note is a single-line box. **The command is never told which surface it 
 only difference is the verb of the line coming back, which it has to read anyway. See `docs/decisions/0006`, and
 `docs/pitfalls.md` 9.5 for why anything meant to sit beside a listing is sent before it.
 
+## Arranging the interface
+
+What the interface looks like is a value, not constants: `domain/layout.py` holds the
+palette, the window and the menu grid, and every default in it is what the code held before
+- `plan_from(Window())` is `DEFAULT_PLAN` and `theme_from(Palette())` is `APP_THEME` colour
+for colour, both under test. So a toolbox nobody has arranged draws exactly what it drew,
+and the settings file says nothing about the arrangement until somebody arranges something.
+It lives in `[layout]` beside everything else rather than in a store of its own.
+
+**Layout** (`capabilities/layout.py`) is the one capability whose surface is not this
+interface. Dragging a grid into shape with a mouse is something a browser does well and a
+terminal does badly, and this runs while somebody is deciding rather than while they are
+working - so the context switch buys something. That is a line worth keeping: the next
+feature that wants a web page should have to make the argument again.
+`infrastructure/builder.py` is the page and the server, and everything about the server
+follows from it being open for that one run: `127.0.0.1` on an ephemeral port, **a
+single-use token on every request** (localhost is not a boundary - any program here can
+reach a loopback port, and any page in the browser can POST to one), every refusal a 404
+rather than a 403 because a 403 confirms the path, and **assets from a dict rather than the
+filesystem** so there is no path to traverse, and **a body it refuses is read away before the refusal is sent**, because answering while the client is still writing aborts the connection under it and the refusal never arrives (`docs/pitfalls.md` 10.1). The page is program text there for the same reason `handover.py`'s script is. The server writes nothing: it hands back a document and
+the capability saves it through `ConfigPort`, so one place still writes settings.
+
+It is all read **once, at startup**, and the browser's own preview is where somebody watches
+their changes. One rule rather than three - a palette that applied live beside a window that
+could not is a control that half lies.
+
+An unreadable value is reported and never guessed: a colour that is not `#rgb`/`#rrggbb`
+reaches Textual as a theme it refuses, and an app with no theme is an unstyled one, so
+`read_layout` checks it, keeps what was set and names what it would not take. Same for a
+size outside 320-10000, a grid wider than six, and a floor above the size it is the floor
+for. **Hiding every card is refused** - a menu with no cards is an app with no way in - and
+off the menu is not gone: `registry.get` still finds a hidden capability so `--start` opens
+it, and `registry.every()` still lists it so the builder can offer it back. See
+`docs/decisions/0007`.
+
 ## Transitions
 
 Every step of a workflow pops one screen before pushing the next, so the app's own screen shows in between. It carries the same chrome, and its activity log stays hidden (`-quiet`) until something is written to it, so the gap reads as the same surface rather than as somewhere else. A workflow that sends the user back therefore passes a `notice` to the menu they land on instead of writing to the console, which would put the message behind whatever comes next. What a workflow without a panel does write there is read at the pause that follows it, and the log is emptied and hidden again when the menu loop comes back round — a line left standing shows through every later gap as if the workflow now running had said it.
@@ -417,7 +452,7 @@ graphify update .                         # after any code change (AST only, no 
 7. Run all commands in the definition of done.
 8. Run `graphify update .`.
 
-The menu grid wraps at three cards per row (`CARDS_PER_ROW`), so registering a fourth capability starts a second row rather than squeezing the first — no layout change is needed per capability. There are nine, in three rows; the menu numbers them in registration order, so a new one is **appended** rather than inserted, or every number people have learned moves.
+The menu grid wraps at three cards per row by default (`CARDS_PER_ROW`, and `[layout.menu] cards_per_row` where somebody has arranged one), so registering a fourth capability starts a second row rather than squeezing the first — no layout change is needed per capability. There are ten; the menu numbers them in registration order, so a new one is **appended** rather than inserted, or every number people have learned moves. That rule is about what *this repository* does to somebody's menu - somebody rearranging their own through **Layout** is choosing to move those numbers, and the numbers follow the order they leave it in.
 
 The last three are about the toolbox rather than about projects: **App Setup** carries the whole configuration out as one JSON document and reads one back (`domain/settings_document.py`), **Check for Updates** asks a release feed whether there is a newer build (`domain/updates.py`, `infrastructure/release_feed.py`), and **Advanced** is where the feed is configured.
 

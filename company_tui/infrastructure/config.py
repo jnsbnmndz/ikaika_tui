@@ -14,6 +14,7 @@ from company_tui.domain.config import (
     Settings,
     TemplateSource,
 )
+from company_tui.domain.layout import Layout, read_layout
 from company_tui.domain.updates import (
     CHANNEL_ANY,
     CHANNEL_OFFICIAL,
@@ -39,6 +40,7 @@ def settings_file(directory: Path) -> Path:
 TEMPLATES_SECTION = "templates"
 SCRIPTS_SECTION = "scripts"
 UPDATES_SECTION = "updates"
+LAYOUT_SECTION = "layout"
 EXPERIMENTAL_SECTION = "experimental"
 
 HEADER = f"# {naming.APP_TITLE} settings."
@@ -85,6 +87,8 @@ def render(settings: Settings) -> str:
     if experimental:
         lines += ["", f"[{EXPERIMENTAL_SECTION}]", *experimental]
 
+    lines += _layout_lines(settings.layout)
+
     for key in sorted(settings.templates):
         source = settings.templates[key]
         if not source.url:
@@ -106,6 +110,41 @@ def render(settings: Settings) -> str:
         if not checked:
             lines.append("check = false")
     return "\n".join(lines) + "\n"
+
+
+def _layout_lines(layout: Layout) -> list[str]:
+    """Only what differs from what the code already draws, so a file nobody has
+    arranged says nothing about the arrangement."""
+    plain = Layout()
+    lines: list[str] = []
+
+    colours = [
+        f"{key} = {quote(value)}"
+        for key, value in layout.palette.colours.items()
+        if value != plain.palette.colours[key]
+    ]
+    if colours:
+        lines += ["", f"[{LAYOUT_SECTION}.palette]", *colours]
+
+    sizes = [
+        f"{key} = {getattr(layout.window, key)}"
+        for key in ("start_width", "start_height", "min_width", "min_height")
+        if getattr(layout.window, key) != getattr(plain.window, key)
+    ]
+    if sizes:
+        lines += ["", f"[{LAYOUT_SECTION}.window]", *sizes]
+
+    menu: list[str] = []
+    if layout.menu.cards_per_row != plain.menu.cards_per_row:
+        menu.append(f"cards_per_row = {layout.menu.cards_per_row}")
+    for key in ("order", "hidden"):
+        chosen = getattr(layout.menu, key)
+        if chosen:
+            menu.append(f"{key} = [{', '.join(quote(one) for one in chosen)}]")
+    if menu:
+        lines += ["", f"[{LAYOUT_SECTION}.menu]", *menu]
+
+    return lines
 
 
 class FileConfig(ConfigPort):
@@ -178,6 +217,9 @@ class FileConfig(ConfigPort):
     def browser_view(self) -> bool:
         return self._section(EXPERIMENTAL_SECTION).get("browser_view") is True
 
+    def layout(self) -> Layout:
+        return read_layout(self._section(LAYOUT_SECTION))[0]
+
     def settings(self) -> Settings:
         scaffold = self._section("scaffold")
         return Settings(
@@ -193,6 +235,7 @@ class FileConfig(ConfigPort):
             interactive_lists=self.interactive_lists(),
             timed_prompts=self.timed_prompts(),
             browser_view=self.browser_view(),
+            layout=self.layout(),
             script_checks={
                 key: entry.get("check", True) is not False
                 for key, entry in self._section(SCRIPTS_SECTION).items()

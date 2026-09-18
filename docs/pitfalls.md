@@ -402,3 +402,23 @@ One cost is accepted rather than fixed: `browse()` is not awaiting anything betw
 returning a request and the listing that answers it, so a key pressed in that window is
 dropped. Navigation still works — the arrows are bindings on the row — and the fix, if this
 ever bites, is a stash tied to the listing it was pressed against, not a queue.
+
+## 10. Serving a page to a browser
+
+### 10.1 Refusing a body without reading it aborts the connection under the client
+
+The layout builder's server refuses a POST whose `Content-Length` is absurd, and it refused
+it the obvious way: answer 413 and do not read the body. Under load that became
+`ConnectionAbortedError [WinError 10053]` on the *client*, intermittently — it passed alone
+and failed in the full suite, which is the shape of a race and not of a bug in the test.
+
+The client is still writing 300KB when the server answers and closes. Windows aborts the
+connection rather than delivering the response, so the client never reads the refusal it was
+sent; on a slower machine, or a smaller body, it arrives fine. A refusal that only sometimes
+reaches the caller is worse than no refusal.
+
+**Rule.** Read a refused body away before answering, up to a bound (`DRAIN_LIMIT`), and drop
+the connection only when there is more than that. The bound is the point: reading an
+arbitrary body to be polite about refusing it is the thing the refusal exists to avoid. The
+same applies to any early response — `413`, `401`, `400` before parsing — anywhere a body was
+announced and not consumed.

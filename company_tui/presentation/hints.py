@@ -20,6 +20,7 @@ _HINTS = {
     "app_setup": "Carry this whole configuration out as one JSON file, or bring one in.",
     "updates": "Ask the release feed for a newer build, or run an installer you point at.",
     "advanced": "Where updates come from. Rarely touched, and safe to leave alone.",
+    "layout": "Colours, window size and this menu. Opens in your browser.",
     "new_project": "Write a fresh project tree from a versioned template pack.",
     "controller": "Add screens, components and services to the project you are in.",
     "python": "Reference pack — writes a real, runnable project tree.",

@@ -16,6 +16,7 @@ are already under "Alternatives rejected".
 | [0004](0004-the-toolbox-can-install-its-own-update.md) | The toolbox can install its own update, through a process that outlives it | ACCEPTED, amended |
 | [0005](0005-a-listing-can-answer-itself.md) | A listing can answer itself, and no command may find out whether it will | ACCEPTED |
 | [0006](0006-a-command-may-be-a-place-rather-than-a-run.md) | A command may be a place rather than a run, and the toolbox knows nothing about where | ACCEPTED, amended |
+| [0007](0007-the-interface-is-arranged-in-a-browser.md) | The interface is arranged in a browser, over the part of it that is arrangement | ACCEPTED |
 
 Changing behaviour a record describes means updating it in the same change, or writing the
 superseding one. A record still arguing for the old behaviour is worse than no record.

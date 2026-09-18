@@ -17,6 +17,7 @@ from company_tui.application.updates import UpdateWatch
 from company_tui.domain import naming
 from company_tui.domain.capability import Capability
 from company_tui.domain.interactive import Listing, ListView
+from company_tui.domain.layout import Layout
 from company_tui.domain.options import Option, OptionValue
 from company_tui.domain.recent import RecentPathsPort
 from company_tui.domain.script_config import (
@@ -34,20 +35,20 @@ from company_tui.domain.template_pack import (
 from company_tui.domain.updates import NOTHING_TO_REPORT, UpdateReport
 from company_tui.infrastructure.terminal_window import restore_terminal_interaction
 from company_tui.infrastructure.window_shape import (
-    DEFAULT_PLAN,
     AppWindow,
     SizeGuard,
     WindowPlan,
     cramped,
     current_window,
+    plan_from,
     window_plan,
 )
 from company_tui.presentation.branding import (
     APP_NAME,
     APP_TAGLINE,
-    APP_THEME,
     APP_VERSION,
     PEAK_ART,
+    theme_from,
 )
 from company_tui.presentation.browser_screen import BrowserScreen
 from company_tui.presentation.card import MenuEntry
@@ -209,12 +210,17 @@ class TuiConsole(App):
         workspace: str = "",
         watch: UpdateWatch | None = None,
         recent: RecentPathsPort | None = None,
+        layout: Layout | None = None,
     ) -> None:
         super().__init__()
         self.application: Application | None = None
         self.start_capability = ""
         """A capability to open on instead of the menu. See Ui.choose_capability."""
         self.workspace_label = workspace_label
+        self._layout = layout if layout is not None else Layout()
+        """Colours, window size and how wide the card grid is. Read once, here:
+        a floor or a palette that moved under a window somebody had settled would
+        be the interface rearranging itself while they were using it."""
         self._memory = memory
         self._recent = recent
         """The directories picked before, or None where there is nothing to remember."""
@@ -240,7 +246,7 @@ class TuiConsole(App):
         self._update_notice = ""
         self._update: UpdateReport = NOTHING_TO_REPORT
         """What the launch check found. Empty until it has answered, and empty."""
-        self._plan: WindowPlan = DEFAULT_PLAN
+        self._plan: WindowPlan = plan_from(self._layout.window)
         self._guard: SizeGuard | None = None
         self._leaving = False
         """Set once the app is on its way out, so the menu loop stops asking."""
@@ -253,7 +259,7 @@ class TuiConsole(App):
             yield AppFooter([("Ctrl+Q", "Quit")])
 
     def on_mount(self) -> None:
-        self.register_theme(APP_THEME)
+        self.register_theme(theme_from(self._layout.palette))
         self.theme = naming.APP_SLUG
         output = self.query_one("#output", RichLog)
         output.border_title = "Activity"
@@ -284,7 +290,7 @@ class TuiConsole(App):
         self._window = current_window()
         if self._window is None:
             return
-        self._plan = window_plan()
+        self._plan = window_plan(plan_from(self._layout.window))
         self._guard = SizeGuard(self._window, self._plan)
         self._guard.open_at_start_size()
         self._check_window_shape()
@@ -1115,6 +1121,7 @@ class TuiConsole(App):
                 back_label="Quit",
                 trail=trail,
                 runs=self._sessions.summary(),
+                columns=self._layout.menu.cards_per_row,
             )
         )
         if index is None:

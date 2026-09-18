@@ -7,6 +7,7 @@ from enum import Enum
 from pathlib import Path
 
 from company_tui.domain import naming
+from company_tui.domain.layout import Layout
 from company_tui.domain.updates import UpdateSource
 
 DEFAULT_BUNDLE_PREFIX = naming.BUNDLE_PREFIX
@@ -59,6 +60,9 @@ class Settings:
 
     browser_view: bool = False
     """Whether an action may open the browser instead of a form. Off, and experimental."""
+
+    layout: Layout = field(default_factory=Layout)
+    """Colours, window size and the menu grid. Every default is what the code held."""
 
 class ConfigPort(ABC):
     @abstractmethod
@@ -121,6 +125,11 @@ class ConfigPort(ABC):
         nothing turned on must not be turned on by a port that forgot to answer.
         """
         return False
+
+    def layout(self) -> Layout:
+        """How the interface is arranged. The defaults are what it always drew, so a
+        port that has never heard of this is a toolbox that looks unchanged."""
+        return Layout()
 
     @abstractmethod
     def update_source(self) -> UpdateSource:
