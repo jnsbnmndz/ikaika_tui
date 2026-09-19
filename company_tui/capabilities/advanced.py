@@ -70,7 +70,7 @@ class AdvancedCapability(Capability):
                 key=SCOPE_KEY,
                 label="Save to",
                 kind=OptionKind.CHOICE,
-                choices=tuple(scope.value for scope in ConfigScope),
+                choices=tuple(scope.value for scope in self._config.scopes()),
                 default=ConfigScope.USER.value,
                 help=(
                     "user is usually right here: which build you run is a "

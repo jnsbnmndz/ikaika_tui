@@ -31,6 +31,7 @@ from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from company_tui.domain.commands import Command
 from company_tui.domain.config import Settings
 from company_tui.domain.settings_document import read_document, write_document
 from company_tui.domain.updates import CHANNEL_LABELS, CHANNELS
@@ -44,6 +45,51 @@ DRAIN_LIMIT = 4 * MAX_BODY
 """How much of a refused body is read away before the connection is dropped instead."""
 
 
+def _said(command: Command) -> dict[str, Any]:
+    """One command as the page sees it. `was` travels so a rename stays a rename."""
+    return {
+        "section": command.section,
+        "key": command.key,
+        "description": command.description,
+        "commands": list(command.commands),
+        "interactive": command.interactive,
+        "view": command.view,
+        "kept": list(command.kept),
+        "was": command.was,
+    }
+
+
+def _taken(document: Any) -> tuple[Command, ...]:
+    """What the page sent back, with anything unreadable simply not a command.
+
+    Nothing is validated here - `write_commands` is the one reader that decides
+    what a manifest may hold, and it says so when it will not take something.
+    """
+    listed = document.get("commands") if isinstance(document, dict) else None
+    if not isinstance(listed, list):
+        return ()
+    read: list[Command] = []
+    for entry in listed:
+        if not isinstance(entry, dict):
+            continue
+        lines = entry.get("commands")
+        read.append(
+            Command(
+                section=str(entry.get("section", "")),
+                key=str(entry.get("key", "")),
+                description=str(entry.get("description", "")),
+                commands=tuple(str(one) for one in lines)
+                if isinstance(lines, list)
+                else (),
+                interactive=entry.get("interactive") is True,
+                view=str(entry.get("view", "")),
+                kept=tuple(str(one) for one in entry.get("kept", []) or []),
+                was=str(entry.get("was", "")),
+            )
+        )
+    return tuple(read)
+
+
 class BuilderServer:
     """One page, on this machine, for as long as somebody is arranging things."""
 
@@ -53,9 +99,14 @@ class BuilderServer:
         capabilities: Sequence[tuple[str, str, str]],
         loop: asyncio.AbstractEventLoop | None = None,
         where: str = "",
+        commands: Sequence[Command] = (),
+        manifest: str = "",
     ) -> None:
         self._opened_with = settings
         self._held = settings
+        self._opened_commands = tuple(commands)
+        self._commands = tuple(commands)
+        self._manifest = manifest
         self._capabilities = tuple(capabilities)
         self._where = where
         self._token = secrets.token_urlsafe(32)
@@ -69,6 +120,11 @@ class BuilderServer:
     def settings(self) -> Settings:
         """What the page has made of them so far, valid at every moment in between."""
         return self._held
+
+    @property
+    def commands(self) -> tuple[Command, ...]:
+        """What the page has made of the project's own commands."""
+        return self._commands
 
     def start(self) -> str:
         """Open the port and return the one URL that answers on it."""
@@ -113,6 +169,8 @@ class BuilderServer:
                 for name in CHANNELS
             ],
             "where": self._where,
+            "manifest": self._manifest,
+            "commands": [_said(one) for one in self._commands],
         }
 
     def _assets(self) -> dict[str, tuple[str, bytes]]:
@@ -214,9 +272,10 @@ class BuilderServer:
                     return self._json({"ok": True})
                 if path == "/revert":
                     outer._held = outer._opened_with
+                    outer._commands = outer._opened_commands
                     outer.problems = ()
                     return self._json({"ok": True})
-                if path != "/document":
+                if path not in ("/document", "/commands"):
                     return self._missing()
 
                 length = int(self.headers.get("Content-Length") or 0)
@@ -231,6 +290,11 @@ class BuilderServer:
                     document = json.loads(self.rfile.read(length))
                 except ValueError:
                     return self._json({"problems": ["that is not JSON"]}, 400)
+                if path == "/commands":
+                    outer._commands = _taken(document)
+                    return self._json(
+                        {"problems": [], "commands": [_said(one) for one in outer._commands]}
+                    )
                 problems = outer._take(document)
                 return self._json(
                     {

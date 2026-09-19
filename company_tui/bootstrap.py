@@ -71,7 +71,9 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
             ReactTemplatePack(services),
         )
     )
-    arranging = BuilderCapability(console=console, config=config)
+    arranging = BuilderCapability(
+        console=console, config=config, file_system=file_system
+    )
     registry = CapabilityRegistry(
         menu=config.layout().menu,
         capabilities=(

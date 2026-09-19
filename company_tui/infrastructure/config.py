@@ -29,6 +29,12 @@ CONFIG_NAME = naming.CONFIG_NAME
 HOME_CONFIG = naming.store_dir() / CONFIG_NAME
 
 
+def _driven_file() -> Path | None:
+    """The settings of the project a launcher named, if one did."""
+    declared = naming.project_root_from_env()
+    return settings_file(Path(declared).expanduser().resolve()) if declared else None
+
+
 def settings_file(directory: Path) -> Path:
     """This directory's settings file, whichever name it already goes by."""
     for name in naming.config_names():
@@ -114,7 +120,12 @@ def render(settings: Settings) -> str:
 
 def _layout_lines(layout: Layout) -> list[str]:
     """Only what differs from what the code already draws, so a file nobody has
-    arranged says nothing about the arrangement."""
+    arranged says nothing about the arrangement.
+
+    Every theme somebody made gets its own table even so, empty if its colours
+    happen to equal the defaults: it is still a theme they can switch to, and a
+    table left out is a theme they lose.
+    """
     plain = Layout()
     lines: list[str] = []
 
@@ -127,9 +138,6 @@ def _layout_lines(layout: Layout) -> list[str]:
         if layout.theme != plain.theme:
             lines += ["", f"[{LAYOUT_SECTION}]", f"theme = {quote(layout.theme)}"]
         for name, palette in sorted(layout.themes.items()):
-            # Every theme somebody made gets its own table, even an empty one: a
-            # theme that happens to equal the defaults is still a theme they can
-            # switch to, and a table this leaves out is one they lose.
             lines += ["", f"[{LAYOUT_SECTION}.themes.{name}]"]
             lines += [
                 f"{key} = {quote(value)}"
@@ -159,14 +167,42 @@ def _layout_lines(layout: Layout) -> list[str]:
 
 
 class FileConfig(ConfigPort):
-    def __init__(self, project: Path | None = None, user: Path | None = None) -> None:
+    def __init__(
+        self,
+        project: Path | None = None,
+        user: Path | None = None,
+        driven: Path | None = None,
+    ) -> None:
         self._project = project if project is not None else settings_file(Path.cwd())
         self._user = (
             user if user is not None else settings_file(naming.store_dir())
         )
+        self._driven = driven if driven is not None else _driven_file()
+        """The project being worked on, when that is not the one this was started
+        in. `None` until something says which, and then the file that wins."""
+
         self._settings: dict[str, Any] | None = None
         self._source: Path | None = None
         self.problem = ""
+
+    def follow(self, root: Path | None) -> None:
+        """Work on this project, and read its settings first from now on.
+
+        Forgotten rather than merged, and forgotten immediately: walking into
+        another project has to change the answer without a restart, the same way
+        saving does.
+        """
+        wanted = None if root is None else settings_file(Path(root))
+        if wanted == self._driven:
+            return
+        self._driven = wanted
+        self._settings = None
+        self._source = None
+
+    def scopes(self) -> tuple[ConfigScope, ...]:
+        if self._driven is None or self._driven == self._project:
+            return (ConfigScope.PROJECT, ConfigScope.USER)
+        return (ConfigScope.DRIVEN, ConfigScope.PROJECT, ConfigScope.USER)
 
     @property
     def source(self) -> Path | None:
@@ -275,7 +311,11 @@ class FileConfig(ConfigPort):
         }
 
     def location(self, scope: ConfigScope) -> Path:
-        return self._user if scope is ConfigScope.USER else self._project
+        if scope is ConfigScope.USER:
+            return self._user
+        if scope is ConfigScope.DRIVEN and self._driven is not None:
+            return self._driven
+        return self._project
 
     def active_location(self) -> Path | None:
         return self.source
@@ -299,7 +339,10 @@ class FileConfig(ConfigPort):
         return self._settings
 
     def _read(self) -> dict[str, Any]:
-        for path in (self._project, self._user):
+        """The first of the three that reads. Outright, never merged."""
+        for path in (self._driven, self._project, self._user):
+            if path is None:
+                continue
             try:
                 if not path.is_file():
                     continue

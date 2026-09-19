@@ -3,11 +3,16 @@
 import asyncio
 import webbrowser
 from collections.abc import Sequence
+from pathlib import Path
 
 from company_tui.application.registry import CapabilityRegistry
+from company_tui.domain import json_document, naming
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
+from company_tui.domain.commands import Command, commands_from, write_commands
 from company_tui.domain.config import ConfigPort, ConfigScope
+from company_tui.domain.json_document import MalformedJson
 from company_tui.domain.options import Option, OptionKind, OptionValues
+from company_tui.domain.ports import FileSystemPort
 from company_tui.infrastructure.builder import BuilderServer
 from company_tui.presentation.ui import Ui
 
@@ -34,9 +39,12 @@ class BuilderCapability(Capability):
     reader validates it and the same `ConfigPort` writes it (`docs/decisions/0007`).
     """
 
-    def __init__(self, console: Ui, config: ConfigPort) -> None:
+    def __init__(
+        self, console: Ui, config: ConfigPort, file_system: FileSystemPort
+    ) -> None:
         self._console = console
         self._config = config
+        self._files = file_system
         self._registry: CapabilityRegistry | None = None
 
     def knows(self, registry: CapabilityRegistry) -> None:
@@ -77,7 +85,7 @@ class BuilderCapability(Capability):
                 key=SCOPE_KEY,
                 label="Save to",
                 kind=OptionKind.CHOICE,
-                choices=tuple(scope.value for scope in ConfigScope),
+                choices=tuple(scope.value for scope in self._config.scopes()),
                 default=ConfigScope.USER.value,
                 help=(
                     "Everything the page edits is written to this one file. user is "
@@ -105,6 +113,33 @@ class BuilderCapability(Capability):
             for item in self._registry.every()
         )
 
+    def _manifest(self) -> tuple[Path | None, dict, tuple[Command, ...]]:
+        """The project's own command document, if it has one.
+
+        Never created here: what makes a directory one of these projects is
+        `ProjectFinalizer`, and a builder that wrote a manifest into a directory
+        nobody scaffolded would be deciding that it is one.
+        """
+        found = naming.manifest_in(naming.project_root())
+        if found is None:
+            return (None, {}, ())
+        try:
+            document = json_document.load(self._files.read_text(found))
+        except (MalformedJson, OSError) as error:
+            self._console.write(f"{found}: {error}")
+            return (None, {}, ())
+        return (found, document, commands_from(document))
+
+    def _write_commands(self, found: Path, document: dict, wanted) -> None:
+        """Put the edited commands back, keeping everything this does not edit."""
+        for problem in write_commands(document, wanted):
+            self._console.write(f"Commands: {problem}")
+        source = self._files.read_text(found)
+        self._files.write_text(
+            found, json_document.dump(document, json_document.detect_indent(source))
+        )
+        self._console.write(f"Wrote {found}")
+
     async def _arrange(self, values: OptionValues) -> tuple[str, bool]:
         """Hand the layout to a browser, take back what it made of it, and save it.
 
@@ -113,11 +148,14 @@ class BuilderCapability(Capability):
         """
         current = self._config.settings()
         scope = self._scope(values)
+        found, document, declared = self._manifest()
         server = BuilderServer(
             current,
             self._cards(),
             asyncio.get_running_loop(),
-            where=f"Everything here is written to {self._config.location(scope)}.",
+            where=f"Settings here are written to {self._config.location(scope)}.",
+            commands=declared,
+            manifest=str(found) if found is not None else "",
         )
         url = server.start()
         try:
@@ -134,6 +172,8 @@ class BuilderCapability(Capability):
 
         self._console.write(f"Writing {self._config.location(scope)}...")
         path = self._config.save(server.settings, scope)
+        if found is not None and server.commands != declared:
+            self._write_commands(found, document, server.commands)
         self._console.write(NEXT_TIME)
         return (f"Saved to {path}", True)
 

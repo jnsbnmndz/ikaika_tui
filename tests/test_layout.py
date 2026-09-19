@@ -12,6 +12,7 @@ from pathlib import Path
 
 from company_tui.application.registry import CapabilityRegistry
 from company_tui.domain.capability import Capability, CapabilityInfo
+from company_tui.domain.commands import Command
 from company_tui.domain.config import ConfigScope, Settings
 from company_tui.domain.layout import (
     DEFAULT_THEME,
@@ -620,3 +621,113 @@ class WhenItIsOver(_Loop):
         # other setting, so one place still writes them.
         self.assertFalse(hasattr(self.server, "save"))
         self.assertIsInstance(self.server.settings, Settings)
+
+
+DECLARED = (
+    Command(section="build", commands=("npm run build",), was="build"),
+    Command(
+        section="scaffold",
+        key="screen",
+        commands=("node finish.mjs",),
+        kept=("template", "args"),
+        was="scaffold.screen",
+    ),
+)
+
+
+class TheProjectsOwnCommands(unittest.IsolatedAsyncioTestCase):
+    """The page's other half: the commands, held the same way the settings are."""
+
+    async def asyncSetUp(self):
+        self.server = BuilderServer(
+            Settings(),
+            CARDS,
+            asyncio.get_running_loop(),
+            commands=DECLARED,
+            manifest="C:/proj/dti.script.json",
+        )
+        self.url = self.server.start()
+        self.base, _, self.query = self.url.partition("?")
+        self.base = self.base.rstrip("/")
+        self.addCleanup(self.server.stop)
+
+    def _offered(self):
+        with _open(f"{self.base}/document?{self.query}") as answer:
+            return json.loads(answer.read())
+
+    def _send(self, listed):
+        target = f"{self.base}/commands?{self.query}"
+        with _open(target, json.dumps({"commands": listed}).encode()) as answer:
+            return json.loads(answer.read())
+
+    async def test_they_are_handed_over_with_the_file_they_came_from(self):
+        body = self._offered()
+        self.assertEqual("C:/proj/dti.script.json", body["manifest"])
+        self.assertEqual(
+            ["build", "screen"], [one["key"] or one["section"] for one in body["commands"]]
+        )
+
+    async def test_what_the_builder_will_not_edit_travels_so_the_page_can_say_so(self):
+        body = self._offered()
+        self.assertEqual(["template", "args"], body["commands"][1]["kept"])
+
+    async def test_a_command_can_be_changed(self):
+        listed = self._offered()["commands"]
+        listed[0]["commands"] = ["npm ci", "npm run build"]
+        listed[0]["view"] = "browser"
+        self._send(listed)
+        held = self.server.commands[0]
+        self.assertEqual(("npm ci", "npm run build"), held.commands)
+        self.assertEqual("browser", held.view)
+
+    async def test_one_can_be_added_and_one_deleted(self):
+        listed = self._offered()["commands"]
+        del listed[0]
+        listed.append(
+            {"section": "generate", "key": "hook", "description": "A hook",
+             "commands": ["node hook.mjs"], "interactive": True, "view": "",
+             "kept": [], "was": ""}
+        )
+        self._send(listed)
+        self.assertEqual(
+            ["scaffold.screen", "generate.hook"],
+            [one.identifier for one in self.server.commands],
+        )
+        self.assertTrue(self.server.commands[1].interactive)
+
+    async def test_a_rename_keeps_where_it_came_from(self):
+        # Which is what lets the writer move what it carries rather than build a
+        # new one and lose the template.
+        listed = self._offered()["commands"]
+        listed[1]["section"] = "generate"
+        listed[1]["key"] = "page"
+        self._send(listed)
+        moved = self.server.commands[1]
+        self.assertEqual("generate.page", moved.identifier)
+        self.assertEqual("scaffold.screen", moved.was)
+        self.assertEqual(("template", "args"), moved.kept)
+
+    async def test_an_entry_it_cannot_read_is_simply_not_a_command(self):
+        # Nothing is judged here - `write_commands` is the one reader that decides
+        # what a manifest may hold.
+        self._send(["not a command", 7, None])
+        self.assertEqual((), self.server.commands)
+
+    async def test_revert_puts_them_back_too(self):
+        self._send([])
+        self.assertEqual((), self.server.commands)
+        with _open(f"{self.base}/revert?{self.query}", b"{}"):
+            pass
+        self.assertEqual(DECLARED, self.server.commands)
+
+    async def test_a_project_declaring_none_offers_none(self):
+        bare = BuilderServer(Settings(), CARDS, asyncio.get_running_loop())
+        url = bare.start()
+        base, _, query = url.partition("?")
+        try:
+            with _open(f"{base.rstrip('/')}/document?{query}") as answer:
+                body = json.loads(answer.read())
+            self.assertEqual("", body["manifest"])
+            self.assertEqual([], body["commands"])
+        finally:
+            bare.stop()

@@ -1,7 +1,8 @@
 # 7. The settings are edited in a browser, and the interface is designed in one
 
 > **Status: ACCEPTED (2026-09-18), amended 2026-09-19** to edit the whole settings
-> document and to hold named themes. Layout `domain/layout.py`, page
+> document, to hold named themes, to let the project being worked on override the
+> settings, and to edit that project's own commands. Layout `domain/layout.py`, page
 > `infrastructure/builder_page.py`, server `infrastructure/builder.py`, capability
 > `capabilities/builder.py`.
 
@@ -59,6 +60,46 @@ anything. A name is spelled like the settings-file key it becomes.
 
 A document carrying a bare `palette` and no `themes` reads as the default theme's colours,
 so a file written before there was more than one still works.
+
+### The project being worked on wins, and it is one file winning outright
+
+The toolbox may be started from its own checkout while driving another tree, so the
+directory it happens to be in was never the right answer for *which project* - it already
+was not for finding commands. Now it is not for settings either: `driven`, then `project`,
+then `user`, and the **first one that exists wins outright**. Never merged, because two
+files half-answering a question is a preference written where nothing reads it, and that is
+a question that keeps being asked.
+
+A repository can therefore pin its own theme, its own menu, its own template sources and its
+own experimental flags for anyone who drives it. That is not new trust: driving a project
+already means running the commands it declares, and a `dti.toml` cannot do anything a
+`dti.script.json` could not already do.
+
+`ConfigPort.follow` is how the toolbox is told which project that is, and `scopes()` is why
+a form only offers `driven` while there is one - a "save to" naming a file that does not
+apply is a control that lies. `naming.project_root()` is the single answer to which tree it
+is, because the settings, the commands and the menus all have to agree.
+
+### The project's commands are edited in place, and only the parts it offers
+
+`domain/commands.py` reads the same `dti.script.json` the runner reads, and writes back
+**only** `description`, `command-after-success`, `interactive` and `view`. Everything else on
+an action - its `args`, its `template`, its `path`, its `messages`, whatever a later version
+of that document grew - is read and put back untouched, at the file's own indent, because
+this is somebody else's contract file and the toolbox owns only what it offers to edit.
+
+Telling an action from a group of them is `script_config.ACTION_MARKERS` and nothing else.
+Two answers to what an action is would be two menus that disagree.
+
+**A rename moves what was there rather than building a new one.** That is what `Command.was`
+is for: without it a rename is a delete and an add, and the template and the arguments go
+with it, silently. And a rename that orphans the action's own `${<name>.args.<flag>}`
+references **says so** - an unanswered reference is left in place rather than blanked, so
+what fails is the run, three menus later, with the text still in it.
+
+The builder will not *create* a manifest for a project that has none. What makes a directory
+one of these projects is `ProjectFinalizer`; a page that wrote one would be deciding that it
+is one.
 
 ### Every default is what the code held
 
@@ -142,6 +183,15 @@ printed, in the terminal and on the page.
 - **A `delete` verb on the wire.** The document already says what exists by listing it.
 - **One palette that is edited in place.** You can recolour it but not keep what you had,
   so every experiment costs you the thing you were comparing against.
+- **Merging the three settings files.** Then a value can come from anywhere, and "why is it
+  that" has three answers.
+- **A rename as a delete and an add.** It loses everything the builder does not edit, and it
+  loses it quietly.
+- **Editing `args` here.** Arguments carry the document's own declared grammar (`rules`), and
+  a form that wrote them without that grammar would write manifests the runner refuses. They
+  are shown as kept and left alone until the page can read `rules` too.
+- **Creating a manifest for a project that has none.** That decides a directory is one of
+  these projects, which is a scaffold's decision.
 - **Applying changes live.** Some of it can and some of it cannot, and a builder where half
   the controls take effect now is harder to explain than one where none of them do.
 

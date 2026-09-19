@@ -87,7 +87,7 @@ class AppSetupCapability(Capability):
                 key=SCOPE_KEY,
                 label="Import into",
                 kind=OptionKind.CHOICE,
-                choices=tuple(scope.value for scope in ConfigScope),
+                choices=tuple(scope.value for scope in self._config.scopes()),
                 default=ConfigScope.PROJECT.value,
                 help="Ignored when exporting. project: beside this repository.",
             ),

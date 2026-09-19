@@ -324,6 +324,26 @@ terminal does badly, and it runs while somebody is deciding rather than while th
 working - so the context switch buys something. That is a line worth keeping: the next
 feature that wants a web page should have to make the argument again.
 
+**Three settings files now, and the first that exists wins outright.** `driven`, then
+`project`, then `user` - `driven` being the project actually being worked on, which is not
+always the one the toolbox was started in. `ConfigPort.follow` is how it is told which, and
+`scopes()` is why a form offers `driven` only while there is one. Never merged: two files
+half-answering a question is a preference written where nothing reads it. A repository can
+therefore pin its own theme, menu, sources and flags for anyone who drives it, which is not
+new trust - driving a project already means running the commands it declares.
+`naming.project_root()` is the one answer to which tree that is.
+
+**The project's own commands are editable too** (`domain/commands.py`), and only the parts
+the builder offers: `description`, `command-after-success`, `interactive`, `view`.
+Everything else on an action - `args`, `template`, `path`, `messages`, anything a later
+version grew - is read and put back untouched at the file's own indent, because this is
+somebody else's contract file. An action is told from a group of them by
+`script_config.ACTION_MARKERS` and nothing else. **A rename moves what was there** rather
+than building a new one (`Command.was`), or the template and the arguments go with it
+silently; and a rename that orphans the action's own `${<name>.args.<flag>}` references says
+so, because an unanswered reference is left in place and what fails is the run. The builder
+never *creates* a manifest - what makes a directory one of these projects is a scaffold.
+
 **It edits the settings document and defines nothing.** The page is a view over the same
 document App Setup exports and imports; every field goes back through `read_document`, is
 validated by the code the TUI's own forms use, and is saved through `ConfigPort`. That is

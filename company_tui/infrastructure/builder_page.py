@@ -95,6 +95,17 @@ PAGE = """<!DOCTYPE html>
       </div>
     </section>
 
+    <section class="pane" data-tab="commands">
+      <h2>This project's commands</h2>
+      <p class="hint" id="manifestIs"></p>
+      <div id="commands"></div>
+      <div class="addRow">
+        <input id="commandSection" type="text" placeholder="group, e.g. build">
+        <input id="commandKey" type="text" placeholder="name (blank = the group is the command)">
+        <button id="commandAdd" type="button">Add command</button>
+      </div>
+    </section>
+
     <section class="pane" data-tab="updates">
       <h2>Updates</h2>
       <p class="hint">Where the toolbox looks for a newer build of itself. An empty
@@ -216,6 +227,16 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
           border: 1px solid #22303f; border-radius: 9px; padding: 7px 10px; }
 .swatch input { width: 30px; height: 30px; padding: 0; border: none; background: none; cursor: pointer; }
 .swatch span { font-size: 12px; color: var(--dim); }
+.cmd { background: #121c26; border: 1px solid #22303f; border-radius: 9px;
+       padding: 11px 12px; margin-bottom: 10px; display: grid; gap: 8px; }
+.cmd .names { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; }
+.cmd .lines { display: grid; gap: 6px; }
+.cmd .line2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.cmd .flags { display: flex; gap: 16px; align-items: center; color: var(--dim); font-size: 12px; }
+.cmd .flags label { display: flex; gap: 5px; align-items: center; }
+.cmd .kept { color: #5b7188; font-size: 11px; }
+.cmd textarea { font: inherit; padding: 7px 9px; border-radius: 7px; resize: vertical;
+                border: 1px solid #2a3b4e; background: #0b1016; color: #e6edf5; min-height: 34px; }
 .problems { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .problems li { font-size: 12px; color: #e8a49f; background: #1b1113;
                border: 1px solid #3a2226; border-radius: 7px; padding: 6px 9px; }
@@ -247,8 +268,8 @@ const make = (tag, props) => Object.assign(document.createElement(tag), props ||
 
 const TABS = [
   ["design", "Design"], ["menu", "Menu"], ["window", "Window"],
-  ["workspace", "Workspace"], ["packs", "Packs"], ["updates", "Updates"],
-  ["experimental", "Experimental"],
+  ["workspace", "Workspace"], ["packs", "Packs"], ["commands", "Commands"],
+  ["updates", "Updates"], ["experimental", "Experimental"],
 ];
 const FLAGS = [
   ["interactive_lists", "Interactive lists", "A command may hand over rows to pick from."],
@@ -272,6 +293,8 @@ const FEED = [
 let doc = null;
 let known = [];
 let channels = [];
+let commands = [];
+let manifest = "";
 let tab = "design";
 
 const say = (text) => { $("said").textContent = text; };
@@ -281,6 +304,8 @@ async function load() {
   doc = body.document;
   known = body.capabilities;
   channels = body.channels;
+  commands = body.commands || [];
+  manifest = body.manifest || "";
   $("where").textContent = body.where;
   render();
 }
@@ -327,6 +352,7 @@ function render() {
   drawSources("scripts", $("scripts"), true);
   drawUpdates();
   drawFlags();
+  drawCommands();
   $("across").value = doc.layout.menu.cards_per_row;
   $("acrossOut").textContent = doc.layout.menu.cards_per_row;
   drawPreview();
@@ -617,6 +643,148 @@ function addSource(section, field, watched) {
   say("Give it a clone URL — one with no URL is not written down.");
 }
 
+/* ---- the project's own commands ---- */
+
+async function pushCommands() {
+  const answer = await fetch(url("/commands"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ commands: commands }),
+  });
+  const body = await answer.json();
+  commands = body.commands || [];
+  say("Held. Anything it will not take is reported when you save.");
+}
+
+function drawCommands() {
+  const holder = $("commands");
+  holder.textContent = "";
+  const where = $("manifestIs");
+  if (!manifest) {
+    where.textContent = "This project declares no commands, and the builder will not"
+      + " start one for it — what makes a directory one of these projects is a"
+      + " scaffold, not this page.";
+    $("commandAdd").disabled = true;
+    return;
+  }
+  where.textContent = "Read from " + manifest + ". Only what is shown here is written;"
+    + " everything else on a command is put back untouched.";
+  $("commandAdd").disabled = false;
+
+  if (!commands.length) {
+    holder.append(make("div", { className: "empty", textContent: "None yet." }));
+  }
+  commands.forEach((one, index) => holder.append(drawCommand(one, index)));
+}
+
+function drawCommand(one, index) {
+  const card = make("div", { className: "cmd" });
+
+  const names = make("div", { className: "names" });
+  const section = make("input", { type: "text", value: one.section, placeholder: "group" });
+  section.addEventListener("change", () => {
+    one.section = section.value.trim();
+    pushCommands();
+  });
+  const key = make("input", { type: "text", value: one.key, placeholder: "name (optional)" });
+  key.addEventListener("change", () => {
+    one.key = key.value.trim();
+    pushCommands();
+  });
+  const drop = make("button", { type: "button", className: "tiny risk", textContent: "Delete" });
+  drop.addEventListener("click", () => {
+    commands.splice(index, 1);
+    drawCommands();
+    pushCommands();
+  });
+  names.append(section, key, drop);
+
+  const about = make("input", {
+    type: "text", value: one.description, placeholder: "what it is for",
+  });
+  about.addEventListener("change", () => {
+    one.description = about.value;
+    pushCommands();
+  });
+
+  const lines = make("div", { className: "lines" });
+  const held = one.commands.length ? one.commands : [""];
+  held.forEach((line, at) => {
+    const row = make("div", { className: "line2" });
+    const field = make("textarea", { rows: 1, placeholder: "the command to run" });
+    field.value = line;
+    field.addEventListener("change", () => {
+      const next = one.commands.length ? one.commands.slice() : [""];
+      next[at] = field.value.trim();
+      one.commands = next;
+      pushCommands();
+    });
+    const less = make("button", { type: "button", className: "tiny risk", textContent: "−" });
+    less.addEventListener("click", () => {
+      one.commands = held.filter((_, n) => n !== at);
+      drawCommands();
+      pushCommands();
+    });
+    row.append(field, less);
+    lines.append(row);
+  });
+
+  const more = make("button", { type: "button", className: "tiny", textContent: "Add a line" });
+  more.addEventListener("click", () => {
+    one.commands = held.concat([""]);
+    drawCommands();
+  });
+
+  const flags = make("div", { className: "flags" });
+  const FIELDS = [["interactive", "Speaks the list protocol"], ["view", "Opens the browser view"]];
+  FIELDS.forEach((pair) => {
+    const field = pair[0];
+    const wrap = make("label");
+    const box = make("input", { type: "checkbox" });
+    box.checked = field === "view" ? one.view === "browser" : one.interactive === true;
+    box.addEventListener("change", () => {
+      if (field === "view") {
+        one.view = box.checked ? "browser" : "";
+      } else {
+        one.interactive = box.checked;
+      }
+      pushCommands();
+    });
+    wrap.append(box, make("span", { textContent: pair[1] }));
+    flags.append(wrap);
+  });
+  if (one.kept && one.kept.length) {
+    flags.append(make("span", {
+      className: "kept", textContent: "kept as it is: " + one.kept.join(", "),
+    }));
+  }
+
+  card.append(names, about, lines, more, flags);
+  return card;
+}
+
+function addCommand() {
+  const section = $("commandSection").value.trim();
+  if (!section) {
+    say("Give it a group first.");
+    return;
+  }
+  commands.push({
+    section: section,
+    key: $("commandKey").value.trim(),
+    description: "",
+    commands: [""],
+    interactive: false,
+    view: "",
+    kept: [],
+    was: "",
+  });
+  $("commandSection").value = "";
+  $("commandKey").value = "";
+  drawCommands();
+  pushCommands();
+}
+
 /* ---- the preview ---- */
 
 function drawPreview() {
@@ -655,6 +823,7 @@ $("across").addEventListener("input", (event) => {
 });
 $("across").addEventListener("change", push);
 $("themeAdd").addEventListener("click", addTheme);
+$("commandAdd").addEventListener("click", addCommand);
 $("templateAdd").addEventListener("click", () => addSource("templates", $("templateKey"), false));
 $("scriptAdd").addEventListener("click", () => addSource("scripts", $("scriptKey"), true));
 
@@ -666,6 +835,7 @@ $("revert").addEventListener("click", async () => {
 
 $("save").addEventListener("click", async () => {
   await push();
+  await pushCommands();
   await fetch(url("/done"), { method: "POST" });
   say("Saved. You can close this tab.");
   $("save").disabled = true;

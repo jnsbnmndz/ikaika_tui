@@ -108,7 +108,7 @@ class SettingsCapability(Capability):
                 key=SCOPE_KEY,
                 label="Save to",
                 kind=OptionKind.CHOICE,
-                choices=tuple(scope.value for scope in ConfigScope),
+                choices=tuple(scope.value for scope in self._config.scopes()),
                 default=ConfigScope.PROJECT.value,
                 help="project: beside this repository · user: this machine's default.",
             ),

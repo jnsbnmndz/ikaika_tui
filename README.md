@@ -272,6 +272,8 @@ python -m company_tui --start builder
 - **Workspace.** Workspace root, bundle prefix, scripts root.
 - **Packs.** Template packs and script repositories — add a stack, edit its clone URL and
   ref, turn watching on or off, delete one.
+- **Commands.** The project's own `dti.script.json` — add, rename and delete commands,
+  edit the lines each one runs, and turn on the list protocol or the browser view for it.
 - **Updates.** Repository, API host, channel, installer pattern.
 - **Experimental.** The three flags, with what each one needs from a command.
 
@@ -288,6 +290,19 @@ Three things worth knowing:
   and the grid.
 - **The page is served to this machine only**, on an ephemeral port, behind a one-time
   token, for as long as that run lasts and no longer. It writes nothing itself.
+
+**Which settings file?** Three, and the first that exists wins outright — the project you
+are working on, then the toolbox's own directory, then your home. So a repository can commit
+a `dti.toml` and anyone who drives it gets its theme, its menu and its template sources. The
+"Save to" list only offers a project you are actually driving while you are driving one.
+
+**Editing commands** writes only what the page shows — the description, the lines it runs,
+and the two flags. A command's arguments, template, path and messages are kept exactly as
+they were, at the file's own indent. Renaming a command **moves** it rather than rebuilding
+it, so its template and arguments come with it; where it referred to itself as
+`${oldname.args.something}`, the builder says so, because those have to be changed by hand.
+It will not create a manifest for a project that has none — that is what scaffolding a
+project does.
 
 Settings are in force as soon as you save. How the interface *looks* is read when the app
 starts, so the theme, the window and the grid arrive next launch — the browser preview is
