@@ -13,9 +13,9 @@ from company_tui.application.updates import CACHE_DIRECTORY, UpdateWatch
 from company_tui.capabilities.advanced import AdvancedCapability
 from company_tui.capabilities.app_setup import AppSetupCapability
 from company_tui.capabilities.build import BuildCapability
+from company_tui.capabilities.builder import BuilderCapability
 from company_tui.capabilities.deploy import DeployCapability
 from company_tui.capabilities.doctor import DoctorCapability
-from company_tui.capabilities.layout import LayoutCapability
 from company_tui.capabilities.scaffold import ScaffoldCapability
 from company_tui.capabilities.scripts import ScriptsCapability
 from company_tui.capabilities.settings import SettingsCapability
@@ -71,7 +71,7 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
             ReactTemplatePack(services),
         )
     )
-    arranging = LayoutCapability(console=console, config=config)
+    arranging = BuilderCapability(console=console, config=config)
     registry = CapabilityRegistry(
         menu=config.layout().menu,
         capabilities=(

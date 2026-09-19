@@ -27,6 +27,11 @@ SMALLEST = 320
 LARGEST = 10_000
 """Pixels. A window outside this was a typo, not a choice."""
 
+DEFAULT_THEME = "default"
+NAME_LENGTH = 32
+NAME_CHARACTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+"""A theme's name is a table key in the settings file, so it is spelled like one."""
+
 
 @dataclass(frozen=True, slots=True)
 class Palette:
@@ -87,11 +92,35 @@ class Menu:
 
 @dataclass(frozen=True, slots=True)
 class Layout:
-    """Everything the builder edits, and the whole of what it may write."""
+    """Everything the builder edits about the interface itself."""
 
-    palette: Palette = field(default_factory=Palette)
+    themes: Mapping[str, Palette] = field(
+        default_factory=lambda: {DEFAULT_THEME: Palette()}
+    )
+    """Named palettes. There is always at least one; which is which is a name."""
+
+    theme: str = DEFAULT_THEME
+    """Whichever of them the interface draws itself in."""
+
     window: Window = field(default_factory=Window)
     menu: Menu = field(default_factory=Menu)
+
+    @property
+    def palette(self) -> Palette:
+        """The colours in use. Never raises: a theme can be deleted out from under
+        the name pointing at it, and an interface with no colours is not an answer."""
+        if self.theme in self.themes:
+            return self.themes[self.theme]
+        return next(iter(self.themes.values()), Palette())
+
+
+def is_name(value: Any) -> bool:
+    """Whether this can be a theme's name, which is to say a key in a settings file."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= NAME_LENGTH
+        and all(letter in NAME_CHARACTERS for letter in value)
+    )
 
 
 def arrange(keys: tuple[str, ...], menu: Menu) -> tuple[str, ...]:
@@ -113,7 +142,11 @@ def write_layout(layout: Layout) -> dict[str, Any]:
     """The whole layout as a document, including what equals the defaults."""
     return {
         "schema": SCHEMA,
-        "palette": dict(layout.palette.colours),
+        "theme": layout.theme,
+        "themes": {
+            name: dict(palette.colours)
+            for name, palette in sorted(layout.themes.items())
+        },
         "window": {
             "start_width": layout.window.start_width,
             "start_height": layout.window.start_height,
@@ -149,14 +182,71 @@ def read_layout(
             "anything newer than that was ignored"
         )
 
+    themes = _themes(document, settled, problems)
     return (
         Layout(
-            palette=_palette(document.get("palette"), settled.palette, problems),
+            themes=themes,
+            theme=_active(document, themes, settled.theme, problems),
             window=_window(document.get("window"), settled.window, problems),
             menu=_menu(document.get("menu"), settled.menu, problems),
         ),
         tuple(problems),
     )
+
+
+def _themes(
+    document: Mapping[str, Any], settled: Layout, problems: list[str]
+) -> dict[str, Palette]:
+    """The named palettes, never empty.
+
+    A document carrying a bare `palette` and no `themes` is one written before
+    there was more than one, and it reads as the default theme's colours - a file
+    from an older shape has to keep working, the same as a line from an older
+    command does.
+
+    Never empty, because an interface has to be drawn in something and the name in
+    `theme` has to have something to point at.
+    """
+    declared = document.get("themes")
+    if declared is None:
+        if "palette" not in document:
+            return dict(settled.themes)
+        return {
+            DEFAULT_THEME: _palette(
+                document.get("palette"), settled.palette, problems
+            )
+        }
+    if not isinstance(declared, Mapping):
+        problems.append("'themes' is not an object, so it was ignored")
+        return dict(settled.themes)
+
+    read: dict[str, Palette] = {}
+    for name, colours in declared.items():
+        if not is_name(name):
+            problems.append(
+                f"'{name}' is not a usable theme name, so that theme was ignored"
+            )
+            continue
+        read[name] = _palette(colours, settled.themes.get(name, Palette()), problems)
+    if not read:
+        problems.append("no theme could be read, so the default one was put back")
+        return {DEFAULT_THEME: Palette()}
+    return read
+
+
+def _active(
+    document: Mapping[str, Any],
+    themes: Mapping[str, Palette],
+    fallback: str,
+    problems: list[str],
+) -> str:
+    if "theme" not in document:
+        return fallback if fallback in themes else next(iter(themes))
+    wanted = document.get("theme")
+    if wanted in themes:
+        return wanted
+    problems.append(f"theme '{wanted}' is not one of the themes, so it was ignored")
+    return fallback if fallback in themes else next(iter(themes))
 
 
 def is_colour(value: Any) -> bool:

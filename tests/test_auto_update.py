@@ -43,7 +43,7 @@ from company_tui.infrastructure.release_feed import (
     require_http,
 )
 from company_tui.infrastructure.update_state import FileUpdateState, state_path
-from company_tui.presentation.chrome import AppHeader
+from company_tui.presentation.chrome import BUSY_FRAMES, AppHeader
 from company_tui.presentation.screens import (
     INSTALLING_DETAIL,
     ConfirmScreen,
@@ -774,16 +774,20 @@ class TheInstallingScreen(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(app.screen, InstallingScreen)
 
     async def test_the_mark_turns_rather_than_sitting_still(self):
+        # Counted over a whole cycle rather than over one turn. The screen has a
+        # timer of its own doing the same thing, so on a loaded machine enough of
+        # its ticks land between the two readings to bring the mark back round to
+        # where it started - and the test then reports a still mark that is turning.
         app = self._App()
+        seen = set()
         async with app.run_test() as pilot:
             screen = await self._up(app)
             await pilot.pause()
-            first = str(screen.query_one("#installing", Static).render())
-            screen._turn()
-            await pilot.pause()
-            self.assertNotEqual(
-                first, str(screen.query_one("#installing", Static).render())
-            )
+            for _ in range(len(BUSY_FRAMES)):
+                seen.add(str(screen.query_one("#installing", Static).render()))
+                screen._turn()
+                await pilot.pause()
+        self.assertGreater(len(seen), 1)
 
 
 class TheKeyPrintedOnTheAnswer(unittest.IsolatedAsyncioTestCase):

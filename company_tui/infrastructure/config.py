@@ -118,13 +118,24 @@ def _layout_lines(layout: Layout) -> list[str]:
     plain = Layout()
     lines: list[str] = []
 
-    colours = [
-        f"{key} = {quote(value)}"
-        for key, value in layout.palette.colours.items()
-        if value != plain.palette.colours[key]
-    ]
-    if colours:
-        lines += ["", f"[{LAYOUT_SECTION}.palette]", *colours]
+    untouched = (
+        layout.theme == plain.theme
+        and set(layout.themes) == set(plain.themes)
+        and layout.palette == plain.palette
+    )
+    if not untouched:
+        if layout.theme != plain.theme:
+            lines += ["", f"[{LAYOUT_SECTION}]", f"theme = {quote(layout.theme)}"]
+        for name, palette in sorted(layout.themes.items()):
+            # Every theme somebody made gets its own table, even an empty one: a
+            # theme that happens to equal the defaults is still a theme they can
+            # switch to, and a table this leaves out is one they lose.
+            lines += ["", f"[{LAYOUT_SECTION}.themes.{name}]"]
+            lines += [
+                f"{key} = {quote(value)}"
+                for key, value in palette.colours.items()
+                if value != plain.palette.colours[key]
+            ]
 
     sizes = [
         f"{key} = {getattr(layout.window, key)}"

@@ -255,33 +255,45 @@ surfaces stay clean.
 
 Not a pty: no cursor control, no full-screen apps. It is a list protocol.
 
-## Arranging the interface
+## The builder
 
-**[10] Layout** opens a page in your browser for the parts of the interface that are
-arrangement rather than behaviour: the colours, the size the window opens at, and the menu
-grid. Drag the cards into the order you want them, untick the ones you never use, pick the
-colours, and watch a preview of the menu change as you go.
+**[10] Builder** opens a page in your browser for everything the toolbox keeps in its
+settings file — with real add, update and delete:
 
 ```
-python -m company_tui --start layout
+python -m company_tui --start builder
 ```
+
+- **Design.** Named themes: add one, duplicate it, rename it, delete it, switch between
+  them. Ten colour tokens each, with a live preview of the menu as you pick.
+- **Menu.** Drag the cards into the order you want, untick the ones you never use, choose
+  how many go across.
+- **Window.** The size it opens at and the size it is held to.
+- **Workspace.** Workspace root, bundle prefix, scripts root.
+- **Packs.** Template packs and script repositories — add a stack, edit its clone URL and
+  ref, turn watching on or off, delete one.
+- **Updates.** Repository, API host, channel, installer pattern.
+- **Experimental.** The three flags, with what each one needs from a command.
 
 Three things worth knowing:
 
-- **Only what is genuinely configuration.** Screens are not designable here — they are
-  hand-written Python with a reason recorded behind most widgets, and a drag-and-drop editor
-  over them would be a code generator writing files nobody should then edit. What the
-  builder edits is the palette, the window and the grid, and nothing else.
-- **It is read when the app starts.** The browser's preview is where you see your changes;
-  the interface takes them up next time you launch it. One rule, rather than a palette that
-  applies now beside a window that cannot.
-- **The page is served to this machine only**, on an ephemeral port, behind a one-time token,
-  for as long as that run lasts and no longer. It writes nothing itself: the answer goes into
-  your settings file through the same path every other setting takes.
+- **It edits the settings document — the same one App Setup exports and imports.** Every
+  field goes back through the same reader that validates the TUI's own forms, and is saved
+  through the same path. The browser is a second *editor*, never a second answer about what
+  a setting is. Anything it will not take is listed on the page and in the terminal, with
+  what was kept instead.
+- **Screens are not designable here.** They are hand-written Python with a reason recorded
+  behind most widgets, and a drag-and-drop editor over them would be a code generator
+  writing files nobody should then edit. What the builder designs is the theme, the window
+  and the grid.
+- **The page is served to this machine only**, on an ephemeral port, behind a one-time
+  token, for as long as that run lasts and no longer. It writes nothing itself.
 
-It is saved as `[layout]` in `dti.toml` — project or user, your choice on the form — and an
-untouched toolbox writes nothing there at all. Hiding every card is refused, and a card left
-off the menu is still reachable with `--start`.
+Settings are in force as soon as you save. How the interface *looks* is read when the app
+starts, so the theme, the window and the grid arrive next launch — the browser preview is
+where you watch those while you work. An untouched toolbox writes nothing about the
+arrangement at all, hiding every card is refused, and a card left off the menu is still
+reachable with `--start`.
 
 ## Building and releasing
 

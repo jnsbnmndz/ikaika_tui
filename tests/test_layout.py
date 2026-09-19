@@ -14,6 +14,7 @@ from company_tui.application.registry import CapabilityRegistry
 from company_tui.domain.capability import Capability, CapabilityInfo
 from company_tui.domain.config import ConfigScope, Settings
 from company_tui.domain.layout import (
+    DEFAULT_THEME,
     LARGEST,
     MAX_CARDS_PER_ROW,
     SMALLEST,
@@ -27,7 +28,8 @@ from company_tui.domain.layout import (
     write_layout,
 )
 from company_tui.domain.settings_document import read_document, write_document
-from company_tui.infrastructure.builder import PAGE, SCRIPT, BuilderServer
+from company_tui.infrastructure.builder import BuilderServer
+from company_tui.infrastructure.builder_page import PAGE, SCRIPT
 from company_tui.infrastructure.config import FileConfig, render
 from company_tui.infrastructure.window_shape import DEFAULT_PLAN, plan_from
 from company_tui.presentation.branding import APP_THEME, theme_from
@@ -48,6 +50,11 @@ def _open(url: str, body: bytes | None = None):
         method="POST" if body is not None else "GET",
     )
     return urllib.request.urlopen(request, timeout=5)  # noqa: S310 - and again here
+
+
+def _themed(colours):
+    """A layout document carrying one theme with these colours in it."""
+    return {"themes": {DEFAULT_THEME: colours}}
 
 
 CARDS = (
@@ -87,7 +94,7 @@ class NothingArrangedIsNothingChanged(unittest.TestCase):
 class ReadingALayout(unittest.TestCase):
     def test_it_comes_back_whole(self):
         arranged = Layout(
-            palette=dataclasses.replace(Palette(), accent="#FF8800"),
+            themes={DEFAULT_THEME: dataclasses.replace(Palette(), accent="#FF8800")},
             window=Window(1240, 1000, 900, 700),
             menu=Menu(cards_per_row=2, order=("build",), hidden=("scripts",)),
         )
@@ -122,21 +129,21 @@ class TheColours(unittest.TestCase):
             self.assertFalse(is_colour(value), repr(value))
 
     def test_one_that_is_not_a_colour_is_reported_and_the_old_one_kept(self):
-        read, problems = read_layout({"palette": {"accent": "burnt orange"}})
+        read, problems = read_layout(_themed({"accent": "burnt orange"}))
         self.assertEqual(Palette().accent, read.palette.accent)
         self.assertTrue(any("palette.accent" in one for one in problems))
 
     def test_the_others_are_taken_even_so(self):
-        read, _ = read_layout({"palette": {"accent": "nope", "primary": "#101010"}})
+        read, _ = read_layout(_themed({"accent": "nope", "primary": "#101010"}))
         self.assertEqual("#101010", read.palette.primary)
 
     def test_a_palette_that_is_not_an_object_is_reported(self):
-        read, problems = read_layout({"palette": "#FF8800"})
+        read, problems = read_layout({"themes": {DEFAULT_THEME: "#FF8800"}})
         self.assertEqual(Palette(), read.palette)
         self.assertTrue(any("palette" in one for one in problems))
 
     def test_a_key_it_has_never_heard_of_is_simply_not_a_colour_it_draws(self):
-        read, problems = read_layout({"palette": {"chartreuse": "#7FFF00"}})
+        read, problems = read_layout(_themed({"chartreuse": "#7FFF00"}))
         self.assertEqual(Palette(), read.palette)
         self.assertEqual((), problems)
 
@@ -246,7 +253,11 @@ class TheRegistryFollowsIt(unittest.TestCase):
 
 class TheSettingsFileCarriesIt(unittest.TestCase):
     ARRANGED = Layout(
-        palette=dataclasses.replace(Palette(), accent="#FF8800"),
+        themes={
+            DEFAULT_THEME: Palette(),
+            "dusk": dataclasses.replace(Palette(), accent="#FF8800"),
+        },
+        theme="dusk",
         window=Window(1240, 1000, 900, 700),
         menu=Menu(cards_per_row=2, order=("build",), hidden=("scripts",)),
     )
@@ -264,10 +275,17 @@ class TheSettingsFileCarriesIt(unittest.TestCase):
 
     def test_only_what_was_arranged_is_written_down(self):
         _, body = self._saved(self.ARRANGED)
-        self.assertIn("[layout.palette]", body)
+        self.assertIn("[layout.themes.dusk]", body)
         self.assertIn('accent = "#FF8800"', body)
         self.assertNotIn("primary", body)
+        self.assertIn('theme = "dusk"', body)
         self.assertIn('order = ["build"]', body)
+
+    def test_a_theme_that_equals_the_defaults_is_still_written_down(self):
+        # It is still a theme somebody made and can switch to; a table left out
+        # because its colours happen to match is a theme they lose.
+        _, body = self._saved(self.ARRANGED)
+        self.assertIn("[layout.themes.default]", body)
 
     def test_an_untouched_layout_writes_nothing(self):
         config, body = self._saved(Layout())
@@ -289,7 +307,7 @@ class TheSettingsFileCarriesIt(unittest.TestCase):
 
     def test_an_unreadable_layout_is_reported_under_its_own_name(self):
         document = write_document(Settings())
-        document["layout"]["palette"]["accent"] = "orange"
+        document["layout"]["themes"][DEFAULT_THEME]["accent"] = "orange"
         _, problems = read_document(document, Settings())
         self.assertTrue(any(one.startswith("layout: ") for one in problems))
 
@@ -304,6 +322,14 @@ class ThePageAndItsScript(unittest.TestCase):
         self.assertTrue(wanted)
         self.assertEqual(set(), wanted - present, "ids the script expects and the page lacks")
 
+    def test_every_pane_has_a_tab_that_reaches_it(self):
+        # A pane with no button is a section nobody can get to, and it looks like
+        # nothing at all rather than like a mistake.
+        panes = set(re.findall(r'data-tab="([\w-]+)"', PAGE))
+        tabs = set(re.findall(r'\["(\w+)", "[^"]+"\],', SCRIPT))
+        self.assertTrue(panes)
+        self.assertEqual(set(), panes - tabs)
+
     def test_the_page_asks_for_the_assets_the_server_serves(self):
         self.assertIn("builder.css?t=TOKEN", PAGE)
         self.assertIn("builder.js?t=TOKEN", PAGE)
@@ -314,8 +340,12 @@ class ThePageAndItsScript(unittest.TestCase):
 
 
 class _Loop(unittest.IsolatedAsyncioTestCase):
+    """A live server, on a loopback port, for the length of one test."""
+
     async def asyncSetUp(self):
-        self.server = BuilderServer(Layout(), CARDS, asyncio.get_running_loop())
+        self.server = BuilderServer(
+            Settings(), CARDS, asyncio.get_running_loop(), where="dti.toml"
+        )
         self.url = self.server.start()
         self.base, _, self.query = self.url.partition("?")
         self.base = self.base.rstrip("/")
@@ -331,6 +361,12 @@ class _Loop(unittest.IsolatedAsyncioTestCase):
         with _open(target, json.dumps(payload).encode()) as answer:
             return answer.status, json.loads(answer.read())
 
+    def _document(self):
+        return json.loads(self._get("/document")[1])["document"]
+
+    def _send(self, document):
+        return self._post("/document", document)[1]
+
 
 class TheServerHandsOverThePage(_Loop):
     async def test_it_is_only_on_this_machine(self):
@@ -339,17 +375,24 @@ class TheServerHandsOverThePage(_Loop):
     async def test_the_page_and_its_assets_come_back(self):
         code, page = self._get("/")
         self.assertEqual(200, code)
-        self.assertIn(b"<title>Layout</title>", page)
+        self.assertIn(b"<title>Builder</title>", page)
         self.assertEqual(200, self._get("/builder.css")[0])
         self.assertEqual(200, self._get("/builder.js")[0])
 
-    async def test_it_hands_over_the_layout_and_every_card(self):
-        _, body = self._get("/layout")
-        body = json.loads(body)
-        self.assertEqual(write_layout(Layout()), body["layout"])
+    async def test_it_hands_over_the_whole_settings_document(self):
+        # The same one App Setup exports, so nothing here decides what a setting is.
+        body = json.loads(self._get("/document")[1])
+        self.assertEqual(write_document(Settings()), body["document"])
+
+    async def test_it_hands_over_every_card_and_the_channels_and_the_file(self):
+        body = json.loads(self._get("/document")[1])
         self.assertEqual(
             ["scaffold", "build", "scripts"], [one["key"] for one in body["capabilities"]]
         )
+        self.assertEqual(
+            ["official", "prerelease", "any"], [one["value"] for one in body["channels"]]
+        )
+        self.assertEqual("dti.toml", body["where"])
 
 
 class NothingWithoutTheToken(_Loop):
@@ -362,14 +405,14 @@ class NothingWithoutTheToken(_Loop):
 
     async def test_a_wrong_token_gets_nothing(self):
         self.assertEqual(404, self._refused("/"))
-        self.assertEqual(404, self._refused("/layout"))
+        self.assertEqual(404, self._refused("/document"))
 
     async def test_no_token_gets_nothing(self):
         self.assertEqual(404, self._refused("/", ""))
 
     async def test_a_refusal_never_confirms_the_path(self):
         # 404 rather than 403, and the same for a path that does not exist.
-        self.assertEqual(404, self._refused("/layout"))
+        self.assertEqual(404, self._refused("/document"))
         self.assertEqual(404, self._refused("/nowhere"))
 
     async def test_there_is_no_filesystem_to_walk(self):
@@ -378,34 +421,163 @@ class NothingWithoutTheToken(_Loop):
         self.assertEqual(404, caught.exception.code)
 
 
-class WhatThePagePosts(_Loop):
-    async def test_an_arrangement_is_held_and_reported_on(self):
-        document = write_layout(Layout())
-        document["palette"]["accent"] = "#FF8800"
-        document["menu"]["order"] = ["scripts", "build"]
-        code, body = self._post("/layout", document)
-        self.assertEqual(200, code)
-        self.assertEqual([], body["problems"])
-        self.assertEqual("#FF8800", self.server.layout.palette.accent)
-        self.assertEqual(("scripts", "build"), self.server.layout.menu.order)
+class Designing(_Loop):
+    """Themes: add one, recolour it, switch to it, and delete one."""
 
-    async def test_what_could_not_be_taken_is_said_rather_than_guessed(self):
-        document = write_layout(Layout())
-        document["palette"]["accent"] = "burnt orange"
-        _, body = self._post("/layout", document)
-        self.assertTrue(any("palette.accent" in one for one in body["problems"]))
-        self.assertEqual(Palette().accent, self.server.layout.palette.accent)
+    async def test_a_theme_can_be_added_and_made_the_one_in_use(self):
+        document = self._document()
+        document["layout"]["themes"]["dusk"] = dict(
+            document["layout"]["themes"][DEFAULT_THEME]
+        )
+        document["layout"]["themes"]["dusk"]["accent"] = "#FF8800"
+        document["layout"]["theme"] = "dusk"
+        self.assertEqual([], self._send(document)["problems"])
 
-    async def test_the_rest_of_an_arrangement_survives_one_bad_field(self):
-        document = write_layout(Layout())
-        document["palette"]["accent"] = "orange"
-        document["menu"]["cards_per_row"] = 2
-        self._post("/layout", document)
-        self.assertEqual(2, self.server.layout.menu.cards_per_row)
+        layout = self.server.settings.layout
+        self.assertEqual({DEFAULT_THEME, "dusk"}, set(layout.themes))
+        self.assertEqual("dusk", layout.theme)
+        self.assertEqual("#FF8800", layout.palette.accent)
+
+    async def test_a_theme_can_be_deleted_even_the_one_it_started_with(self):
+        document = self._document()
+        document["layout"]["themes"]["dusk"] = dict(
+            document["layout"]["themes"][DEFAULT_THEME]
+        )
+        document["layout"]["theme"] = "dusk"
+        document = self._send(document)["document"]
+        del document["layout"]["themes"][DEFAULT_THEME]
+        self._send(document)
+
+        layout = self.server.settings.layout
+        self.assertEqual(["dusk"], sorted(layout.themes))
+        self.assertEqual("dusk", layout.theme)
+
+    async def test_the_last_theme_cannot_be_deleted_away(self):
+        # An interface has to be drawn in something, and `theme` has to point at
+        # something. The page will not offer it either, but this is the floor.
+        document = self._document()
+        document["layout"]["themes"] = {}
+        answer = self._send(document)
+        self.assertTrue(any("default one was put back" in one for one in answer["problems"]))
+        self.assertEqual([DEFAULT_THEME], sorted(self.server.settings.layout.themes))
+
+    async def test_a_name_a_settings_file_could_not_hold_is_refused(self):
+        document = self._document()
+        document["layout"]["themes"]["not a key"] = {}
+        answer = self._send(document)
+        self.assertTrue(any("usable theme name" in one for one in answer["problems"]))
+        self.assertNotIn("not a key", self.server.settings.layout.themes)
+
+
+class TheMenuAndTheWindow(_Loop):
+    async def test_an_arrangement_is_held(self):
+        document = self._document()
+        document["layout"]["menu"]["order"] = ["scripts", "build"]
+        document["layout"]["menu"]["hidden"] = ["build"]
+        document["layout"]["menu"]["cards_per_row"] = 2
+        document["layout"]["window"]["start_width"] = 1240
+        self.assertEqual([], self._send(document)["problems"])
+
+        layout = self.server.settings.layout
+        self.assertEqual(("scripts", "build"), layout.menu.order)
+        self.assertEqual(("build",), layout.menu.hidden)
+        self.assertEqual(2, layout.menu.cards_per_row)
+        self.assertEqual(1240, layout.window.start_width)
+
+
+class AddingAndDeletingSources(_Loop):
+    """The add/update/delete the settings document already knew how to express."""
+
+    PACK = {"url": "https://github.com/a/b.git", "ref": "v2"}
+
+    def _with_pack(self):
+        document = self._document()
+        document["templates"]["react_native"] = dict(self.PACK)
+        document["scripts"]["react_native"] = {"url": "https://github.com/a/c.git", "ref": ""}
+        document["script_checks"]["react_native"] = False
+        return self._send(document)["document"]
+
+    async def test_a_template_pack_can_be_added(self):
+        self._with_pack()
+        held = self.server.settings.templates["react_native"]
+        self.assertEqual("https://github.com/a/b.git", held.url)
+        self.assertEqual("v2", held.ref)
+
+    async def test_a_script_repository_and_its_watch_come_together(self):
+        self._with_pack()
+        self.assertIn("react_native", self.server.settings.scripts)
+        self.assertEqual({"react_native": False}, dict(self.server.settings.script_checks))
+
+    async def test_one_can_be_updated(self):
+        document = self._with_pack()
+        document["templates"]["react_native"]["ref"] = "main"
+        self._send(document)
+        self.assertEqual("main", self.server.settings.templates["react_native"].ref)
+
+    async def test_one_can_be_deleted(self):
+        # Which works because the document replaces the section rather than merging
+        # it: a key that is not in what was sent is a key that is gone.
+        document = self._with_pack()
+        del document["templates"]["react_native"]
+        del document["scripts"]["react_native"]
+        del document["script_checks"]["react_native"]
+        self._send(document)
+        self.assertEqual({}, dict(self.server.settings.templates))
+        self.assertEqual({}, dict(self.server.settings.scripts))
+
+    async def test_one_with_no_url_is_not_written_down(self):
+        document = self._document()
+        document["templates"]["half"] = {"url": "", "ref": ""}
+        self._send(document)
+        self.assertNotIn("half", self.server.settings.templates)
+
+
+class TheRestOfTheSettings(_Loop):
+    async def test_the_workspace_the_feed_and_the_flags_all_travel(self):
+        document = self._document()
+        document["scaffold"]["bundle_prefix"] = "com.acme"
+        document["scaffold"]["workspace_root"] = "~/work"
+        document["updates"]["channel"] = "any"
+        document["updates"]["repository"] = "acme/toolbox"
+        document["experimental"]["browser_view"] = True
+        self.assertEqual([], self._send(document)["problems"])
+
+        held = self.server.settings
+        self.assertEqual("com.acme", held.bundle_prefix)
+        self.assertEqual("~/work", held.workspace_root)
+        self.assertEqual("any", held.updates.channel)
+        self.assertEqual("acme/toolbox", held.updates.repository)
+        self.assertTrue(held.browser_view)
+
+
+class WhatCouldNotBeTaken(_Loop):
+    async def test_it_is_said_rather_than_guessed(self):
+        document = self._document()
+        document["layout"]["themes"][DEFAULT_THEME]["accent"] = "burnt orange"
+        answer = self._send(document)
+        self.assertTrue(any("palette.accent" in one for one in answer["problems"]))
+        self.assertEqual(Palette().accent, self.server.settings.layout.palette.accent)
+
+    async def test_the_rest_of_it_survives_one_bad_field(self):
+        document = self._document()
+        document["layout"]["themes"][DEFAULT_THEME]["accent"] = "orange"
+        document["layout"]["menu"]["cards_per_row"] = 2
+        self._send(document)
+        self.assertEqual(2, self.server.settings.layout.menu.cards_per_row)
+
+    async def test_the_document_comes_back_as_it_was_actually_read(self):
+        # So a page showing a value the toolbox would not take corrects itself
+        # rather than standing there claiming it was kept.
+        document = self._document()
+        document["layout"]["window"]["min_width"] = 99999
+        answer = self._send(document)
+        self.assertEqual(
+            Window().min_width, answer["document"]["layout"]["window"]["min_width"]
+        )
 
     async def test_something_that_is_not_json_is_refused(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
-            _open(f"{self.base}/layout?{self.query}", b"not json")
+            _open(f"{self.base}/document?{self.query}", b"not json")
         self.assertEqual(400, caught.exception.code)
 
     async def test_an_absurd_body_is_refused_and_the_refusal_arrives(self):
@@ -414,27 +586,20 @@ class WhatThePagePosts(_Loop):
         # (`docs/pitfalls.md` 10.1) - intermittently, which is worse.
         for _ in range(3):
             with self.assertRaises(urllib.error.HTTPError) as caught:
-                _open(f"{self.base}/layout?{self.query}", b"{}" + b" " * 300_000)
+                _open(f"{self.base}/document?{self.query}", b"{}" + b" " * 300_000)
             self.assertEqual(413, caught.exception.code)
-
-    async def test_nothing_absurd_was_taken_from_it(self):
-        _open_failed = False
-        try:
-            _open(f"{self.base}/layout?{self.query}", b"{}" + b" " * 300_000)
-        except urllib.error.HTTPError:
-            _open_failed = True
-        self.assertTrue(_open_failed)
-        self.assertEqual(Layout(), self.server.layout)
-
-    async def test_reset_puts_everything_back(self):
-        document = write_layout(Layout())
-        document["palette"]["accent"] = "#FF8800"
-        self._post("/layout", document)
-        self._post("/reset", {})
-        self.assertEqual(Layout(), self.server.layout)
+        self.assertEqual(Settings(), self.server.settings)
 
 
 class WhenItIsOver(_Loop):
+    async def test_revert_goes_back_to_what_it_opened_with(self):
+        document = self._document()
+        document["scaffold"]["bundle_prefix"] = "com.acme"
+        self._send(document)
+        self.assertEqual("com.acme", self.server.settings.bundle_prefix)
+        self._post("/revert", {})
+        self.assertEqual(Settings(), self.server.settings)
+
     async def test_saving_and_closing_is_what_finishes_it(self):
         self.assertFalse(self.server.finished.is_set())
         self._post("/done", {})
@@ -451,7 +616,7 @@ class WhenItIsOver(_Loop):
         self.server.stop()
 
     async def test_the_server_never_writes_anything(self):
-        # It hands back a document; saving it goes through `ConfigPort` like every
-        # other setting, so there is one place that writes settings.
+        # It hands back settings; saving them goes through `ConfigPort` like every
+        # other setting, so one place still writes them.
         self.assertFalse(hasattr(self.server, "save"))
-        self.assertIsInstance(self.server.layout, Layout)
+        self.assertIsInstance(self.server.settings, Settings)

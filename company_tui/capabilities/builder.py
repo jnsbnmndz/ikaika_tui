@@ -1,9 +1,8 @@
-"""Arranging the interface in a browser, and writing the answer to the settings file."""
+"""Arranging the interface and every setting in a browser, and saving the answer."""
 
 import asyncio
 import webbrowser
 from collections.abc import Sequence
-from dataclasses import replace
 
 from company_tui.application.registry import CapabilityRegistry
 from company_tui.domain.capability import CANCELLED, Capability, CapabilityInfo
@@ -16,19 +15,23 @@ STOPPED_MESSAGE = "Stopped before it finished."
 FAILED = 1
 
 SCOPE_KEY = "scope"
-OPENING = "Opening the layout in your browser..."
+OPENING = "Opening the builder in your browser..."
 BY_HAND = "If it did not open, go to: {url}"
 WAITING = "Arrange it there, then press Save and close."
-NEXT_TIME = "The interface takes it up the next time it starts."
+NEXT_TIME = "Settings apply now; how the interface looks, the next time it starts."
 
 
-class LayoutCapability(Capability):
+class BuilderCapability(Capability):
     """The one capability whose surface is a browser rather than this interface.
 
     Dragging a grid into shape with a mouse is something a browser does well and a
-    terminal does badly, and this runs once while somebody is deciding rather than
-    while they are working - so the context switch buys something. The server is
-    open only for that, and nothing about it survives the run (`docs/decisions/0007`).
+    terminal does badly, and this runs while somebody is deciding rather than while
+    they are working - so the context switch buys something. The server is open only
+    for that, and nothing about it survives the run.
+
+    What it edits is the settings document App Setup already exports and imports, so
+    this is a second editor and never a second answer to what a setting is: the same
+    reader validates it and the same `ConfigPort` writes it (`docs/decisions/0007`).
     """
 
     def __init__(self, console: Ui, config: ConfigPort) -> None:
@@ -43,14 +46,14 @@ class LayoutCapability(Capability):
     @property
     def info(self) -> CapabilityInfo:
         return CapabilityInfo(
-            key="layout",
-            name="Layout",
-            description="Arrange the colours, the window and this menu",
+            key="builder",
+            name="Builder",
+            description="Design the interface and edit any setting, in your browser",
         )
 
     async def execute(self) -> int:
         while True:
-            values = await self._console.open_run_panel("Layout", self._options())
+            values = await self._console.open_run_panel("Builder", self._options())
             if values is None:
                 return CANCELLED
 
@@ -77,8 +80,9 @@ class LayoutCapability(Capability):
                 choices=tuple(scope.value for scope in ConfigScope),
                 default=ConfigScope.USER.value,
                 help=(
-                    "user is usually right: how the interface looks is a property "
-                    "of this machine rather than of the repository."
+                    "Everything the page edits is written to this one file. user is "
+                    "usually right for how the interface looks; project is where a "
+                    "team's template and script sources belong."
                 ),
             ),
             Option(
@@ -108,8 +112,12 @@ class LayoutCapability(Capability):
         panel, which cancels this and unwinds through the same `finally`.
         """
         current = self._config.settings()
+        scope = self._scope(values)
         server = BuilderServer(
-            current.layout, self._cards(), asyncio.get_running_loop()
+            current,
+            self._cards(),
+            asyncio.get_running_loop(),
+            where=f"Everything here is written to {self._config.location(scope)}.",
         )
         url = server.start()
         try:
@@ -124,11 +132,10 @@ class LayoutCapability(Capability):
         for problem in server.problems:
             self._console.write(f"Not taken: {problem}")
 
-        scope = self._scope(values)
         self._console.write(f"Writing {self._config.location(scope)}...")
-        path = self._config.save(replace(current, layout=server.layout), scope)
+        path = self._config.save(server.settings, scope)
         self._console.write(NEXT_TIME)
-        return (f"Saved the layout to {path}", True)
+        return (f"Saved to {path}", True)
 
     @staticmethod
     def _scope(values: OptionValues) -> ConfigScope:
