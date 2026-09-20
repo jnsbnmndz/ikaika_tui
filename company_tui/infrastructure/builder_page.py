@@ -143,6 +143,7 @@ PAGE = """<!DOCTYPE html>
           <span class="key">Esc</span> Quit
         </div>
       </div>
+      <p class="pvNote" id="pvNote"></p>
       <h2>Not taken</h2>
       <ul class="problems" id="problems"></ul>
     </section>
@@ -252,10 +253,12 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .grid { display: grid; gap: 8px; }
 .card { border: 1px solid; border-radius: 7px; padding: 8px 10px; font-size: 12px; min-width: 0; }
 .card b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card i { font-style: normal; opacity: .65; font-size: 11px; display: block;
-          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card i { font-style: normal; opacity: .65; font-size: 11px; overflow: hidden;
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .card.first { border-width: 2px; }
 .frameFoot { padding: 8px 13px; border-top: 1px solid; font-size: 11px; opacity: .8; }
+.pvNote { margin: 9px 2px 0; font-size: 11px; color: var(--dim); }
+.pvNote em { font-style: normal; color: #e8a49f; }
 .key { font-weight: 700; margin-left: 10px; }
 .key:first-child { margin-left: 0; }
 """
@@ -307,6 +310,7 @@ async function load() {
   commands = body.commands || [];
   manifest = body.manifest || "";
   $("where").textContent = body.where;
+  showProblems([]);
   render();
 }
 
@@ -344,6 +348,7 @@ function render() {
   drawCards();
   drawPairs($("sizes"), SIZES, doc.layout.window, (key, field) => {
     doc.layout.window[key] = parseInt(field.value, 10) || doc.layout.window[key];
+    drawPreview();
   }, "number");
   drawPairs($("scaffold"), PLACES, doc.scaffold, (key, field) => {
     doc.scaffold[key] = field.value;
@@ -787,8 +792,13 @@ function addCommand() {
 
 /* ---- the preview ---- */
 
+function painting() {
+  const held = doc.layout.themes || {};
+  return held[doc.layout.theme] || held[Object.keys(held)[0]] || {};
+}
+
 function drawPreview() {
-  const paint = doc.layout.themes[doc.layout.theme] || {};
+  const paint = painting();
   const frame = $("frame");
   frame.style.background = paint.background;
   frame.style.color = paint.foreground;
@@ -812,6 +822,31 @@ function drawPreview() {
     );
     grid.append(card);
   });
+
+  shapeFrame();
+  describePreview();
+}
+
+function shapeFrame() {
+  const frame = $("frame");
+  const held = doc.layout.window;
+  const wide = held.start_width || 1;
+  const tall = held.start_height || 1;
+  const across = frame.getBoundingClientRect().width;
+  frame.style.minHeight = across ? Math.round((across * tall) / wide) + "px" : "";
+}
+
+function describePreview() {
+  const note = $("pvNote");
+  const held = doc.layout.window;
+  note.textContent = doc.layout.theme
+    + " - opens " + held.start_width + "x" + held.start_height
+    + ", never under " + held.min_width + "x" + held.min_height
+    + " - " + doc.layout.menu.cards_per_row + " across"
+    + " - " + shown().length + " of " + known.length + " cards";
+  if (held.start_width < held.min_width || held.start_height < held.min_height) {
+    note.append(make("em", { textContent: " - it opens under its own floor" }));
+  }
 }
 
 /* ---- wiring ---- */
@@ -822,6 +857,7 @@ $("across").addEventListener("input", (event) => {
   drawPreview();
 });
 $("across").addEventListener("change", push);
+window.addEventListener("resize", shapeFrame);
 $("themeAdd").addEventListener("click", addTheme);
 $("commandAdd").addEventListener("click", addCommand);
 $("templateAdd").addEventListener("click", () => addSource("templates", $("templateKey"), false));

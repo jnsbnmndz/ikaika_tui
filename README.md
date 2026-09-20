@@ -268,7 +268,8 @@ python -m company_tui --start builder
   them. Ten colour tokens each, with a live preview of the menu as you pick.
 - **Menu.** Drag the cards into the order you want, untick the ones you never use, choose
   how many go across.
-- **Window.** The size it opens at and the size it is held to.
+- **Window.** The size it opens at and the size it is held to. The preview takes that
+  shape, so a window too short for the cards you have chosen shows as one.
 - **Workspace.** Workspace root, bundle prefix, scripts root.
 - **Packs.** Template packs and script repositories — add a stack, edit its clone URL and
   ref, turn watching on or off, delete one.
@@ -306,7 +307,8 @@ project does.
 
 Settings are in force as soon as you save. How the interface *looks* is read when the app
 starts, so the theme, the window and the grid arrive next launch — the browser preview is
-where you watch those while you work. An untouched toolbox writes nothing about the
+where you watch those while you work — it draws the menu in the window's own
+proportion and says underneath which theme, which size and how many cards it is showing. An untouched toolbox writes nothing about the
 arrangement at all, hiding every card is refused, and a card left off the menu is still
 reachable with `--start`.
 

@@ -366,7 +366,10 @@ there for the same reason `handover.py`'s script is. The server writes nothing.
 What was saved is in force immediately for everything but the look: the palette, the window
 and the grid are read **once, at startup**, and the browser's own preview is where somebody
 watches those change. One rule rather than three - a palette that applied live beside a
-window that could not is a control that half lies.
+window that could not is a control that half lies. **All three, then, and not two**: the
+preview draws the menu in the window's own proportion and names what it is showing
+underneath, because a tab whose numbers change nothing on screen reads as broken rather than
+as unpreviewed (`docs/pitfalls.md` 10.2).
 
 An unreadable value is reported and never guessed: a colour that is not `#rgb`/`#rrggbb`
 reaches Textual as a theme it refuses, and an app with no theme is an unstyled one, so

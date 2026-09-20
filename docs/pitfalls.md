@@ -422,3 +422,25 @@ the connection only when there is more than that. The bound is the point: readin
 arbitrary body to be polite about refusing it is the thing the refusal exists to avoid. The
 same applies to any early response — `413`, `401`, `400` before parsing — anywhere a body was
 announced and not consumed.
+
+### 10.2 A preview that only previews half of what the page arranges
+
+The builder arranges three things — the palette, the menu grid and the window — and the
+preview drew two of them. Nothing errored: the window's four numbers were saved correctly
+and the preview simply never looked at them, so typing a new start size changed a field and
+nothing else on the screen. The Design and Menu tabs answered back instantly, which made the
+Window tab read as broken rather than as unpreviewed.
+
+Two smaller versions of the same thing were in the same pane. `Not taken` was filled in only
+on the way back from a save, so it stood over an empty list for the whole of a first visit —
+a heading with nothing under it, which looks like a list that failed to load rather than like
+one with nothing in it. And the preview took its colours as
+`doc.layout.themes[doc.layout.theme] || {}`, so a `theme` naming a theme that is not there
+assigned `undefined` to every style property; in the DOM that is a no-op, and the frame
+quietly kept the builder page's own colours and presented them as the theme.
+
+**Rule.** A preview answers for everything the page next to it can change, or it is a
+control with no feedback. Fill an empty report with the words for empty rather than leaving
+it blank. And fall back in the preview the same way the domain does — `Layout.palette` falls
+back because a theme can be deleted out from under the name pointing at it, and a preview
+that renders the wrong colours without saying so is worse than one that renders none.

@@ -331,6 +331,32 @@ class ThePageAndItsScript(unittest.TestCase):
         self.assertTrue(panes)
         self.assertEqual(set(), panes - tabs)
 
+    def test_the_preview_answers_for_the_window_as_well_as_the_grid(self):
+        # Three things are arranged here and the preview is where all three are
+        # watched: a window the preview ignored was a control with no feedback.
+        preview = SCRIPT[SCRIPT.index("---- the preview ----"):]
+        self.assertIn("start_width", preview)
+        self.assertIn("start_height", preview)
+        self.assertIn("cards_per_row", preview)
+        self.assertIn("doc.layout.theme", preview)
+
+    def test_changing_the_window_redraws_the_preview(self):
+        wiring = SCRIPT[SCRIPT.index("doc.layout.window[key]"):]
+        self.assertTrue(wiring.startswith("doc.layout.window[key] = parseInt"))
+        self.assertIn("drawPreview();", wiring[: wiring.index("}, \"number\")")])
+
+    def test_the_preview_falls_back_rather_than_drawing_nothing(self):
+        # `Layout.palette` falls back because a theme can be deleted out from
+        # under the name pointing at it; undefined here is a frame that quietly
+        # keeps the builder's own colours and calls them the theme.
+        self.assertIn("held[Object.keys(held)[0]]", SCRIPT)
+
+    def test_nothing_taken_says_so_before_anything_has_been_sent(self):
+        # It is only filled in on the way back from a save, so the heading stood
+        # over an empty list for the whole of the first visit.
+        opening = SCRIPT[SCRIPT.index("async function load()"):]
+        self.assertIn("showProblems([]);", opening[: opening.index("async function push()")])
+
     def test_the_page_asks_for_the_assets_the_server_serves(self):
         self.assertIn("builder.css?t=TOKEN", PAGE)
         self.assertIn("builder.js?t=TOKEN", PAGE)

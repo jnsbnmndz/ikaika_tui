@@ -5,11 +5,13 @@ workspace_root = "."
 bundle_prefix = "com.dti"
 scripts_root = "~/.dti/scripts"
 
+[experimental]
+interactive_lists = true
+timed_prompts = true
+browser_view = true
+
 [templates.react_native]
 url = "https://github.com/JDM-Github/react_native_structure.git"
 
 [scripts.react_native]
 url = "https://github.com/JDM-Github/react_native_scripts.git"
-
-[experimental]
-interactive_lists = true
