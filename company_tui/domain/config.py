@@ -7,6 +7,7 @@ from enum import Enum
 from pathlib import Path
 
 from company_tui.domain import naming
+from company_tui.domain.layout import Layout
 from company_tui.domain.updates import UpdateSource
 
 DEFAULT_BUNDLE_PREFIX = naming.BUNDLE_PREFIX
@@ -15,7 +16,16 @@ DEFAULT_SCRIPTS_ROOT = f"~/{naming.STORE_DIR_NAME}/scripts"
 """Where cloned script repositories are kept, for every project on this machine."""
 
 class ConfigScope(Enum):
-    """Which of the two settings files an edit belongs in."""
+    """Which settings file an edit belongs in.
+
+    They are tried in this order and the first one that exists wins **outright**,
+    never merged: two files half-answering a question is a preference written where
+    nothing reads it, which is a question that keeps being asked.
+    """
+
+    DRIVEN = "driven"
+    """In the project being worked on, which is not always the one this was started
+    in. What a repository pins for anyone who drives it."""
 
     PROJECT = "project"
     """Beside the repository: what this project's team agreed on."""
@@ -59,6 +69,9 @@ class Settings:
 
     browser_view: bool = False
     """Whether an action may open the browser instead of a form. Off, and experimental."""
+
+    layout: Layout = field(default_factory=Layout)
+    """Colours, window size and the menu grid. Every default is what the code held."""
 
 class ConfigPort(ABC):
     @abstractmethod
@@ -121,6 +134,27 @@ class ConfigPort(ABC):
         nothing turned on must not be turned on by a port that forgot to answer.
         """
         return False
+
+    def scopes(self) -> tuple[ConfigScope, ...]:
+        """The files that mean something here, for a form to offer.
+
+        Never all of them regardless: a "save to" naming a file that does not apply
+        is a control that lies, and `driven` only applies while something is being
+        driven.
+        """
+        return (ConfigScope.PROJECT, ConfigScope.USER)
+
+    def follow(self, root: Path | None) -> None:  # noqa: B027 - inert on purpose
+        """Take this directory as the project being worked on, for settings too.
+
+        Concrete and inert, so a port written before there was a third file is
+        still a correct one.
+        """
+
+    def layout(self) -> Layout:
+        """How the interface is arranged. The defaults are what it always drew, so a
+        port that has never heard of this is a toolbox that looks unchanged."""
+        return Layout()
 
     @abstractmethod
     def update_source(self) -> UpdateSource:

@@ -11,6 +11,7 @@ from company_tui.domain.config import (
     Settings,
     TemplateSource,
 )
+from company_tui.domain.layout import read_layout, write_layout
 from company_tui.domain.updates import (
     CHANNEL_ANY,
     CHANNEL_OFFICIAL,
@@ -49,6 +50,7 @@ def write_document(settings: Settings) -> dict[str, Any]:
             for key, source in sorted(settings.scripts.items())
         },
         "script_checks": dict(sorted(settings.script_checks.items())),
+        "layout": write_layout(settings.layout),
         "experimental": {
             "interactive_lists": settings.interactive_lists,
             "timed_prompts": settings.timed_prompts,
@@ -114,8 +116,19 @@ def read_document(
             document, "experimental", "browser_view",
             current.browser_view, problems,
         ),
+        layout=_layout(document, current.layout, problems),
     )
     return settings, tuple(problems)
+
+
+def _layout(document: Any, fallback, problems: list[str]):
+    """The layout, or what is already set. Its own reader reports its own gaps."""
+    holder = document.get("layout")
+    if holder is None:
+        return fallback
+    read, found = read_layout(holder, fallback)
+    problems.extend(f"layout: {one}" for one in found)
+    return read
 
 
 def _flag(

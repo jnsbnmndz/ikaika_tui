@@ -5,6 +5,8 @@ import os
 import sys
 from dataclasses import dataclass
 
+from company_tui.domain.layout import Window
+
 START_SIDE = 980
 """How big the window opens, on both edges unless `DEFAULT_PLAN` says otherwise."""
 
@@ -42,9 +44,10 @@ class WindowState:
     minimized: bool
 
 
-def plan_for(screen_width: int, screen_height: int) -> WindowPlan:
+def plan_for(
+    screen_width: int, screen_height: int, wanted: WindowPlan = DEFAULT_PLAN
+) -> WindowPlan:
     """What to open at, and what to hold to, on a screen this size."""
-    wanted = DEFAULT_PLAN
     tall_enough = screen_height >= wanted.start_height
     height = (
         wanted.start_height if tall_enough else max(screen_height - SCREEN_MARGIN, 1)
@@ -177,10 +180,17 @@ def screen_size() -> tuple[int, int] | None:
     return (width, height) if width > 0 and height > 0 else None
 
 
-def window_plan() -> WindowPlan:
-    """The plan for the screen this app is on, or the plain square if unreadable."""
+def window_plan(wanted: WindowPlan = DEFAULT_PLAN) -> WindowPlan:
+    """The plan for the screen this app is on, or `wanted` itself if unreadable."""
     measured = screen_size()
-    return DEFAULT_PLAN if measured is None else plan_for(*measured)
+    return wanted if measured is None else plan_for(*measured, wanted)
+
+
+def plan_from(window: Window) -> WindowPlan:
+    """The arranged window as a plan. The domain holds sizes, not screen policy."""
+    return WindowPlan(
+        window.start_width, window.start_height, window.min_width, window.min_height
+    )
 
 
 def current_window() -> AppWindow | None:

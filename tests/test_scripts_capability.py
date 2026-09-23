@@ -12,6 +12,7 @@ from company_tui.domain.identity import SCRIPT_MANIFEST
 from company_tui.domain.options import defaults_for
 from company_tui.domain.ports import ProcessResult
 from company_tui.domain.script_config import action_options
+from company_tui.infrastructure.config import FileConfig
 from company_tui.templates.services import PackServices
 
 ROOT = Path("/proj").resolve()
@@ -155,13 +156,22 @@ class StubUi:
         return again
 
 
+def _nowhere():
+    """A real config over files that are not there, which answers every default.
+
+    Faithful rather than `None`: the capability tells it which project is being
+    worked on, and a stand-in that cannot be told is one that hides whether it was.
+    """
+    return FileConfig(Path("no-such-project.toml"), Path("no-such-user.toml"))
+
+
 def build(console, files):
     runner = FakeProcessRunner()
     services = PackServices(
         console=console,
         file_system=FakeFileSystem(files),
         process_runner=runner,
-        config=None,
+        config=_nowhere(),
         finalizer=FakeFinalizer(),
     )
     return ScriptsCapability(console=console, services=services), runner
@@ -350,7 +360,7 @@ class RefreshTest(unittest.TestCase):
             console=console,
             file_system=file_system,
             process_runner=runner,
-            config=None,
+            config=_nowhere(),
             finalizer=FakeFinalizer(),
         )
         capability = ScriptsCapability(console=console, services=services)

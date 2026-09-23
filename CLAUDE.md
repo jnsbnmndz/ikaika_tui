@@ -306,6 +306,80 @@ and the note is a single-line box. **The command is never told which surface it 
 only difference is the verb of the line coming back, which it has to read anyway. See `docs/decisions/0006`, and
 `docs/pitfalls.md` 9.5 for why anything meant to sit beside a listing is sent before it.
 
+## The builder
+
+What the interface looks like is a value, not constants: `domain/layout.py` holds the
+**themes**, the window and the menu grid, and every default in it is what the code held
+before - `plan_from(Window())` is `DEFAULT_PLAN` and `theme_from(Palette())` is `APP_THEME`
+colour for colour, both under test. So a toolbox nobody has arranged draws exactly what it
+drew, and the settings file says nothing about the arrangement until somebody arranges
+something. Themes are **named**, so a dark variant can be kept rather than replacing the one
+you had; there is always at least one, `theme` always points at one that exists, and
+`Layout.palette` falls back rather than raising, because a theme can be deleted out from
+under the name pointing at it.
+
+**Builder** (`capabilities/builder.py`) is the one capability whose surface is not this
+interface. Dragging a grid into shape with a mouse is something a browser does well and a
+terminal does badly, and it runs while somebody is deciding rather than while they are
+working - so the context switch buys something. That is a line worth keeping: the next
+feature that wants a web page should have to make the argument again.
+
+**Three settings files now, and the first that exists wins outright.** `driven`, then
+`project`, then `user` - `driven` being the project actually being worked on, which is not
+always the one the toolbox was started in. `ConfigPort.follow` is how it is told which, and
+`scopes()` is why a form offers `driven` only while there is one. Never merged: two files
+half-answering a question is a preference written where nothing reads it. A repository can
+therefore pin its own theme, menu, sources and flags for anyone who drives it, which is not
+new trust - driving a project already means running the commands it declares.
+`naming.project_root()` is the one answer to which tree that is.
+
+**The project's own commands are editable too** (`domain/commands.py`), and only the parts
+the builder offers: `description`, `command-after-success`, `interactive`, `view`.
+Everything else on an action - `args`, `template`, `path`, `messages`, anything a later
+version grew - is read and put back untouched at the file's own indent, because this is
+somebody else's contract file. An action is told from a group of them by
+`script_config.ACTION_MARKERS` and nothing else. **A rename moves what was there** rather
+than building a new one (`Command.was`), or the template and the arguments go with it
+silently; and a rename that orphans the action's own `${<name>.args.<flag>}` references says
+so, because an unanswered reference is left in place and what fails is the run. The builder
+never *creates* a manifest - what makes a directory one of these projects is a scaffold.
+
+**It edits the settings document and defines nothing.** The page is a view over the same
+document App Setup exports and imports; every field goes back through `read_document`, is
+validated by the code the TUI's own forms use, and is saved through `ConfigPort`. That is
+what makes a second editor safe - two editors for one file drift, two *views* over one
+document cannot. Add, update and delete came free with it: the document already replaces
+`templates`, `scripts` and `script_checks` wholesale when they are present, so a key that is
+not in what the page sent is a key that is gone. **Nothing on the page may define a setting
+of its own.**
+
+`infrastructure/builder_page.py` is the page and `builder.py` is the server, and everything
+about the server follows from it being open for that one run: `127.0.0.1` on an ephemeral
+port, **a single-use token on every request** (localhost is not a boundary - any program
+here can reach a loopback port, and any page in the browser can POST to one), every refusal
+a 404 rather than a 403 because a 403 confirms the path, **assets from a dict rather than the
+filesystem** so there is no path to traverse, and **a body it refuses is read away before the
+refusal is sent**, because answering while the client is still writing aborts the connection
+under it and the refusal never arrives (`docs/pitfalls.md` 10.1). The page is program text
+there for the same reason `handover.py`'s script is. The server writes nothing.
+
+What was saved is in force immediately for everything but the look: the palette, the window
+and the grid are read **once, at startup**, and the browser's own preview is where somebody
+watches those change. One rule rather than three - a palette that applied live beside a
+window that could not is a control that half lies. **All three, then, and not two**: the
+preview draws the menu in the window's own proportion and names what it is showing
+underneath, because a tab whose numbers change nothing on screen reads as broken rather than
+as unpreviewed (`docs/pitfalls.md` 10.2).
+
+An unreadable value is reported and never guessed: a colour that is not `#rgb`/`#rrggbb`
+reaches Textual as a theme it refuses, and an app with no theme is an unstyled one, so
+`read_layout` checks it, keeps what was set and names what it would not take. Same for a
+size outside 320-10000, a grid wider than six, a floor above the size it is the floor for,
+and a theme name a settings file could not hold. **Hiding every card is refused** - a menu
+with no cards is an app with no way in - and off the menu is not gone: `registry.get` still
+finds a hidden capability so `--start` opens it, and `registry.every()` still lists it so the
+builder can offer it back. See `docs/decisions/0007`.
+
 ## Transitions
 
 Every step of a workflow pops one screen before pushing the next, so the app's own screen shows in between. It carries the same chrome, and its activity log stays hidden (`-quiet`) until something is written to it, so the gap reads as the same surface rather than as somewhere else. A workflow that sends the user back therefore passes a `notice` to the menu they land on instead of writing to the console, which would put the message behind whatever comes next. What a workflow without a panel does write there is read at the pause that follows it, and the log is emptied and hidden again when the menu loop comes back round — a line left standing shows through every later gap as if the workflow now running had said it.
@@ -417,7 +491,7 @@ graphify update .                         # after any code change (AST only, no 
 7. Run all commands in the definition of done.
 8. Run `graphify update .`.
 
-The menu grid wraps at three cards per row (`CARDS_PER_ROW`), so registering a fourth capability starts a second row rather than squeezing the first — no layout change is needed per capability. There are nine, in three rows; the menu numbers them in registration order, so a new one is **appended** rather than inserted, or every number people have learned moves.
+The menu grid wraps at three cards per row by default (`CARDS_PER_ROW`, and `[layout.menu] cards_per_row` where somebody has arranged one), so registering a fourth capability starts a second row rather than squeezing the first — no layout change is needed per capability. There are ten; the menu numbers them in registration order, so a new one is **appended** rather than inserted, or every number people have learned moves. That rule is about what *this repository* does to somebody's menu - somebody rearranging their own through the **Builder** is choosing to move those numbers, and the numbers follow the order they leave it in.
 
 The last three are about the toolbox rather than about projects: **App Setup** carries the whole configuration out as one JSON document and reads one back (`domain/settings_document.py`), **Check for Updates** asks a release feed whether there is a newer build (`domain/updates.py`, `infrastructure/release_feed.py`), and **Advanced** is where the feed is configured.
 

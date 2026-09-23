@@ -180,6 +180,7 @@ class CardMenuScreen(Screen[int | None]):
         trail: Sequence[str] = (),
         notice: str = "",
         runs: str = "",
+        columns: int = CARDS_PER_ROW,
     ) -> None:
         super().__init__()
         self._title = title
@@ -189,7 +190,7 @@ class CardMenuScreen(Screen[int | None]):
         self._trail = tuple(trail)
         self._notice = notice
         self._runs = runs
-        self._columns = min(CARDS_PER_ROW, max(len(self._entries), 1))
+        self._columns = min(columns, max(len(self._entries), 1))
         self._rows = -(-len(self._entries) // self._columns)
         self._compact = False
 

@@ -13,6 +13,7 @@ from company_tui.application.updates import CACHE_DIRECTORY, UpdateWatch
 from company_tui.capabilities.advanced import AdvancedCapability
 from company_tui.capabilities.app_setup import AppSetupCapability
 from company_tui.capabilities.build import BuildCapability
+from company_tui.capabilities.builder import BuilderCapability
 from company_tui.capabilities.deploy import DeployCapability
 from company_tui.capabilities.doctor import DoctorCapability
 from company_tui.capabilities.scaffold import ScaffoldCapability
@@ -70,7 +71,11 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
             ReactTemplatePack(services),
         )
     )
-    return CapabilityRegistry(
+    arranging = BuilderCapability(
+        console=console, config=config, file_system=file_system
+    )
+    registry = CapabilityRegistry(
+        menu=config.layout().menu,
         capabilities=(
             ScaffoldCapability(
                 console=console,
@@ -103,8 +108,11 @@ def _build_capability_registry(console: Ui) -> CapabilityRegistry:
                 state=FileUpdateState(state_path(running_build())),
             ),
             AdvancedCapability(console=console, config=config),
-        )
+            arranging,
+        ),
     )
+    arranging.knows(registry)
+    return registry
 
 
 def create_application(console: PlainConsole) -> Application:
@@ -134,6 +142,7 @@ def create_tui_console(start: str = "") -> TuiConsole:
         workspace=str(Path.cwd().resolve()),
         watch=_build_update_watch(),
         recent=FileRecentPaths(),
+        layout=FileConfig().layout(),
     )
     console.application = Application(
         console=console, registry=_build_capability_registry(console)

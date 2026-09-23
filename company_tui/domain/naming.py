@@ -53,6 +53,17 @@ def config_names() -> tuple[str, ...]:
     return (CONFIG_NAME, *LEGACY_CONFIG_NAMES)
 
 
+def project_root() -> Path:
+    """The project being worked on: what a launcher named, else where we are.
+
+    One answer, because the toolbox may be started from its own checkout while
+    driving another tree - and the settings, the commands and the menus all have to
+    agree about which tree that is.
+    """
+    declared = project_root_from_env()
+    return Path(declared).expanduser().resolve() if declared else Path.cwd().resolve()
+
+
 def project_root_from_env(environ: Mapping[str, str] | None = None) -> str:
     """What a launcher said the project is, or `""`."""
     source = os.environ if environ is None else environ

@@ -35,8 +35,7 @@ FAILED = 1
 
 
 def project_root() -> Path:
-    declared = naming.project_root_from_env()
-    return Path(declared).expanduser().resolve() if declared else Path.cwd().resolve()
+    return naming.project_root()
 
 
 class ScriptsCapability(Capability):
@@ -53,6 +52,12 @@ class ScriptsCapability(Capability):
         )
 
     async def execute(self) -> int:
+        """Walk this project's own commands, and read its settings while doing it.
+
+        `follow` is what lets a repository pin its own theme, sources and flags for
+        anyone who drives it. Not new trust: driving a project already means running
+        the commands it declares (`docs/decisions/0007`).
+        """
         root = project_root()
         if not naming.project_root_from_env():
             root = await self._ask_where(root, "Which project's commands?")
@@ -67,6 +72,8 @@ class ScriptsCapability(Capability):
             root = await self._ask_where(root, problem)
             if root is None:
                 return CANCELLED
+
+        self._services.config.follow(root)
 
         section: ScriptSection | None = None
         action: ScriptAction | None = None

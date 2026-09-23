@@ -402,3 +402,45 @@ One cost is accepted rather than fixed: `browse()` is not awaiting anything betw
 returning a request and the listing that answers it, so a key pressed in that window is
 dropped. Navigation still works — the arrows are bindings on the row — and the fix, if this
 ever bites, is a stash tied to the listing it was pressed against, not a queue.
+
+## 10. Serving a page to a browser
+
+### 10.1 Refusing a body without reading it aborts the connection under the client
+
+The layout builder's server refuses a POST whose `Content-Length` is absurd, and it refused
+it the obvious way: answer 413 and do not read the body. Under load that became
+`ConnectionAbortedError [WinError 10053]` on the *client*, intermittently — it passed alone
+and failed in the full suite, which is the shape of a race and not of a bug in the test.
+
+The client is still writing 300KB when the server answers and closes. Windows aborts the
+connection rather than delivering the response, so the client never reads the refusal it was
+sent; on a slower machine, or a smaller body, it arrives fine. A refusal that only sometimes
+reaches the caller is worse than no refusal.
+
+**Rule.** Read a refused body away before answering, up to a bound (`DRAIN_LIMIT`), and drop
+the connection only when there is more than that. The bound is the point: reading an
+arbitrary body to be polite about refusing it is the thing the refusal exists to avoid. The
+same applies to any early response — `413`, `401`, `400` before parsing — anywhere a body was
+announced and not consumed.
+
+### 10.2 A preview that only previews half of what the page arranges
+
+The builder arranges three things — the palette, the menu grid and the window — and the
+preview drew two of them. Nothing errored: the window's four numbers were saved correctly
+and the preview simply never looked at them, so typing a new start size changed a field and
+nothing else on the screen. The Design and Menu tabs answered back instantly, which made the
+Window tab read as broken rather than as unpreviewed.
+
+Two smaller versions of the same thing were in the same pane. `Not taken` was filled in only
+on the way back from a save, so it stood over an empty list for the whole of a first visit —
+a heading with nothing under it, which looks like a list that failed to load rather than like
+one with nothing in it. And the preview took its colours as
+`doc.layout.themes[doc.layout.theme] || {}`, so a `theme` naming a theme that is not there
+assigned `undefined` to every style property; in the DOM that is a no-op, and the frame
+quietly kept the builder page's own colours and presented them as the theme.
+
+**Rule.** A preview answers for everything the page next to it can change, or it is a
+control with no feedback. Fill an empty report with the words for empty rather than leaving
+it blank. And fall back in the preview the same way the domain does — `Layout.palette` falls
+back because a theme can be deleted out from under the name pointing at it, and a preview
+that renders the wrong colours without saying so is worse than one that renders none.
