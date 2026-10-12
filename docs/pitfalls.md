@@ -444,3 +444,43 @@ control with no feedback. Fill an empty report with the words for empty rather t
 it blank. And fall back in the preview the same way the domain does — `Layout.palette` falls
 back because a theme can be deleted out from under the name pointing at it, and a preview
 that renders the wrong colours without saying so is worse than one that renders none.
+
+## 11. Changing a widget's state without rebuilding it
+
+### 11.1 A status in the rebuild signature rebuilds the strip for every question
+
+The tab strip above the terminal rebuilds itself from the registry, guarded by a signature so
+it only does that when something has changed. `SessionStatus` was in the signature, and a run
+that asks a question changes its session's status to `ASKING` and back. So a command asking
+five things tore the whole strip down and built it again ten times, and nobody had asked for
+a single one of them.
+
+It is worse than wasted work. `remove_children()` is answered on a later pass but `mount_all`
+is not, so between them the strip holds **both** sets of tabs — a four-tab strip measured ten
+children — then settles back. That frame is a visible jump in tab widths, and `scroll_visible`
+afterwards puts the strip's own scroll back wherever the active tab is. Typing an answer with
+the strip flickering above it is the symptom; the status in the signature is the cause, and
+nothing in the strip's own code looks wrong.
+
+**Rule.** Split the signature into *shape* and *state*. Rebuild for shape — a tab added,
+closed, renamed, or a different one made active — and for state, hand the existing widget the
+new value and let it restyle itself (`SessionTab.restate`). A status is a CSS class and a
+glyph; neither needs a new widget. The test counts constructor calls across a question rather
+than looking at the strip, because a rebuilt strip renders correctly and only misbehaves in
+the frame between.
+
+### 11.2 Disabling a focused widget focuses nothing
+
+The stdin row disables its `Input` the moment a question is answered, which is right — there
+is nothing to type into. Textual blurs a widget that is disabled under the focus and does not
+move the focus on, so the panel was left with `focused is None`: the question was answered and
+then no key did anything until the user clicked something or pressed Tab. The same thing by
+another route put the focus on COPY, because Textual *does* move focus to the next sibling
+when a focused **button** is disabled, and the sibling after SEND is a button about something
+else entirely.
+
+**Rule.** A control that takes the focus has to give it back. Remember what was focused when
+the question took it and restore that when the question ends, falling back to the panel's
+primary control when what held it is gone or disabled by now. Read `self.focused` **once, at
+the top**, before anything is disabled — read afterwards it already reports whatever the
+framework chose in the meantime, which is the thing being corrected.

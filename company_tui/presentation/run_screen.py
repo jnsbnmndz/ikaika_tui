@@ -454,15 +454,6 @@ class RunScreen(Screen[None]):
         margin-right: 2;
     }
 
-    RunScreen #stdin-keys #stdin-newline-hint .hint--key {
-        color: $accent;
-        text-style: bold;
-    }
-
-    RunScreen #stdin-keys #stdin-newline-hint .hint--label {
-        color: $text-muted;
-    }
-
     RunScreen .section--title {
         width: 100%;
         height: 1;
@@ -769,6 +760,8 @@ class RunScreen(Screen[None]):
         """Ticking while COPY is saying it worked, so a second press restarts."""
         self._refused = False
         """Whether Run has been pressed on this form and turned down."""
+        self._before_asking: Widget | None = None
+        """What had the keyboard when a question took it, to give it back."""
 
     @property
     def session(self) -> RunSession:
@@ -843,12 +836,6 @@ class RunScreen(Screen[None]):
                             )
                         with Horizontal(id="stdin-keys"):
                             yield KeyHint("Enter", "Send", dim=True, id="stdin-hint")
-                            yield KeyHint(
-                                "Ctrl+Enter",
-                                "New line",
-                                dim=True,
-                                id="stdin-newline-hint",
-                            )
             yield AppFooter(self.HINTS_READY)
 
     def _form_widgets(self) -> list[Widget]:
@@ -1219,19 +1206,35 @@ class RunScreen(Screen[None]):
         return self.HINTS_RUNNING if self._session.started else self.HINTS_READY
 
     def _show_stdin(self, asking: bool) -> None:
+        """The row a question is answered in, and the keyboard it borrows."""
+        held = self.focused
+        ours = held is not None and held.id in ("stdin", "stdin-send")
         for box in self.query("#stdin").results(Input):
             box.disabled = not asking
             box.placeholder = STDIN_ACTIVE if asking else STDIN_IDLE
             if asking and not box.has_focus:
+                if not ours:
+                    self._before_asking = held
                 box.focus()
             elif not asking:
                 box.value = ""
         for hint in self.query("#stdin-hint").results(KeyHint):
             hint.pressable = asking
-        for hint in self.query("#stdin-newline-hint").results(KeyHint):
-            hint.pressable = False
         for button in self.query("#stdin-send").results(Button):
             button.disabled = not asking
+        if not asking and (ours or self.focused is None):
+            self._hand_back_focus()
+
+    def _hand_back_focus(self) -> None:
+        """Give the keyboard back what the question took it from."""
+        held = self._before_asking
+        self._before_asking = None
+        if held is not None and held.is_attached and held.focusable:
+            held.focus()
+            return
+        for button in self.query("#run").results(Button):
+            button.focus()
+            return
 
     def _show_tabs(self) -> None:
         shown = self._sessions.visible(self._session.scope)
