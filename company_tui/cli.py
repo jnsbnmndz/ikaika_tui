@@ -14,6 +14,9 @@ COMMANDS = """commands:
   check     the definition of done: tests, list, doctor"""
 """Laid out rather than left to argparse's choices list."""
 
+INTERRUPTED = 130
+"""What a shell means by a run that ended on Ctrl+C."""
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=naming.APP_SLUG,
@@ -75,7 +78,17 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(application.run_capability("doctor"))
 
     from company_tui.bootstrap import create_tui_console
+    from company_tui.infrastructure.terminal_window import (
+        console_modes,
+        release_terminal,
+    )
 
+    held = console_modes()
     console = create_tui_console(args.start)
-    console.run()
+    try:
+        console.run()
+    except KeyboardInterrupt:
+        return INTERRUPTED
+    finally:
+        release_terminal(held)
     return console.result_code
