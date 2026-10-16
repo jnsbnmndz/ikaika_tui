@@ -484,3 +484,113 @@ the question took it and restore that when the question ends, falling back to th
 primary control when what held it is gone or disabled by now. Read `self.focused` **once, at
 the top**, before anything is disabled — read afterwards it already reports whatever the
 framework chose in the meantime, which is the thing being corrected.
+
+## 12. Giving the terminal back
+
+### 12.1 Shutdown sequences queued on a daemon thread are not sequences written
+
+A frozen build was quit and left the terminal printing `^[[<35;61;40M` at every twitch of
+the mouse, forever, with `^[[I` and `^[[O` mixed in — mouse motion reports and focus
+reports, going to a process that no longer existed, echoed by a console nobody had put
+back. The traceback said `KeyboardInterrupt` inside `stop_application_mode` →
+`disable_input` → `Thread.join`, and `PYI-14636:ERROR Failed to execute script`.
+
+Three things have to line up, and each is reasonable on its own:
+
+- Textual's `WindowsDriver.write` **enqueues** onto a `WriterThread`, and that thread's
+  `flush()` is a documented no-op — "flush is done in the thread". So
+  `_disable_mouse_support()` writing `?1000l ?1003l ?1015l ?1006l` and then calling
+  `self.flush()` has written nothing to the terminal. It has filled a queue.
+- `disable_input()` then blocks on `self._event_thread.join()`, waiting for an input thread
+  that is itself blocked reading the console. A `KeyboardInterrupt` landing there is a
+  `BaseException`, and that method catches `Exception`, so it escapes.
+- The queue is only drained by `close()` → `WriterThread.stop()`, which the escape skips —
+  and the thread is a **daemon**, so the interpreter exits without draining it.
+
+So everything after the join is lost: the alt screen is never left, the cursor is never
+shown, the kitty keyboard stack is never popped, `?1004l` is never written, and the
+`?1003l` that *was* written went into a queue that was thrown away. The console's input
+and output modes, saved by `enable_application_mode` and restored only in `close()`, are
+left as Textual set them.
+
+This repository is not a bystander: `restore_terminal_interaction` turns `?1000 ?1003
+?1015 ?1006 ?1004` **on** whenever the terminal regains focus, and had no counterpart at
+all. Anything that arms a terminal owns disarming it, and may not assume the framework's
+shutdown will run.
+
+**Rule.** Write the release yourself, in a `finally` around the app, **straight to
+`sys.__stdout__`** — never through the driver, which is the thing that may be gone — and
+build the off sequence from the same list of modes as the on sequence so the two cannot
+drift. Read the console's own modes **before** the app is built, because the framework
+overwrites them as it starts and reading afterwards records its modes rather than the
+shell's. Every sequence in a release is an *off*, so it is safe on a clean exit too; the
+one exception is showing the cursor, which is the restore. And catch `KeyboardInterrupt`
+at the top rather than letting it out: a frozen build turns it into a wall of traceback
+with `Failed to execute script` under it, over a terminal that is already unusable.
+
+## 13. A panel smaller than what it has to hold
+
+### 13.1 A fixed height is a share that does not shrink, and the overflow is off-screen
+
+A run was started from an editor's side terminal — about 52 columns by 26 rows — and the
+command asked a question. The panel showed the form, the Will-run line and a STOP button,
+with no terminal under it at all, and nothing could be typed. The run sat there until it
+was stopped.
+
+Under `NARROW_WIDTH` the two panes stack, and the form is pinned to `CONFIG_RUNNING` rows
+with the output pane taking `1fr` of the rest. That reads as a floor for the form and a
+share for the terminal, and it is the wrong way round: `11` is a *size*, so on a short
+terminal the form took its eleven rows and the output pane was left with four, while what
+it holds — a border, the tab strip, a line of output, and the six rows of the stdin row and
+its key — needs eleven. Textual lays the overflow out past the parent's bottom rather than
+clipping it to a scroll, so `#stdin-row` was measured at **row 29 of a 24-row screen**. It
+was not hidden, or disabled, or unfocusable. It was simply below the screen.
+
+Nothing reports this. The box takes the focus and keeps it, the tab goes orange, the footer
+says the run is going, and every one of those is true. A question is being asked somewhere
+the user cannot see or reach, which from the other side of the screen is a program that has
+hung.
+
+**Rule.** When two panes share a column, decide which one *cannot* be squeezed and give it a
+floor, then let the other have what is left — measured from the room there actually is, not
+from a constant. Here the form is a record of what was asked for and the stdin row is the
+only way to answer; so the form shrinks, and where there is not even room to shrink it, it
+goes until the run ends. Fold a margin into that arithmetic by **reading it off the widget**
+rather than restating it as a second constant next to the rule that sets it. And test the
+geometry across the sizes a terminal is actually given: this fails identically whether the
+widget is composed, focused and enabled, so only its measured region says anything.
+
+### 12.2 Omitting `stdin` means inherit, not none
+
+A run was streaming into the panel and a band of raw `^[[<35;69;22M^[[<35;71;22M...`
+appeared **across the middle of the live interface**, over both panes, growing with every
+twitch of the mouse. The app was not dying and nothing had crashed; it was drawing
+normally and something else was writing on top of it.
+
+Those are SGR mouse **motion** reports — terminal *input*. For them to be on the screen,
+something had to be reading them off stdin and echoing them. That something was the child.
+
+`asyncio.create_subprocess_exec` and `subprocess.run` with `stdin` left unsaid mean
+`stdin=None`, and `None` means **inherit the parent's handle**. `ProcessRunner.stream`
+built its `extra` dict as `{}` when there was no `ListView`, and `run` (so also `capture`,
+which is `run` on a thread) passed `capture_output=True` and nothing about stdin. Both
+therefore handed every child **the console the interface is drawn on** — the one the app
+itself had put into virtual-terminal input mode with `?1000h ?1003h ?1015h ?1006h ?1004h`.
+A PowerShell child reading that console got the mouse reports and echoed them, onto the
+same screen Textual was painting. The docstring on the port said "Without a view there is
+no stdin pipe"; it was describing an intention, not the code.
+
+Proved by feeding the parent's own stdin a sentinel and asking what the child could read:
+with stdin unsaid the child printed `read:'bytes-meant-for-the-interface'`. A handle
+number or a file kind differs per harness; who can read the bytes does not.
+
+The visible garbage is the mild version. Two readers on one handle race for every byte, so
+keystrokes and clicks meant for the interface are swallowed at random — and a child that
+blocks on a read of that handle never returns at all, which is how this same revert made
+the test suite hang rather than fail.
+
+**Rule.** A child that is not being talked to gets `DEVNULL`, explicitly, on every launch
+path. Never leave `stdin` unsaid in a program that owns a terminal: the default is the
+opposite of what it reads like. A command that legitimately wants input gets a pipe and a
+protocol, which here is what a `ListView` already is. And test it by **what the child can
+read**, not by what the launch code looks like.

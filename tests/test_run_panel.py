@@ -12,7 +12,7 @@ from textual.app import App
 from textual.widgets import Button, Input
 
 from company_tui.domain.options import Option, OptionKind
-from company_tui.presentation import session_tabs
+from company_tui.presentation import run_screen, session_tabs
 from company_tui.presentation.run_screen import RunScreen
 from company_tui.presentation.session import SessionRegistry, SessionStatus
 
@@ -40,10 +40,10 @@ class _Panel(App):
 
 
 @asynccontextmanager
-async def _running(tabs: int = 2):
+async def _running(tabs: int = 2, size: tuple[int, int] = (120, 40)):
     """A panel with a run going, which is the only state that asks anything."""
     app = _Panel(tabs)
-    async with app.run_test(size=(120, 40)) as pilot:
+    async with app.run_test(size=size) as pilot:
         await pilot.pause()
         app.session.started = True
         app.session.changed()
@@ -183,6 +183,65 @@ class WhatTheRowOffers(unittest.IsolatedAsyncioTestCase):
             await asked
             await pilot.pause()
             self.assertEqual("", app.panel.query_one("#stdin", Input).value)
+
+
+class WhereTheQuestionFitsOnASmallTerminal(unittest.IsolatedAsyncioTestCase):
+    """A box below the bottom of the screen is a run that cannot be answered."""
+
+    ORDINARY = ((120, 40), (120, 24), (120, 20), (84, 30))
+    """Wide enough for the two panes side by side."""
+
+    STACKED = ((52, 40), (52, 32), (52, 28), (52, 26), (52, 24), (52, 20))
+    """An editor's side panel, which is where this was reported from."""
+
+    async def _bottom_of_the_box(self, size):
+        async with _running(size=size) as (app, pilot):
+            asked = asyncio.ensure_future(app.session.prompt("Which?"))
+            await pilot.pause()
+            row = next(iter(app.panel.query("#stdin-row")), None)
+            self.assertIsNotNone(row, f"no stdin row at {size}")
+            app.session.reply("yes")
+            await asked
+            return row.region.y + row.region.height
+
+    async def test_the_box_is_on_screen_at_every_size_a_panel_gets(self):
+        # It used to lay out at row 29 whatever the screen's height was, so an
+        # editor's terminal pane put it below the bottom and the run hung there.
+        for size in self.ORDINARY + self.STACKED:
+            with self.subTest(size=size):
+                bottom = await self._bottom_of_the_box(size)
+                self.assertLessEqual(bottom, size[1], f"stdin row below {size}")
+
+    async def test_the_form_gives_up_rows_rather_than_the_output_pane(self):
+        async with _running(size=(52, 26)) as (app, _pilot):
+            config = app.panel.query_one("#config")
+            pane = app.panel.query_one("#terminal-pane")
+            self.assertLess(config.region.height, run_screen.CONFIG_RUNNING)
+            self.assertGreaterEqual(pane.region.height, run_screen.TERMINAL_FLOOR)
+
+    async def test_the_form_goes_when_there_is_not_room_to_shrink_it(self):
+        # The form is a record of what was asked for; the box is the only way to
+        # answer. Stop is still Ctrl+R, which the footer says.
+        async with _running(size=(52, 20)) as (app, _pilot):
+            self.assertFalse(app.panel.query_one("#config").display)
+
+    async def test_the_form_comes_back_the_moment_the_run_ends(self):
+        async with _running(size=(52, 20)) as (app, pilot):
+            self.assertFalse(app.panel.query_one("#config").display)
+            app.session.started = False
+            app.session.finished = True
+            app.session.changed()
+            await pilot.pause()
+            config = app.panel.query_one("#config")
+            self.assertTrue(config.display)
+            self.assertTrue(config.region.height)
+
+    async def test_the_side_by_side_layout_is_left_as_it_was(self):
+        async with _running(size=(120, 40)) as (app, _pilot):
+            config = app.panel.query_one("#config")
+            pane = app.panel.query_one("#terminal-pane")
+            self.assertTrue(config.display)
+            self.assertEqual(config.region.height, pane.region.height)
 
 
 if __name__ == "__main__":

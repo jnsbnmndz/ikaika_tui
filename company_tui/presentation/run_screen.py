@@ -7,6 +7,7 @@ from textual import events, work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.content import Content
+from textual.geometry import Size
 from textual.message import Message
 from textual.screen import Screen
 from textual.selection import Selection
@@ -42,6 +43,22 @@ from company_tui.presentation.session_tabs import (
 
 STDIN_IDLE = "Waiting for process input…"
 STDIN_ACTIVE = "Type a response, then Enter"
+
+TERMINAL_FLOOR = 11
+"""Rows the output pane cannot be squeezed under: its border, the tab strip, one
+line of output, and the six the stdin row and its key take. Below this the stdin
+row lays out past the pane's bottom and a question has nowhere to be answered -
+`docs/pitfalls.md` 13.1."""
+
+CONFIG_RUNNING = 11
+"""What the form keeps in the stacked layout while a run is going, given room."""
+
+CONFIG_FLOOR = 6
+"""Border, a field and the button: less than this is not a form, just an edge."""
+
+CHROME_ROWS = 8
+"""Frame, header, footer and the panes' own padding, for the one moment there is
+nothing measured yet to read it off instead."""
 
 REQUIRED_MARK = " *"
 
@@ -1098,7 +1115,7 @@ class RunScreen(Screen[None]):
 
 
     def on_mount(self) -> None:
-        self._apply_density(self.size.width)
+        self._apply_density(self.size)
         self._session.watch(self._echo, self.render_state)
         self.render_state()
         self._replay_terminal()
@@ -1119,11 +1136,45 @@ class RunScreen(Screen[None]):
                 return
 
     def on_resize(self, event: events.Resize) -> None:
-        self._apply_density(event.size.width)
+        self._apply_density(event.size)
         self.call_after_refresh(self._replay_terminal)
 
-    def _apply_density(self, width: int) -> None:
-        self.set_class(width < self.NARROW_WIDTH, "-narrow")
+    def _apply_density(self, size: Size) -> None:
+        self.set_class(size.width < self.NARROW_WIDTH, "-narrow")
+        self._fit_panes(size)
+
+    def _fit_panes(self, size: Size | None = None) -> None:
+        """Give the form what is left once the output pane has what it needs.
+
+        Stacked, the two share a column, and `CONFIG_RUNNING` rows for the form is
+        a size rather than a share - so on a short terminal the output pane was
+        squeezed under what it holds and the stdin row laid out below the screen.
+        The form is a record of what was asked for; the box answering a question
+        is the only way to answer it, so the form is what gives. Its own margin
+        comes off the arithmetic rather than out of a second constant beside the
+        rule that sets it, which would be a row to drift by.
+        """
+        if not self._composed:
+            return
+        size = size if size is not None else self.size
+        stacked = size.width < self.NARROW_WIDTH and self._session.started
+        for config in self.query("#config").results(Vertical):
+            if not stacked:
+                config.styles.height = None
+                config.display = True
+                continue
+            gap = config.styles.margin.bottom
+            spare = self._pane_room(size) - TERMINAL_FLOOR - gap
+            config.display = spare >= CONFIG_FLOOR
+            config.styles.height = max(CONFIG_FLOOR, min(CONFIG_RUNNING, spare))
+
+    def _pane_room(self, size: Size) -> int:
+        """Rows the two panes share, measured where there is a measurement yet."""
+        for panes in self.query("#panes").results(Horizontal):
+            room = panes.content_region.height
+            if room:
+                return room
+        return max(0, size.height - CHROME_ROWS)
 
 
     def show(self, session: RunSession) -> None:
@@ -1160,6 +1211,7 @@ class RunScreen(Screen[None]):
         self._set_button(*self._button_state())
         self._show_hints(self._hints())
         self._show_stdin(asking)
+        self._fit_panes()
         self._show_tabs()
         self._show_needed()
         self._show_empty()
