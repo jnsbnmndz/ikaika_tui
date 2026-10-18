@@ -35,6 +35,7 @@ class LocalProcessRunner(ProcessRunner):
             check=False,
             cwd=cwd,
             shell=False,
+            stdin=subprocess.DEVNULL,
             text=True,
         )
         return ProcessResult(
@@ -50,7 +51,7 @@ class LocalProcessRunner(ProcessRunner):
         cwd: Path | None = None,
         view: ListView | None = None,
     ) -> ProcessResult:
-        extra = {}
+        extra = {"stdin": asyncio.subprocess.DEVNULL}
         if view is not None:
             # The whole of the opt-in. Without a view there is no stdin pipe and no
             # variable, so a command cannot tell it is being run by this at all and

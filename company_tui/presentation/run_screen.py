@@ -7,6 +7,7 @@ from textual import events, work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.content import Content
+from textual.geometry import Size
 from textual.message import Message
 from textual.screen import Screen
 from textual.selection import Selection
@@ -42,6 +43,22 @@ from company_tui.presentation.session_tabs import (
 
 STDIN_IDLE = "Waiting for process input…"
 STDIN_ACTIVE = "Type a response, then Enter"
+
+TERMINAL_FLOOR = 11
+"""Rows the output pane cannot be squeezed under: its border, the tab strip, one
+line of output, and the six the stdin row and its key take. Below this the stdin
+row lays out past the pane's bottom and a question has nowhere to be answered -
+`docs/pitfalls.md` 13.1."""
+
+CONFIG_RUNNING = 11
+"""What the form keeps in the stacked layout while a run is going, given room."""
+
+CONFIG_FLOOR = 6
+"""Border, a field and the button: less than this is not a form, just an edge."""
+
+CHROME_ROWS = 8
+"""Frame, header, footer and the panes' own padding, for the one moment there is
+nothing measured yet to read it off instead."""
 
 REQUIRED_MARK = " *"
 
@@ -454,15 +471,6 @@ class RunScreen(Screen[None]):
         margin-right: 2;
     }
 
-    RunScreen #stdin-keys #stdin-newline-hint .hint--key {
-        color: $accent;
-        text-style: bold;
-    }
-
-    RunScreen #stdin-keys #stdin-newline-hint .hint--label {
-        color: $text-muted;
-    }
-
     RunScreen .section--title {
         width: 100%;
         height: 1;
@@ -769,6 +777,8 @@ class RunScreen(Screen[None]):
         """Ticking while COPY is saying it worked, so a second press restarts."""
         self._refused = False
         """Whether Run has been pressed on this form and turned down."""
+        self._before_asking: Widget | None = None
+        """What had the keyboard when a question took it, to give it back."""
 
     @property
     def session(self) -> RunSession:
@@ -843,12 +853,6 @@ class RunScreen(Screen[None]):
                             )
                         with Horizontal(id="stdin-keys"):
                             yield KeyHint("Enter", "Send", dim=True, id="stdin-hint")
-                            yield KeyHint(
-                                "Ctrl+Enter",
-                                "New line",
-                                dim=True,
-                                id="stdin-newline-hint",
-                            )
             yield AppFooter(self.HINTS_READY)
 
     def _form_widgets(self) -> list[Widget]:
@@ -1111,7 +1115,7 @@ class RunScreen(Screen[None]):
 
 
     def on_mount(self) -> None:
-        self._apply_density(self.size.width)
+        self._apply_density(self.size)
         self._session.watch(self._echo, self.render_state)
         self.render_state()
         self._replay_terminal()
@@ -1132,11 +1136,45 @@ class RunScreen(Screen[None]):
                 return
 
     def on_resize(self, event: events.Resize) -> None:
-        self._apply_density(event.size.width)
+        self._apply_density(event.size)
         self.call_after_refresh(self._replay_terminal)
 
-    def _apply_density(self, width: int) -> None:
-        self.set_class(width < self.NARROW_WIDTH, "-narrow")
+    def _apply_density(self, size: Size) -> None:
+        self.set_class(size.width < self.NARROW_WIDTH, "-narrow")
+        self._fit_panes(size)
+
+    def _fit_panes(self, size: Size | None = None) -> None:
+        """Give the form what is left once the output pane has what it needs.
+
+        Stacked, the two share a column, and `CONFIG_RUNNING` rows for the form is
+        a size rather than a share - so on a short terminal the output pane was
+        squeezed under what it holds and the stdin row laid out below the screen.
+        The form is a record of what was asked for; the box answering a question
+        is the only way to answer it, so the form is what gives. Its own margin
+        comes off the arithmetic rather than out of a second constant beside the
+        rule that sets it, which would be a row to drift by.
+        """
+        if not self._composed:
+            return
+        size = size if size is not None else self.size
+        stacked = size.width < self.NARROW_WIDTH and self._session.started
+        for config in self.query("#config").results(Vertical):
+            if not stacked:
+                config.styles.height = None
+                config.display = True
+                continue
+            gap = config.styles.margin.bottom
+            spare = self._pane_room(size) - TERMINAL_FLOOR - gap
+            config.display = spare >= CONFIG_FLOOR
+            config.styles.height = max(CONFIG_FLOOR, min(CONFIG_RUNNING, spare))
+
+    def _pane_room(self, size: Size) -> int:
+        """Rows the two panes share, measured where there is a measurement yet."""
+        for panes in self.query("#panes").results(Horizontal):
+            room = panes.content_region.height
+            if room:
+                return room
+        return max(0, size.height - CHROME_ROWS)
 
 
     def show(self, session: RunSession) -> None:
@@ -1173,6 +1211,7 @@ class RunScreen(Screen[None]):
         self._set_button(*self._button_state())
         self._show_hints(self._hints())
         self._show_stdin(asking)
+        self._fit_panes()
         self._show_tabs()
         self._show_needed()
         self._show_empty()
@@ -1219,19 +1258,35 @@ class RunScreen(Screen[None]):
         return self.HINTS_RUNNING if self._session.started else self.HINTS_READY
 
     def _show_stdin(self, asking: bool) -> None:
+        """The row a question is answered in, and the keyboard it borrows."""
+        held = self.focused
+        ours = held is not None and held.id in ("stdin", "stdin-send")
         for box in self.query("#stdin").results(Input):
             box.disabled = not asking
             box.placeholder = STDIN_ACTIVE if asking else STDIN_IDLE
             if asking and not box.has_focus:
+                if not ours:
+                    self._before_asking = held
                 box.focus()
             elif not asking:
                 box.value = ""
         for hint in self.query("#stdin-hint").results(KeyHint):
             hint.pressable = asking
-        for hint in self.query("#stdin-newline-hint").results(KeyHint):
-            hint.pressable = False
         for button in self.query("#stdin-send").results(Button):
             button.disabled = not asking
+        if not asking and (ours or self.focused is None):
+            self._hand_back_focus()
+
+    def _hand_back_focus(self) -> None:
+        """Give the keyboard back what the question took it from."""
+        held = self._before_asking
+        self._before_asking = None
+        if held is not None and held.is_attached and held.focusable:
+            held.focus()
+            return
+        for button in self.query("#run").results(Button):
+            button.focus()
+            return
 
     def _show_tabs(self) -> None:
         shown = self._sessions.visible(self._session.scope)

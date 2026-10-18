@@ -2,10 +2,14 @@
 
 from collections.abc import Sequence
 
+from rich.console import Console, ConsoleOptions
+from rich.console import RenderResult as RichRenderResult
 from rich.measure import Measurement
 from textual import events
+from textual.app import RenderResult
 from textual.containers import Horizontal, HorizontalScroll
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Static
 
 from company_tui.presentation.chrome import HoverLight
@@ -31,7 +35,13 @@ class SessionTabLabel(Static):
         self._semantic = content
         self._visual = visual
 
-    def render(self):
+    def restate(self, semantic: str, visual: str) -> None:
+        """Say what the tab is doing now, without being built again to say it."""
+        self._semantic = semantic
+        self._visual = visual
+        self.refresh(layout=True)
+
+    def render(self) -> RenderResult:
         return SemanticVisualText(self._semantic, self._visual)
 
 
@@ -45,10 +55,14 @@ class SemanticVisualText:
     def __str__(self) -> str:
         return self._semantic
 
-    def __rich_console__(self, _console, _options):
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RichRenderResult:
         yield self._visual
 
-    def __rich_measure__(self, _console, _options) -> Measurement:
+    def __rich_measure__(
+        self, console: Console, options: ConsoleOptions
+    ) -> Measurement:
         width = len(self._visual)
         return Measurement(width, width)
 
@@ -122,11 +136,27 @@ class SessionTab(HoverLight, Horizontal):
             classes.append("-active")
         super().__init__(classes=" ".join(classes))
         self.session = session
+        self._status = session.status
 
-    def compose(self):
+    def _wording(self) -> tuple[tuple[str, str], SessionStatus]:
         status = self.session.status
         semantic = f"{status.glyph} {self.session.name}"
         visual = self.session.name if status is SessionStatus.IDLE else semantic
+        return (semantic, visual), status
+
+    def restate(self) -> None:
+        """Follow the session's status in place. `docs/pitfalls.md` 11.1 is why."""
+        (semantic, visual), status = self._wording()
+        if status is self._status:
+            return
+        self._status = status
+        for one in SessionStatus:
+            self.set_class(one is status, f"-{one.value}")
+        for label in self.query(SessionTabLabel).results(SessionTabLabel):
+            label.restate(semantic, visual)
+
+    def compose(self):
+        (semantic, visual), _ = self._wording()
         yield SessionTabLabel(
             semantic, visual=visual, classes="tab--label"
         )
@@ -170,7 +200,10 @@ class NewSessionTab(Static):
 
 
 class SessionTabs(HorizontalScroll):
-    """The strip itself, rebuilt from the registry whenever anything changes."""
+    """The strip itself. Rebuilt when its shape changes and restated when only a
+    status has, because a run asking a question changes one tab's colour and
+    rebuilding the strip for that flickers every tab on it.
+    """
 
     DEFAULT_CSS = """
     /* Two rows, not one: the border takes a row of its own, and a strip sized
@@ -189,7 +222,7 @@ class SessionTabs(HorizontalScroll):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._shown: tuple = ()
+        self._shape: tuple = ()
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         """A strip one row tall has nowhere to go but sideways."""
@@ -205,13 +238,15 @@ class SessionTabs(HorizontalScroll):
         self.scroll_to(x=self.scroll_x + direction * TAB_SCROLL_STEP, animate=False)
 
     def show(self, sessions: Sequence[RunSession], active: RunSession) -> None:
-        signature = tuple((id(s), s.name, s.status, s is active) for s in sessions)
-        if signature == self._shown:
+        shape = tuple((id(s), s.name, s is active) for s in sessions)
+        if shape == self._shape:
+            for tab in self.query(SessionTab).results(SessionTab):
+                tab.restate()
             return
-        self._shown = signature
+        self._shape = shape
 
         self.remove_children()
-        tabs: list[Static] = [
+        tabs: list[Widget] = [
             SessionTab(session, session is active) for session in sessions
         ]
         tabs.append(NewSessionTab())
